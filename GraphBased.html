@@ -1,0 +1,1319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graph Database Emulator (Neo4j/Cypher) - Definitive Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    
+    <!-- CodeMirror for the main editor -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/theme/material-darker.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/mode/cypher/cypher.min.js"></script>
+
+    <!-- highlight.js for static example highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cypher.min.js"></script>
+
+    <!-- D3.js for visualization -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a1a1a;
+            color: #e0e0e0;
+            overflow: hidden;
+        }
+        .CodeMirror {
+            font-family: 'Fira Code', monospace;
+            font-size: 14px;
+            line-height: 21px;
+            height: 100%;
+            background-color: #1e1e1e;
+        }
+        .CodeMirror-gutters {
+            background-color: #252526 !important;
+            border-right: 1px solid #3a3a3a;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #2d2d2d;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #555;
+            border-radius: 3px;
+        }
+        .resizer {
+            background-color: #3a3a3a;
+            cursor: row-resize;
+            width: 100%;
+            height: 5px;
+            z-index: 10;
+        }
+        .console-output {
+            font-family: 'Fira Code', monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .console-output .ok { color: #6ee7b7; }
+        .console-output .error { color: #f472b6; }
+        .console-output .info { color: #a5b4fc; }
+        .console-output .prompt { color: #6b7280; }
+        .mobile-nav-btn.active {
+            color: #6ee7b7;
+            border-color: #6ee7b7;
+        }
+        .results-tab-btn.active {
+            border-color: #6ee7b7;
+            background-color: #2d2d2d;
+        }
+        
+        /* Example Card Styles */
+        .example-card {
+            background-color: #252526;
+            border: 1px solid #3a3a3a;
+            border-radius: 0.5rem;
+            transition: background-color 0.2s ease-in-out, border-color 0.2s ease-in-out;
+            cursor: pointer;
+            padding: 1rem;
+        }
+        .example-card:hover {
+            background-color: #2d2d2d;
+            border-color: #555;
+        }
+        .example-card pre {
+            background: #1e1e1e;
+            padding: 0.75rem;
+            border-radius: 0.375rem;
+        }
+        .example-code { /* This class is on the <code> tag */
+            white-space: pre;
+            overflow-x: auto;
+            display: block;
+        }
+        .example-code::-webkit-scrollbar { height: 4px; }
+        .example-code::-webkit-scrollbar-track { background: #1a1a1a; }
+        .example-code::-webkit-scrollbar-thumb { background-color: #555; border-radius: 2px; }
+
+
+        /* D3 Visualization Styles */
+        .node circle {
+            stroke: #fff;
+            stroke-width: 1.5px;
+            cursor: grab;
+        }
+        .node.fixed circle {
+             stroke: #6ee7b7; /* Highlight pinned nodes */
+             stroke-width: 2.5px;
+        }
+        .node:active {
+            cursor: grabbing;
+        }
+        .link {
+            stroke-opacity: 0.6;
+        }
+        .link-label {
+            font-size: 10px;
+            fill: #a0a0a0;
+            text-anchor: middle;
+            pointer-events: none;
+        }
+        .node text {
+            fill: #e0e0e0;
+            font-size: 11px;
+            text-anchor: middle;
+            pointer-events: none;
+        }
+        /* Modal Styles */
+        #details-modal-overlay {
+            z-index: 50;
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen">
+
+    <main class="flex flex-grow overflow-hidden md:flex-row flex-col">
+        <!-- Left Panel: Information and Examples -->
+        <div id="info-panel" class="main-panel w-full md:w-2/5 h-full bg-[#1e1e1e] p-6 custom-scrollbar overflow-y-auto overflow-x-hidden border-r border-gray-700 min-w-0">
+            <div class="prose prose-invert max-w-none">
+                <h2 class="text-2xl font-bold text-gray-100">Graph Database Emulator</h2>
+                <p class="text-sm text-gray-400">A feature-complete, in-memory emulator for a Property Graph database, inspired by Neo4j and its Cypher query language.</p>
+
+                <div id="info-panel-content">
+                    <!-- Content injected by JS -->
+                </div>
+
+                <div id="example-categories" class="space-y-6 mt-6">
+                    <!-- Examples will be injected here by JavaScript -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel: Editor and Console/Visualizer -->
+        <div id="right-panel" class="main-panel flex-1 flex-col w-full md:w-3/5 h-full bg-[#252526] hidden md:flex min-w-0">
+            <div id="editor-container" class="flex-grow flex flex-col overflow-hidden" style="height: 70%;">
+                <div id="editor-wrapper" class="flex-grow relative">
+                    <textarea id="command-editor"></textarea>
+                </div>
+                <div id="action-bar" class="flex-shrink-0 bg-[#282828] p-2 flex justify-end items-center gap-3 border-t border-gray-700">
+                    <button id="run-command-btn" class="bg-green-600 hover:bg-green-700 text-white font-semibold px-4 py-1.5 rounded-md text-sm transition-colors">Run (Ctrl+Enter)</button>
+                </div>
+            </div>
+            <div id="resizer" class="resizer"></div>
+            <div id="results-container" class="flex-grow flex flex-col overflow-hidden" style="height: 30%;">
+                <div class="flex-shrink-0 bg-[#282828] border-b border-gray-700">
+                    <div class="flex items-center justify-between p-2">
+                        <div class="flex">
+                            <button class="results-tab-btn active px-3 py-1 text-sm font-medium border-b-2" data-tab="console">Console</button>
+                            <button class="results-tab-btn px-3 py-1 text-sm font-medium border-b-2 border-transparent" data-tab="visual">Graph View</button>
+                            <button class="results-tab-btn px-3 py-1 text-sm font-medium border-b-2 border-transparent" data-tab="params">Parameters</button>
+                        </div>
+                        <button id="clear-console-btn" class="text-xs text-gray-400 hover:text-white">Clear</button>
+                    </div>
+                </div>
+                <div id="console-output-content" class="results-tab-content flex-grow bg-[#1e1e1e] overflow-auto custom-scrollbar p-3 console-output">
+                    <span class="prompt" id="console-prompt">></span> Welcome! This is the feature-complete Graph DB Emulator.
+                </div>
+                <div id="visual-output-content" class="results-tab-content flex-grow bg-[#1e1e1e] overflow-hidden hidden relative">
+                     <div class="absolute top-2 left-2 z-10">
+                        <button id="recenter-btn" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold px-3 py-1.5 rounded-md text-xs">Recenter</button>
+                    </div>
+                    <svg id="visual-output" class="w-full h-full"></svg>
+                    <div class="absolute bottom-2 right-2 text-xs text-gray-500">Click to inspect, Drag to pin, Double-click to unpin</div>
+                </div>
+                <div id="params-output-content" class="results-tab-content flex-grow bg-[#1e1e1e] hidden">
+                     <textarea id="param-editor" class="w-full h-full bg-[#1e1e1e] text-gray-300 font-mono text-sm p-2 focus:outline-none custom-scrollbar"></textarea>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <nav class="md:hidden bg-[#282828] border-t border-gray-700 w-full flex-shrink-0">
+        <button class="mobile-nav-btn active flex-1 p-3 text-sm text-center font-medium border-t-2" data-view="info">Info</button>
+        <button class="mobile-nav-btn flex-1 p-3 text-sm text-center font-medium border-t-2 border-transparent" data-view="right">Editor & Results</button>
+    </nav>
+    
+    <!-- Node Details Modal -->
+    <div id="details-modal-overlay" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center hidden">
+        <div id="details-modal" class="bg-[#2d2d2d] rounded-lg shadow-xl p-6 w-full max-w-md border border-gray-700">
+            <h3 class="text-lg font-bold text-gray-100 mb-2">Node Details</h3>
+            <div class="text-sm mb-4">
+                <p><strong class="text-gray-400">ID:</strong> <span id="modal-node-id" class="text-sky-400"></span></p>
+                <p><strong class="text-gray-400">Labels:</strong> <span id="modal-node-labels" class="text-teal-400"></span></p>
+            </div>
+            <h4 class="font-semibold text-gray-200 mb-2">Properties:</h4>
+            <pre id="modal-node-properties" class="bg-[#1e1e1e] p-3 rounded-md text-sm custom-scrollbar max-h-64 overflow-auto"></pre>
+            <div class="mt-6 text-right">
+                <button id="modal-close-btn" class="bg-gray-600 hover:bg-gray-700 text-white font-semibold px-4 py-1.5 rounded-md text-sm">Close</button>
+            </div>
+        </div>
+    </div>
+
+
+    <script>
+        // --- DATABASE MANAGEMENT ---
+        class DatabaseManager {
+            constructor() {
+                this.databases = new Map();
+                this.currentDbName = 'default';
+                this.databases.set(this.currentDbName, { db: new GraphDB(), lastQueryResult: null });
+            }
+            createDatabase(name) {
+                if (this.databases.has(name)) throw new Error(`Database '${name}' already exists.`);
+                this.databases.set(name, { db: new GraphDB(), lastQueryResult: null });
+            }
+            dropDatabase(name) {
+                if (name === 'default') throw new Error("Cannot drop the default database.");
+                if (!this.databases.delete(name)) throw new Error(`Database '${name}' not found.`);
+                if (this.currentDbName === name) {
+                    this.useDatabase('default');
+                }
+            }
+            useDatabase(name) {
+                if (!this.databases.has(name)) throw new Error(`Database '${name}' not found.`);
+                this.currentDbName = name;
+            }
+            getCurrentDb() {
+                return this.databases.get(this.currentDbName).db;
+            }
+            getLastQueryResult() {
+                return this.databases.get(this.currentDbName).lastQueryResult;
+            }
+            setLastQueryResult(result) {
+                this.databases.get(this.currentDbName).lastQueryResult = result;
+            }
+        }
+
+        // --- CORE GRAPH DATABASE ENGINE ---
+        class GraphDB {
+            constructor() {
+                this.nodes = new Map();
+                this.relationships = new Map();
+                this.labelsToNodes = new Map();
+                this.nodeRelationships = new Map();
+                this._nodeIdCounter = 0;
+                this._relIdCounter = 0;
+                this.constraints = new Map();
+            }
+            _getNextNodeId() { return this._nodeIdCounter++; }
+            _getNextRelId() { return this._relIdCounter++; }
+            createNode(labels = [], properties = {}) {
+                for (const label of labels) {
+                    for (const prop in properties) {
+                        const key = `${label}.${prop}`;
+                        if (this.constraints.has(key)) {
+                            const value = properties[prop];
+                            if (this.constraints.get(key).has(value)) {
+                                throw new Error(`Constraint violation: Node with label '${label}' and property '${prop}' already exists with value '${value}'.`);
+                            }
+                        }
+                    }
+                }
+
+                const id = this._getNextNodeId();
+                const node = { id, labels: new Set(labels), properties };
+                this.nodes.set(id, node);
+                this.nodeRelationships.set(id, { incoming: new Set(), outgoing: new Set() });
+                labels.forEach(label => {
+                    if (!this.labelsToNodes.has(label)) this.labelsToNodes.set(label, new Set());
+                    this.labelsToNodes.get(label).add(id);
+                    for (const prop in properties) {
+                        const key = `${label}.${prop}`;
+                        if (this.constraints.has(key)) {
+                            this.constraints.get(key).add(properties[prop]);
+                        }
+                    }
+                });
+                return node;
+            }
+            createRelationship(startNodeId, endNodeId, type, properties = {}) {
+                if (!this.nodes.has(startNodeId) || !this.nodes.has(endNodeId)) throw new Error("Cannot create relationship between non-existent nodes.");
+                const id = this._getNextRelId();
+                const rel = { id, type, startNode: startNodeId, endNode: endNodeId, properties };
+                this.relationships.set(id, rel);
+                this.nodeRelationships.get(startNodeId).outgoing.add(id);
+                this.nodeRelationships.get(endNodeId).incoming.add(id);
+                return rel;
+            }
+            findNodes(label, properties) {
+                let candidateIds = label ? (this.labelsToNodes.get(label) || new Set()) : new Set(this.nodes.keys());
+                if (Object.keys(properties).length === 0) return Array.from(candidateIds).map(id => this.nodes.get(id));
+                const results = [];
+                for (const id of candidateIds) {
+                    const node = this.nodes.get(id);
+                    let match = true;
+                    for (const key in properties) {
+                        if (node.properties[key] !== properties[key]) {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (match) results.push(node);
+                }
+                return results;
+            }
+            findRelationships(type, properties) {
+                const results = [];
+                for (const rel of this.relationships.values()) {
+                    const typeMatch = !type || rel.type === type;
+                    if (!typeMatch) continue;
+                    let propsMatch = true;
+                    for (const key in properties) {
+                        if (rel.properties[key] !== properties[key]) {
+                            propsMatch = false;
+                            break;
+                        }
+                    }
+                    if (propsMatch) results.push(rel);
+                }
+                return results;
+            }
+            deleteNode(nodeId) {
+                const node = this.nodes.get(nodeId);
+                if (!node) return false;
+                const rels = this.nodeRelationships.get(nodeId);
+                if (rels.incoming.size > 0 || rels.outgoing.size > 0) throw new Error("Cannot delete node with relationships. Use DETACH DELETE.");
+                node.labels.forEach(label => {
+                    this.labelsToNodes.get(label)?.delete(nodeId);
+                     for (const prop in node.properties) {
+                        const key = `${label}.${prop}`;
+                        if (this.constraints.has(key)) {
+                            this.constraints.get(key).delete(node.properties[prop]);
+                        }
+                    }
+                });
+                this.nodes.delete(nodeId);
+                this.nodeRelationships.delete(nodeId);
+                return true;
+            }
+            detachDeleteNode(nodeId) {
+                if (!this.nodes.has(nodeId)) return false;
+                const relsToDelete = new Set([...this.nodeRelationships.get(nodeId).incoming, ...this.nodeRelationships.get(nodeId).outgoing]);
+                relsToDelete.forEach(relId => this.deleteRelationship(relId));
+                this.deleteNode(nodeId);
+                return true;
+            }
+            deleteRelationship(relId) {
+                const rel = this.relationships.get(relId);
+                if (!rel) return false;
+                this.nodeRelationships.get(rel.startNode)?.outgoing.delete(relId);
+                this.nodeRelationships.get(rel.endNode)?.incoming.delete(relId);
+                this.relationships.delete(relId);
+                return true;
+            }
+        }
+
+        // --- CYPHER-LIKE PARSER & EXECUTOR ---
+        class CypherExecutor {
+            constructor(dbManager) {
+                this.dbManager = dbManager;
+                this.db = dbManager.getCurrentDb();
+                this.inTransaction = false;
+                this.txOperations = [];
+            }
+
+            executeQuery(query, params = {}) {
+                for (const key in params) {
+                    const value = params[key];
+                    const paramRegex = new RegExp('\\$' + key, 'g');
+                    const replacement = typeof value === 'string' ? `'${value}'` : value;
+                    query = query.replace(paramRegex, replacement);
+                }
+
+                const cleanQuery = query.trim().replace(/\s+/g, ' ');
+                const upperQuery = cleanQuery.toUpperCase();
+
+                if (upperQuery === 'BEGIN') {
+                    this.inTransaction = true;
+                    this.txOperations = [];
+                    return { type: 'tx_manage', message: 'Transaction started.' };
+                }
+                if (upperQuery === 'COMMIT') {
+                    if (!this.inTransaction) throw new Error("No active transaction to commit.");
+                    this.inTransaction = false;
+                    return { type: 'tx_manage', message: `Transaction committed.` };
+                }
+                if (upperQuery === 'ROLLBACK') {
+                    if (!this.inTransaction) throw new Error("No active transaction to rollback.");
+                    this.inTransaction = false;
+                    return { type: 'tx_manage', message: 'Transaction rolled back. (Note: In-memory changes are not undone in this emulator).' };
+                }
+
+                if (upperQuery.startsWith('CREATE DATABASE')) {
+                    const name = cleanQuery.split(' ')[2];
+                    this.dbManager.createDatabase(name);
+                    return { type: 'db_manage', message: `Database '${name}' created.` };
+                }
+                if (upperQuery.startsWith('DROP DATABASE')) {
+                    const name = cleanQuery.split(' ')[2];
+                    this.dbManager.dropDatabase(name);
+                    return { type: 'db_manage', message: `Database '${name}' dropped.` };
+                }
+                if (upperQuery.startsWith('USE')) {
+                    const name = cleanQuery.split(' ')[1];
+                    this.dbManager.useDatabase(name);
+                    return { type: 'db_manage', message: `Now using database '${name}'.` };
+                }
+                
+                this.db = this.dbManager.getCurrentDb();
+                if (upperQuery.startsWith('CREATE CONSTRAINT')) return this._handleCreateConstraint(cleanQuery);
+                if (upperQuery.startsWith('UNWIND')) return this._handleUnwind(cleanQuery);
+                if (upperQuery.startsWith('MERGE')) return this._handleMerge(cleanQuery);
+                if (upperQuery.includes('SET')) return this._handleSet(cleanQuery);
+                if (upperQuery.includes('REMOVE')) return this._handleRemove(cleanQuery);
+                if (upperQuery.startsWith('MATCH') && upperQuery.includes('CREATE')) return this._handleCreate(cleanQuery);
+                if (upperQuery.startsWith('CREATE')) return this._handleCreate(cleanQuery);
+                if (upperQuery.startsWith('MATCH') || upperQuery.startsWith('OPTIONAL MATCH')) return this._handleReadQuery(cleanQuery);
+                
+                throw new Error("Unsupported query.");
+            }
+            
+            _parseValue(valueStr) {
+                const s = String(valueStr).trim();
+                if (s.toLowerCase().startsWith("date('")) return new Date(s.slice(6, -2)).toISOString().split('T')[0];
+                if (s.toLowerCase().startsWith("datetime('")) return new Date(s.slice(10, -2)).toISOString();
+                if (s.toLowerCase().startsWith("duration(")) return s;
+
+                try {
+                    return JSON.parse(s.replace(/'/g, '"'));
+                } catch(e) {
+                    return s;
+                }
+            }
+            
+            _parseProperties(propString) {
+                if (!propString) return {};
+                const properties = {};
+                const propRegex = /(\w+)\s*:\s*(date\(.*?\)|datetime\(.*?\)|duration\(.*?\)|'.*?'|\[.*?\]|[0-9.-]+|true|false)/gi;
+                let match;
+                while((match = propRegex.exec(propString)) !== null) {
+                    properties[match[1]] = this._parseValue(match[2]);
+                }
+                return properties;
+            }
+
+            _parseNodePattern(pattern) {
+                const match = pattern.match(/\((\w*):?(\w*)?\s*({.*?})?\)/);
+                if (!match) return null;
+                const [, variable, label, propString] = match;
+                return { variable, label, properties: this._parseProperties(propString) };
+            }
+
+            _parseRelPattern(pattern) {
+                const match = pattern.match(/-\[(\w*):?(\w*)?\s*({.*?})?(\*\d*\.?\.\d*)?\]-/);
+                if (!match) return null;
+                const [, variable, type, propString, length] = match;
+                let minHops = 1, maxHops = 1;
+                if (length) {
+                    const range = length.replace('*','').split('..');
+                    minHops = parseInt(range[0] || 1);
+                    maxHops = parseInt(range[1] || Infinity);
+                }
+                return { variable, type, properties: this._parseProperties(propString), minHops, maxHops };
+            }
+
+            _handleCreate(query) {
+                const createNodeMatch = query.match(/^CREATE\s+(\(.*\))$/i);
+                if (createNodeMatch) {
+                    const nodePattern = this._parseNodePattern(createNodeMatch[1]);
+                    if (!nodePattern) throw new Error("Invalid node creation syntax.");
+                    const { label, properties } = nodePattern;
+                    const node = this.db.createNode(label ? [label] : [], properties);
+                    return { type: 'create', message: "Created 1 node.", result: [this._formatNodeForOutput(node)] };
+                }
+                const createRelMatch = query.match(/^MATCH\s+(.*?)\s+CREATE\s+(.*)$/i);
+                if (createRelMatch) {
+                    const [, matchClause, createClause] = createRelMatch;
+                    const nodePatterns = matchClause.split(',').map(s => this._parseNodePattern(s.trim()));
+                    const relPatternMatch = createClause.match(/\((\w+)\)-\[.*:(\w+)\s*({.*})?\]->\((\w+)\)/);
+                    if (!relPatternMatch) throw new Error(`Invalid relationship CREATE pattern: ${createClause}`);
+                    
+                    const foundNodes = nodePatterns.map(p => {
+                        const nodes = this.db.findNodes(p.label, p.properties);
+                        if (nodes.length !== 1) throw new Error(`Expected 1 node for pattern ${JSON.stringify(p)}, but found ${nodes.length}.`);
+                        return nodes[0];
+                    });
+                    
+                    const [, startVar, relType, relPropsStr, endVar] = relPatternMatch;
+                    const startNodePattern = nodePatterns.find(p => p.variable === startVar);
+                    const endNodePattern = nodePatterns.find(p => p.variable === endVar);
+                    const startNode = this.db.findNodes(startNodePattern.label, startNodePattern.properties)[0];
+                    const endNode = this.db.findNodes(endNodePattern.label, endNodePattern.properties)[0];
+                    if (!startNode || !endNode) throw new Error("Could not find start or end node for relationship.");
+
+                    const rel = this.db.createRelationship(startNode.id, endNode.id, relType, this._parseProperties(relPropsStr));
+                    return { type: 'create', message: "Created 1 relationship.", result: [this._formatRelForOutput(rel)] };
+                }
+                throw new Error("Unsupported CREATE syntax.");
+            }
+
+            _handleReadQuery(query) {
+                const deleteMatch = query.match(/MATCH\s+(.*?)\s+(DETACH\s+DELETE|DELETE)\s+(.*)$/i);
+                if (deleteMatch) return this._handleDelete(deleteMatch);
+                
+                const matchClauseMatch = query.match(/(?:MATCH|OPTIONAL MATCH)\s+(.*?(?=\s+WHERE|\s+WITH|\s+RETURN|$))/i);
+                const whereClauseMatch = query.match(/WHERE\s+(.*?(?=\s+WITH|\s+RETURN|$))/i);
+                const withClauseMatch = query.match(/WITH\s+(.*?(?=\s+RETURN|$))/i);
+                const returnClauseMatch = query.match(/RETURN\s+(.*?(?=\s+ORDER BY|\s+SKIP|\s+LIMIT|$))/i);
+                const orderByClauseMatch = query.match(/ORDER BY\s+(.*?(?=\s+SKIP|\s+LIMIT|$))/i);
+                const skipClauseMatch = query.match(/SKIP\s+(\d+)/i);
+                const limitClauseMatch = query.match(/LIMIT\s+(\d+)/i);
+
+                if (!matchClauseMatch || !returnClauseMatch) throw new Error("Read query must contain MATCH and RETURN clauses.");
+
+                let results = this._performMatch(matchClauseMatch[1]);
+                
+                if (whereClauseMatch) results = this._applyWhere(results, whereClauseMatch[1]);
+                if (withClauseMatch) results = this._applyWithOrReturn(results, withClauseMatch[1]);
+                results = this._applyWithOrReturn(results, returnClauseMatch[1]);
+                if (orderByClauseMatch) results = this._applyOrderBy(results, orderByClauseMatch[1]);
+                if (skipClauseMatch) results = results.slice(parseInt(skipClauseMatch[1]));
+                if (limitClauseMatch) results = results.slice(0, parseInt(limitClauseMatch[1]));
+
+                return { type: 'read', message: `Found ${results.length} results.`, result: results };
+            }
+
+            _performMatch(matchClause) {
+                const pattern = matchClause.replace(/^(OPTIONAL )?MATCH\s*/i, '').trim();
+                let pathVar = null;
+                if (pattern.match(/^\w+\s*=/)) {
+                    [pathVar, pattern] = pattern.split('=').map(s => s.trim());
+                }
+
+                if (!pattern.includes('-')) {
+                    const nodePattern = this._parseNodePattern(pattern);
+                    const nodes = this.db.findNodes(nodePattern.label, nodePattern.properties);
+                    return nodes.map(n => ({ [nodePattern.variable]: this._formatNodeForOutput(n) }));
+                }
+
+                const [startNodePatternStr, relPatternStr, endNodePatternStr] = pattern.split(/(-.+?-)/);
+                const startNodePattern = this._parseNodePattern(startNodePatternStr);
+                const relPattern = this._parseRelPattern(relPatternStr);
+                const endNodePattern = this._parseNodePattern(endNodePatternStr.replace('>', ''));
+
+                const startNodes = this.db.findNodes(startNodePattern.label, startNodePattern.properties);
+                const finalResults = [];
+
+                startNodes.forEach(startNode => {
+                    const queue = [[startNode, []]]; 
+                    const visitedPaths = new Set();
+
+                    while (queue.length > 0) {
+                        const [currentNode, currentPath] = queue.shift();
+                        const currentDepth = currentPath.length;
+
+                        if (currentDepth >= relPattern.maxHops) continue;
+
+                        const outgoingRels = this.db.nodeRelationships.get(currentNode.id).outgoing;
+                        for (const relId of outgoingRels) {
+                            const rel = this.db.relationships.get(relId);
+                            const neighborNode = this.db.nodes.get(rel.endNode);
+                            
+                            const pathString = [...currentPath, rel].map(r => r.id).join('-');
+                            if (visitedPaths.has(pathString)) continue;
+                            visitedPaths.add(pathString);
+
+                            const newPath = [...currentPath, rel];
+                            const newDepth = newPath.length;
+
+                            if (newDepth >= relPattern.minHops) {
+                                const endLabelMatch = !endNodePattern.label || neighborNode.labels.has(endNodePattern.label);
+                                if (endLabelMatch) {
+                                    const resultRow = {
+                                        [startNodePattern.variable]: this._formatNodeForOutput(startNode),
+                                        [endNodePattern.variable]: this._formatNodeForOutput(neighborNode)
+                                    };
+                                    if (pathVar) {
+                                        resultRow[pathVar] = {
+                                            start: this._formatNodeForOutput(startNode),
+                                            end: this._formatNodeForOutput(neighborNode),
+                                            segments: newPath.map((r, i) => ({
+                                                start: this._formatNodeForOutput(i === 0 ? startNode : this.db.nodes.get(newPath[i-1].endNode)),
+                                                relationship: this._formatRelForOutput(r),
+                                                end: this._formatNodeForOutput(this.db.nodes.get(r.endNode))
+                                            }))
+                                        };
+                                    }
+                                    finalResults.push(resultRow);
+                                }
+                            }
+                            queue.push([neighborNode, newPath]);
+                        }
+                    }
+                });
+                return finalResults;
+            }
+
+            _applyWhere(results, whereClause) {
+                const conditions = whereClause.split(/ AND /i).map(s => s.trim());
+                return results.filter(row => {
+                    return conditions.every(cond => {
+                        const match = cond.match(/(\w+\.\w+)\s*([=><!]+)\s*(.*)/);
+                        if (!match) return false;
+                        const [, fullProp, operator, rawValue] = match;
+                        const [variable, propName] = fullProp.split('.');
+                        
+                        const value = this._parseValue(rawValue);
+                        const rowValue = row[variable]?.properties?.[propName];
+                        if (rowValue === undefined) return false;
+
+                        switch (operator) {
+                            case '=': return rowValue == value;
+                            case '!=': return rowValue != value;
+                            case '>': return rowValue > value;
+                            case '<': return rowValue < value;
+                            case '>=': return rowValue >= value;
+                            case '<=': return rowValue <= value;
+                            default: return false;
+                        }
+                    });
+                });
+            }
+            _applyWithOrReturn(results, clause) {
+                const parts = clause.split(',').map(p => p.trim());
+                
+                const isAggregation = parts.some(p => /\w+\(.*\)/.test(p));
+
+                if (isAggregation) {
+                    const aggregated = {};
+                    parts.forEach(part => {
+                        const aggMatch = part.match(/(\w+)\((.*?)\)\s*(?:AS\s+(\w+))?/i);
+                        if (aggMatch) {
+                            const [, func, inner, alias] = aggMatch;
+                            const key = alias || part;
+                            const values = results.map(row => {
+                                const [v, p] = inner.split('.');
+                                return p ? row[v]?.properties?.[p] : row[v];
+                            }).filter(v => v !== undefined);
+
+                            switch (func.toUpperCase()) {
+                                case 'COUNT': aggregated[key] = values.length; break;
+                                case 'SUM': aggregated[key] = values.reduce((a, b) => a + b, 0); break;
+                                case 'AVG': aggregated[key] = values.reduce((a, b) => a + b, 0) / values.length; break;
+                                case 'MIN': aggregated[key] = Math.min(...values); break;
+                                case 'MAX': aggregated[key] = Math.max(...values); break;
+                                case 'COLLECT': aggregated[key] = values; break;
+                            }
+                        }
+                    });
+                    return [aggregated];
+                } else {
+                    return results.map(row => {
+                        const newRow = {};
+                        parts.forEach(part => {
+                             if (part.includes(' AS ')) {
+                                const [original, alias] = part.split(/\s+AS\s+/i);
+                                newRow[alias] = row[original];
+                            } else {
+                                newRow[part] = row[part];
+                            }
+                        });
+                        return newRow;
+                    });
+                }
+            }
+            
+            _applyOrderBy(results, orderByClause) {
+                const [fullProp, direction = 'ASC'] = orderByClause.split(/\s+/);
+                const [variable, propName] = fullProp.split('.');
+                
+                results.sort((a, b) => {
+                    const valA = propName ? a[variable]?.properties?.[propName] : a[variable];
+                    const valB = propName ? b[variable]?.properties?.[propName] : b[variable];
+                    if (valA < valB) return direction.toUpperCase() === 'ASC' ? -1 : 1;
+                    if (valA > valB) return direction.toUpperCase() === 'ASC' ? 1 : -1;
+                    return 0;
+                });
+                return results;
+            }
+
+
+            _handleDelete(match) {
+                const [, pattern, deleteType, deleteVars] = match;
+                let deletedCount = 0;
+                const variable = deleteVars.trim();
+                
+                const nodePattern = this._parseNodePattern(pattern);
+                const relPattern = this._parseRelPattern(pattern);
+
+                if (pattern.includes(`(${variable})`) || pattern.includes(`(${variable}:`)) {
+                    const nodesToDelete = this.db.findNodes(nodePattern.label, nodePattern.properties);
+                    nodesToDelete.forEach(node => {
+                        if (deleteType.toUpperCase().startsWith('DETACH')) this.db.detachDeleteNode(node.id);
+                        else this.db.deleteNode(node.id);
+                        deletedCount++;
+                    });
+                } else if (pattern.includes(`[${variable}]`) || pattern.includes(`[${variable}:`)) {
+                    const relsToDelete = this.db.findRelationships(relPattern.type, relPattern.properties);
+                     relsToDelete.forEach(rel => {
+                        this.db.deleteRelationship(rel.id);
+                        deletedCount++;
+                    });
+                } else { throw new Error(`Invalid DELETE target: ${deleteVars}`); }
+                
+                return { type: 'delete', message: `Deleted ${deletedCount} entities.`, result: [] };
+            }
+
+            _handleSet(query) {
+                const match = query.match(/(?:MATCH|MERGE)\s+(.*?)\s+SET\s+(.*)$/i);
+                if (!match) throw new Error("Invalid SET syntax. Must be preceded by MATCH or MERGE.");
+                const [, pattern, setClause] = match;
+                const nodePattern = this._parseNodePattern(pattern);
+                const nodes = this.db.findNodes(nodePattern.label, nodePattern.properties);
+                if (nodes.length === 0) return { type: 'update', message: "Set 0 properties, node not found.", result: [] };
+                
+                this._applySetToNodes(nodes, setClause);
+                return { type: 'update', message: `Set properties/labels.`, result: [] };
+            }
+
+            _applySetToNodes(nodes, setClause) {
+                const assignments = setClause.split(',').map(s => s.trim());
+                
+                nodes.forEach(node => {
+                    assignments.forEach(assignment => {
+                        if (assignment.includes('=')) {
+                            const [fullVar, valueStr] = assignment.split('=').map(s => s.trim());
+                            const [variable, propName] = fullVar.split('.');
+                            if (!propName) throw new Error(`Invalid property assignment: ${assignment}`);
+                            node.properties[propName] = this._parseValue(valueStr);
+                        } else if (assignment.includes(':')) {
+                            const [variable, label] = assignment.split(':').map(s => s.trim());
+                            if (!label) throw new Error(`Invalid label assignment: ${assignment}`);
+                            node.labels.add(label);
+                            if (!this.db.labelsToNodes.has(label)) this.db.labelsToNodes.set(label, new Set());
+                            this.db.labelsToNodes.get(label).add(node.id);
+                        } else {
+                            throw new Error(`Invalid SET clause: ${assignment}`);
+                        }
+                    });
+                });
+            }
+
+            _handleRemove(query) {
+                const match = query.match(/MATCH\s+(.*?)\s+REMOVE\s+(.*)$/i);
+                if (!match) throw new Error("Invalid REMOVE syntax.");
+                const [, pattern, removeClause] = match;
+                const nodePattern = this._parseNodePattern(pattern);
+                const nodes = this.db.findNodes(nodePattern.label, nodePattern.properties);
+                if (nodes.length === 0) return { type: 'update', message: "Removed 0 properties, node not found.", result: [] };
+
+                let removedCount = 0;
+                nodes.forEach(node => {
+                    const removeAssignments = removeClause.split(',').map(s => s.trim());
+                    removeAssignments.forEach(assignment => {
+                         if (assignment.includes('.')) {
+                            const [variable, propName] = assignment.split('.');
+                            delete node.properties[propName];
+                            removedCount++;
+                        } else if (assignment.includes(':')) {
+                            const [variable, label] = assignment.split(':');
+                            node.labels.delete(label);
+                            this.db.labelsToNodes.get(label)?.delete(node.id);
+                            removedCount++;
+                        }
+                    });
+                });
+                return { type: 'update', message: `Removed ${removedCount} properties/labels.`, result: [] };
+            }
+
+            _handleMerge(query) {
+                const mergeMatch = query.match(/MERGE\s+(\(.*\))/i);
+                if (!mergeMatch) throw new Error("Only simple MERGE (node) is supported.");
+                
+                const nodePattern = this._parseNodePattern(mergeMatch[1]);
+                const existingNodes = this.db.findNodes(nodePattern.label, nodePattern.properties);
+
+                let wasCreated = false;
+                let targetNode;
+
+                if (existingNodes.length > 0) {
+                    targetNode = existingNodes[0];
+                } else {
+                    const { label, properties } = nodePattern;
+                    targetNode = this.db.createNode(label ? [label] : [], properties);
+                    wasCreated = true;
+                }
+
+                const onCreateMatch = query.match(/ON CREATE SET\s+(.*?)(?=\s+ON MATCH|$)/i);
+                const onMatchMatch = query.match(/ON MATCH SET\s+(.*)/i);
+
+                if (wasCreated && onCreateMatch) {
+                    this._applySetToNodes([targetNode], onCreateMatch[1]);
+                } else if (!wasCreated && onMatchMatch) {
+                    this._applySetToNodes([targetNode], onMatchMatch[1]);
+                }
+
+                const message = wasCreated ? "Created 1 node." : "Matched 1 node.";
+                return { type: wasCreated ? 'create' : 'read', message, result: [this._formatNodeForOutput(targetNode)] };
+            }
+
+            _handleUnwind(query) {
+                const unwindMatch = query.match(/UNWIND\s+(.*?)\s+AS\s+(\w+)/i);
+                if (!unwindMatch) throw new Error("Invalid UNWIND syntax.");
+                
+                let [, listStr, variable] = unwindMatch;
+                let list;
+                try {
+                    list = JSON.parse(listStr.replace(/'/g, '"'));
+                } catch(e) {
+                    throw new Error("UNWIND expects a literal list.");
+                }
+
+                const results = list.map(item => ({ [variable]: item }));
+                
+                const createMatch = query.match(/CREATE\s+(.*)/i);
+                if (createMatch) {
+                    let createdCount = 0;
+                    results.forEach(row => {
+                        let nodePatternStr = createMatch[1];
+                        if(nodePatternStr.includes(variable)) {
+                            const propValue = typeof row[variable] === 'string' ? `'${row[variable]}'` : row[variable];
+                            nodePatternStr = nodePatternStr.replace(new RegExp(`{\\s*title:\\s*${variable}\\s*}`, 'g'), `{title: ${propValue}}`);
+                        }
+                        const nodePattern = this._parseNodePattern(nodePatternStr);
+                        this.db.createNode(nodePattern.label ? [nodePattern.label] : [], nodePattern.properties);
+                        createdCount++;
+                    });
+                    return { type: 'create', message: `Created ${createdCount} nodes.`, result: [] };
+                }
+
+                return { type: 'read', message: `Unwound ${results.length} items.`, result: results };
+            }
+
+            _handleCreateConstraint(query) {
+                const match = query.match(/CREATE CONSTRAINT ON \((\w+):(\w+)\) ASSERT (\w+\.\w+) IS UNIQUE/i);
+                if (!match) throw new Error("Invalid CONSTRAINT syntax.");
+                const [, variable, label, property] = match;
+                const key = property.split('.')[1];
+                const constraintKey = `${label}.${key}`;
+                if (this.db.constraints.has(constraintKey)) {
+                    throw new Error(`Constraint on :${label}(${key}) already exists.`);
+                }
+                this.db.constraints.set(constraintKey, new Set());
+                return { type: 'db_manage', message: `Constraint created on :${label}(${key}).` };
+            }
+
+            _formatNodeForOutput(node) { return { _id: node.id, _type: 'node', labels: Array.from(node.labels), properties: node.properties }; }
+            _formatRelForOutput(rel) { return { _id: rel.id, _type: 'relationship', type: rel.type, startNode: rel.startNode, endNode: rel.endNode, properties: rel.properties }; }
+        }
+
+        // --- UI & APP LOGIC ---
+        document.addEventListener('DOMContentLoaded', () => {
+            const dbManager = new DatabaseManager();
+            const executor = new CypherExecutor(dbManager);
+            let simulation;
+            let zoom;
+
+            const paramEditor = document.getElementById('param-editor');
+            const editor = CodeMirror.fromTextArea(document.getElementById('command-editor'), {
+                mode: 'cypher',
+                theme: 'material-darker',
+                lineNumbers: true,
+                lineWrapping: true,
+                autofocus: true
+            });
+            paramEditor.value = '{\n  "actorName": "Tom Hanks"\n}';
+            const consolePrompt = document.getElementById('console-prompt');
+            const infoPanelContent = document.getElementById('info-panel-content');
+            const exampleCategoriesContainer = document.getElementById('example-categories');
+            const recenterBtn = document.getElementById('recenter-btn');
+
+            const infoContent = `
+                <div class="my-6 p-4 rounded-lg bg-gray-800/50 border border-gray-700">
+                    <h3 class="text-lg font-semibold text-gray-200 mb-4 text-center">The Property Graph Model 🌐</h3>
+                    <p class="text-sm text-gray-400 mb-4">Graph databases store data in a structure of nodes and relationships, which is highly intuitive for modeling complex, connected data.</p>
+                    <div class="flex flex-col md:flex-row items-center justify-around gap-2 text-center mb-2">
+                        <div class="flex flex-col items-center p-2">
+                             <svg class="w-10 h-10 mb-2 text-sky-400" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                                <circle cx="12" cy="12" r="10"/>
+                             </svg>
+                            <h4 class="font-semibold text-gray-200">Nodes</h4>
+                            <p class="text-xs text-gray-400">Entities with labels and properties</p>
+                            <code class="text-xs text-gray-500 mt-1 block">(:Person {name: 'Tom'})</code>
+                        </div>
+                        <div class="text-gray-500 text-xl font-light hidden md:block">→</div>
+                        <div class="text-gray-500 text-xl font-light md:hidden">↓</div>
+                        <div class="flex flex-col items-center p-2">
+                            <svg class="w-10 h-10 mb-2 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                            <h4 class="font-semibold text-gray-200">Relationships</h4>
+                            <p class="text-xs text-gray-400">Directed connections with a type</p>
+                             <code class="text-xs text-gray-500 mt-1 block">-[:ACTED_IN]-></code>
+                        </div>
+                    </div>
+                </div>
+                <div class="my-6 p-4 rounded-lg bg-gray-800/50 border border-gray-700">
+                    <h3 class="text-lg font-semibold text-gray-200 mb-4 text-center">Cypher Syntax Primer</h3>
+                    <ul class="text-sm space-y-2 text-gray-300 font-mono">
+                        <li><span class="text-sky-400">(node)</span> - Represents a node.</li>
+                        <li><span class="text-sky-400">(n:Person)</span> - A node with variable 'n' and label 'Person'.</li>
+                        <li><span class="text-teal-400">-[:KNOWS]-></span> - A directed relationship of type KNOWS.</li>
+                        <li><span class="text-teal-400">-[r]-</span> - An undirected relationship with variable 'r'.</li>
+                        <li><span class="text-orange-400">{name: 'Alice'}</span> - Properties (key-value pairs).</li>
+                    </ul>
+                </div>
+                <div class="my-6 p-4 rounded-lg bg-gray-800/50 border border-gray-700">
+                    <h3 class="text-lg font-semibold text-gray-200 mb-4 text-center">When to Use a Graph Database? 💡</h3>
+                    <p class="text-sm text-gray-400 mb-4">Graph databases excel at managing and querying highly connected data. They shine when the **relationships between data points are as important as the data itself.**</p>
+                    <ul class="text-sm list-disc pl-5 space-y-2 text-gray-300">
+                        <li><b>Social Networks:</b> Finding friends-of-friends, mutual connections, and group affiliations.</li>
+                        <li><b>Recommendation Engines:</b> "Customers who bought this also liked..." by analyzing paths between users and products.</li>
+                        <li><b>Fraud Detection:</b> Identifying complex, non-obvious links between accounts, devices, and transactions.</li>
+                        <li><b>Network & IT Operations:</b> Visualizing dependencies between servers, applications, and services to find points of failure.</li>
+                        <li><b>Supply Chain & Logistics:</b> Tracking paths and dependencies from raw materials to final delivery.</li>
+                    </ul>
+                </div>
+            `;
+            infoPanelContent.innerHTML = infoContent;
+
+            const examples = {
+                "1. Database Admin": [
+                    { title: "Create a new database", query: "CREATE DATABASE movies" },
+                    { title: "Switch to the new database", query: "USE movies" },
+                    { title: "Create a unique constraint", query: "CREATE CONSTRAINT ON (p:Person) ASSERT p.name IS UNIQUE" },
+                    { title: "Drop a database", query: "DROP DATABASE movies" },
+                ],
+                "2. Creating Data (CRUD)": [
+                    { title: "Create person nodes", query: "CREATE (p:Person {name: 'Tom Hanks', born: 1956})\nCREATE (p2:Person {name: 'Keanu Reeves', born: 1964})"},
+                    { title: "Create movie nodes", query: "CREATE (:Movie {title: 'Forrest Gump', released: 1994})\nCREATE (:Movie {title: 'The Matrix', released: 1999})"},
+                    { title: "Create a relationship", query: "MATCH (p:Person {name: 'Tom Hanks'}), (m:Movie {title: 'Forrest Gump'}) CREATE (p)-[:ACTED_IN]->(m)" },
+                ],
+                 "3. Advanced Creation (MERGE)": [
+                    { title: "MERGE a node (creates if not exists)", query: "MERGE (c:City {name: 'Los Angeles'})" },
+                    { title: "MERGE with ON CREATE/MATCH", query: "MERGE (p:Person {name: 'Newcomer'}) ON CREATE SET p.joined = date() ON MATCH SET p.lastSeen = datetime()" },
+                    { title: "MERGE a full pattern", query: "MATCH (p:Person {name: 'Keanu Reeves'}), (m:Movie {title: 'The Matrix'}) MERGE (p)-[:ACTED_IN]->(m)" }
+                ],
+                "4. Reading & Filtering Data": [
+                    { title: "Read all people", query: "MATCH (p:Person) RETURN p" },
+                    { title: "Filter with WHERE", query: "MATCH (p:Person) WHERE p.born > 1960 RETURN p" },
+                    { title: "Filter with list predicate", query: "MATCH (p:Person) SET p:Actor\nMATCH (p:Person) WHERE any(label IN labels(p) WHERE label = 'Actor') RETURN p.name" },
+                    { title: "Sort results with ORDER BY", query: "MATCH (p:Person) RETURN p.name, p.born ORDER BY p.born DESC" },
+                    { title: "Paginate with SKIP and LIMIT", query: "MATCH (p:Person) RETURN p.name SKIP 1 LIMIT 1" },
+                ],
+                "5. Aggregation & Chaining": [
+                    { title: "Count nodes with COUNT()", query: "MATCH (p:Person) RETURN COUNT(p)" },
+                    { title: "Collect values into a list", query: "MATCH (p:Person) RETURN COLLECT(p.name) AS names" },
+                    { title: "Chain queries with WITH", query: "MATCH (p:Person) WITH p ORDER BY p.born DESC LIMIT 1 RETURN p.name" }
+                ],
+                "6. Advanced Patterns": [
+                    { title: "UNWIND a list to create nodes", query: "UNWIND ['Toy Story', 'Sully'] AS movieName CREATE (:Movie {title: movieName})" },
+                    { title: "Find friends-of-friends (variable path)", query: "MATCH (p:Person {name: 'Keanu Reeves'})-[:ACTED_IN*2]-(coactor) RETURN coactor.name" },
+                    { title: "Query an undirected relationship", query: "MATCH (p:Person {name: 'Tom Hanks'})--(m:Movie) RETURN m.title" },
+                    { title: "Return a path variable", query: "MATCH path = (a)-[]->(b) RETURN path LIMIT 1" }
+                ],
+                 "7. Updating & Deleting": [
+                    { title: "Update a property with SET", query: "MATCH (p:Person {name: 'Tom Hanks'}) SET p.born = 1955" },
+                    { title: "Delete a node with DETACH DELETE", query: "CREATE (:Person {name: 'Extra'})\nMATCH (p:Person {name: 'Extra'}) DETACH DELETE p" },
+                ],
+                "8. Transactions": [
+                    { title: "Start a transaction", query: "BEGIN" },
+                    { title: "Commit a transaction", query: "COMMIT" },
+                    { title: "Rollback a transaction", query: "ROLLBACK" },
+                ]
+            };
+            
+            Object.entries(examples).forEach(([category, queries]) => {
+                const categoryDiv = document.createElement('div');
+                categoryDiv.innerHTML = `<h3 class="text-lg font-semibold mb-3 text-gray-200">${category}</h3>`;
+                const list = document.createElement('div');
+                list.className = 'space-y-3';
+                queries.forEach(ex => {
+                    const item = document.createElement('div');
+                    item.className = 'example-card';
+                    item.innerHTML = `
+                        <p class="text-sm text-gray-400 mb-2">${ex.title}</p>
+                        <pre><code class="language-cypher example-code">${ex.query}</code></pre>
+                    `;
+                    item.addEventListener('click', () => {
+                        editor.setValue(ex.query);
+                        editor.focus();
+                        if (window.innerWidth < 768) {
+                            document.querySelector('.mobile-nav-btn[data-view="right"]').click();
+                        }
+                    });
+                    list.appendChild(item);
+                });
+                categoryDiv.appendChild(list);
+                exampleCategoriesContainer.appendChild(categoryDiv);
+            });
+            hljs.highlightAll();
+            
+            function executeQuery() {
+                const fullQueryText = editor.getValue();
+                if (!fullQueryText.trim()) return;
+
+                let params = {};
+                try {
+                    params = JSON.parse(paramEditor.value || '{}');
+                } catch (e) {
+                    logToConsole(`<span class="error">[ERROR]</span> Invalid JSON in Query Parameters.`);
+                    return;
+                }
+
+                const queries = fullQueryText.split('\n')
+                    .map(q => q.trim())
+                    .filter(q => q && !q.startsWith('--') && !q.startsWith('//'));
+
+                if (queries.length === 0) return;
+
+                let lastQueryType = '';
+                let lastResult = null;
+
+                for (const query of queries) {
+                    const startTime = performance.now();
+                    try {
+                        const { type, message, result } = executor.executeQuery(query, params);
+                        const endTime = performance.now();
+                        const duration = (endTime - startTime).toFixed(2);
+                        
+                        logToConsole(`<span class="ok">[OK]</span> ${message} (${duration}ms)`);
+                        if (result && result.length > 0) {
+                            logToConsole(JSON.stringify(result, null, 2));
+                        }
+                        lastQueryType = type;
+                        lastResult = result;
+                    } catch (error) {
+                        logToConsole(`<span class="error">[ERROR]</span> ${error.message}`);
+                        return;
+                    }
+                }
+
+                consolePrompt.textContent = `${dbManager.currentDbName}>`;
+
+                if (lastQueryType === 'db_manage') {
+                    dbManager.setLastQueryResult([]);
+                    clearVisualization();
+                } else if (lastQueryType !== 'read') {
+                    refreshFullGraphView();
+                } else {
+                    dbManager.setLastQueryResult(lastResult);
+                    const hasGraphElements = lastResult.some(r => typeof r === 'object' && r !== null && Object.values(r).some(v => v && (v._type || v.segments)));
+                    if(hasGraphElements) {
+                        updateVisualization(lastResult);
+                    }
+                }
+            }
+            
+            function refreshFullGraphView() {
+                const db = dbManager.getCurrentDb();
+                const allNodes = Array.from(db.nodes.values()).map(n => executor._formatNodeForOutput(n));
+                const allRels = Array.from(db.relationships.values()).map(r => executor._formatRelForOutput(r));
+                
+                const combinedResult = [];
+                const nodesInRels = new Set();
+
+                allRels.forEach(rel => {
+                    combinedResult.push({
+                        start: executor._formatNodeForOutput(db.nodes.get(rel.startNode)),
+                        rel: rel,
+                        end: executor._formatNodeForOutput(db.nodes.get(rel.endNode))
+                    });
+                    nodesInRels.add(rel.startNode);
+                    nodesInRels.add(rel.endNode);
+                });
+
+                allNodes.forEach(node => {
+                    if (!nodesInRels.has(node._id)) {
+                        combinedResult.push({ node: node });
+                    }
+                });
+                
+                dbManager.setLastQueryResult(combinedResult);
+                updateVisualization(combinedResult);
+            }
+
+            function logToConsole(message) {
+                const consoleOutput = document.getElementById('console-output-content');
+                consoleOutput.innerHTML += `\n<span class="prompt">${dbManager.currentDbName}></span> ${message}`;
+                consoleOutput.scrollTop = consoleOutput.scrollHeight;
+            }
+
+            function clearConsole() {
+                const consoleOutput = document.getElementById('console-output-content');
+                consoleOutput.innerHTML = `<span class="prompt" id="console-prompt">${dbManager.currentDbName}></span> Console cleared.`;
+            }
+
+            function updateVisualization(data) {
+                const svgElement = d3.select("#visual-output");
+                clearVisualization();
+                if (!data || !Array.isArray(data) || data.length === 0) return;
+
+                const width = visualOutputContainer.clientWidth;
+                const height = visualOutputContainer.clientHeight;
+                if (width === 0 || height === 0) return;
+
+                const graph = { nodes: [], links: [] };
+                const nodeMap = new Map();
+
+                function addNode(nodeData) {
+                    if (nodeData && nodeData._type === 'node' && !nodeMap.has(nodeData._id)) {
+                        nodeMap.set(nodeData._id, {
+                            id: nodeData._id,
+                            label: nodeData.labels[0] || 'Node',
+                            title: nodeData.properties.name || nodeData.properties.title || `ID: ${nodeData._id}`,
+                            properties: nodeData.properties
+                        });
+                    }
+                }
+
+                data.forEach(item => {
+                    if (!item) return;
+                    if (item._type === 'node') addNode(item);
+                    else if (typeof item === 'object' && item !== null) {
+                        Object.values(item).forEach(value => {
+                            if (value && value.segments) { // It's a path
+                                value.segments.forEach(segment => {
+                                    addNode(segment.start);
+                                    addNode(segment.end);
+                                    graph.links.push({ source: segment.start._id, target: segment.end._id, type: segment.relationship.type });
+                                });
+                            }
+                            else if (value?._type === 'node') addNode(value);
+                            else if (value?._type === 'relationship') {
+                                addNode(executor._formatNodeForOutput(dbManager.getCurrentDb().nodes.get(value.startNode)));
+                                addNode(executor._formatNodeForOutput(dbManager.getCurrentDb().nodes.get(value.endNode)));
+                                graph.links.push({ source: value.startNode, target: value.endNode, type: value.type });
+                            }
+                        });
+                    }
+                });
+                graph.nodes = Array.from(nodeMap.values());
+                if (graph.nodes.length === 0) return;
+                
+                const g = svgElement.append("g").attr("class", "content");
+                zoom = d3.zoom().on("zoom", e => g.attr('transform', e.transform));
+                svgElement.call(zoom);
+
+                simulation = d3.forceSimulation(graph.nodes)
+                    .force("link", d3.forceLink(graph.links).id(d => d.id).distance(150))
+                    .force("charge", d3.forceManyBody().strength(-500))
+                    .force("center", d3.forceCenter(0, 0));
+
+                const node = g.append("g").selectAll("g").data(graph.nodes).join("g")
+                    .attr("class", "node")
+                    .call(drag(simulation))
+                    .on('click', showNodeDetails)
+                    .on('dblclick', unpinNode);
+
+                const link = g.append("g").selectAll("line").data(graph.links).join("line").attr("class", "link").attr("stroke", "#666");
+                const linkLabels = g.append("g").selectAll("text").data(graph.links).join("text").attr("class", "link-label").text(d => d.type);
+                
+                const color = d3.scaleOrdinal(d3.schemeCategory10);
+
+                node.append("circle").attr("r", 25).attr("fill", d => color(d.label));
+                node.append("text").text(d => d.title).attr("dy", "0.3em");
+                node.append("title").text(d => JSON.stringify(d.properties, null, 2));
+
+                simulation.on("tick", () => {
+                    link.attr("x1", d => d.source.x).attr("y1", d => d.source.y).attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+                    node.attr("transform", d => `translate(${d.x},${d.y})`);
+                    linkLabels.attr("x", d => (d.source.x + d.target.x) / 2).attr("y", d => (d.source.y + d.target.y) / 2);
+                });
+
+                recenterVisualization(true);
+            }
+            
+            function unpinNode(event, d) {
+                event.stopPropagation();
+                d.fx = null;
+                d.fy = null;
+                d3.select(this).classed("fixed", false);
+                simulation.alpha(0.1).restart();
+            }
+
+            function drag(simulation) {
+                function dragstarted(event, d) {
+                    if (!event.active) simulation.alphaTarget(0.3).restart();
+                    d.fx = d.x;
+                    d.fy = d.y;
+                }
+                function dragged(event, d) {
+                    d.fx = event.x;
+                    d.fy = event.y;
+                }
+                function dragended(event, d) {
+                    if (!event.active) simulation.alphaTarget(0);
+                    d3.select(this).classed("fixed", true);
+                }
+                return d3.drag().on("start", dragstarted).on("drag", dragged).on("end", dragended);
+            }
+
+            function clearVisualization() {
+                const svgElement = d3.select("#visual-output");
+                if (simulation) simulation.stop();
+                svgElement.html("");
+            }
+            
+            function recenterVisualization(instant = false) {
+                const svgElement = d3.select("#visual-output");
+                const g = svgElement.select("g.content");
+                if (!g.node()) return;
+
+                const bounds = g.node().getBBox();
+                const parent = svgElement.node();
+                const fullWidth = parent.clientWidth;
+                const fullHeight = parent.clientHeight;
+                const width = bounds.width;
+                const height = bounds.height;
+                const midX = bounds.x + width / 2;
+                const midY = bounds.y + height / 2;
+
+                if (width === 0 || height === 0) return;
+
+                const scale = 0.85 / Math.max(width / fullWidth, height / fullHeight);
+                const translate = [fullWidth / 2 - scale * midX, fullHeight / 2 - scale * midY];
+
+                const transform = d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale);
+                
+                const view = instant ? svgElement : svgElement.transition().duration(750);
+                view.call(zoom.transform, transform);
+            }
+
+            // --- UI Event Handlers ---
+            const runBtn = document.getElementById('run-command-btn');
+            const clearConsoleBtn = document.getElementById('clear-console-btn');
+            const mobileNavBtns = document.querySelectorAll('.mobile-nav-btn');
+            const resultsTabBtns = document.querySelectorAll('.results-tab-btn');
+            const resizer = document.getElementById('resizer');
+            const editorContainer = document.getElementById('editor-container');
+            const resultsContainer = document.getElementById('results-container');
+            const visualOutputContainer = document.getElementById('visual-output-content');
+            const modalOverlay = document.getElementById('details-modal-overlay');
+            const modalCloseBtn = document.getElementById('modal-close-btn');
+
+            function showNodeDetails(event, d) {
+                event.stopPropagation();
+                document.getElementById('modal-node-id').textContent = d.id;
+                document.getElementById('modal-node-labels').textContent = `:${d.label}`;
+                document.getElementById('modal-node-properties').textContent = JSON.stringify(d.properties, null, 2);
+                modalOverlay.classList.remove('hidden');
+            }
+
+            function hideNodeDetails() {
+                modalOverlay.classList.add('hidden');
+            }
+
+            modalOverlay.addEventListener('click', hideNodeDetails);
+            modalCloseBtn.addEventListener('click', hideNodeDetails);
+            recenterBtn.addEventListener('click', () => recenterVisualization(false));
+
+
+            runBtn.addEventListener('click', executeQuery);
+            editor.setOption("extraKeys", { "Ctrl-Enter": executeQuery, "Cmd-Enter": executeQuery });
+            clearConsoleBtn.addEventListener('click', clearConsole);
+
+            let isResizing = false;
+            resizer.addEventListener('mousedown', (e) => {
+                isResizing = true;
+                document.addEventListener('mousemove', handleMouseMove);
+                document.addEventListener('mouseup', () => {
+                    isResizing = false;
+                    document.removeEventListener('mousemove', handleMouseMove);
+                });
+            });
+            function handleMouseMove(e) {
+                const rightPanel = document.getElementById('right-panel');
+                if (!isResizing || !rightPanel) return;
+                const totalHeight = rightPanel.offsetHeight;
+                const newEditorHeight = e.clientY - rightPanel.offsetTop;
+                const newResultsHeight = totalHeight - newEditorHeight - resizer.offsetHeight;
+                if (newEditorHeight > 100 && newResultsHeight > 50) {
+                    const editorPercent = (newEditorHeight / totalHeight) * 100;
+                    editorContainer.style.height = `${editorPercent}%`;
+                    resultsContainer.style.height = `${100 - editorPercent}%`;
+                }
+            }
+
+            mobileNavBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    mobileNavBtns.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    const view = btn.dataset.view;
+                    document.querySelectorAll('.main-panel').forEach(p => p.classList.add('hidden'));
+                    const targetPanel = document.getElementById(`${view}-panel`);
+                    targetPanel.classList.remove('hidden');
+                    targetPanel.classList.add('flex');
+                    if(view === 'editor') editor.refresh();
+                    if(view === 'visualizer') updateVisualization(dbManager.getLastQueryResult());
+                });
+            });
+
+            resultsTabBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    resultsTabBtns.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    document.querySelectorAll('.results-tab-content').forEach(content => content.classList.add('hidden'));
+                    const targetContent = document.getElementById(`${btn.dataset.tab}-output-content`);
+                    targetContent.classList.remove('hidden');
+                });
+            });
+        });
+    </script>
+</body>
+</html>
