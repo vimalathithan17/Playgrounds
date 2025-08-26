@@ -1226,7 +1226,12 @@
 
                 if (width === 0 || height === 0) return;
 
-                const scale = 0.85 / Math.max(width / fullWidth, height / fullHeight);
+                let scale = 0.85 / Math.max(width / fullWidth, height / fullHeight);
+                // Cap scale to avoid excessive zoom for tiny graphs or overly large zooms
+                const MIN_SCALE = 0.25;
+                const MAX_SCALE = 2.0;
+                if (!isFinite(scale) || scale <= 0) scale = 1;
+                scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
                 const translate = [fullWidth / 2 - scale * midX, fullHeight / 2 - scale * midY];
 
                 const transform = d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale);
@@ -1295,10 +1300,25 @@
                     mobileNavBtns.forEach(b => b.classList.remove('active'));
                     btn.classList.add('active');
                     const view = btn.dataset.view;
-                    document.querySelectorAll('.main-panel').forEach(p => p.classList.add('hidden'));
+
+                    // Hide all main panels and remove any mobile display helpers we may have added.
+                    document.querySelectorAll('.main-panel').forEach(p => {
+                        p.classList.add('hidden');
+                        p.classList.remove('flex');
+                        p.classList.remove('block');
+                    });
+
                     const targetPanel = document.getElementById(`${view}-panel`);
+                    // Restore a sensible display for the target panel on mobile.
                     targetPanel.classList.remove('hidden');
-                    targetPanel.classList.add('flex');
+                    if (targetPanel.classList.contains('md:flex') || targetPanel.classList.contains('flex-1')) {
+                        // This panel expects to be a flex container on wider screens; use flex for mobile too.
+                        targetPanel.classList.add('flex');
+                    } else {
+                        // Keep it block to avoid layout stretching issues (prevents info panel widening).
+                        targetPanel.classList.add('block');
+                    }
+
                     if(view === 'editor') editor.refresh();
                     if(view === 'visualizer') updateVisualization(dbManager.getLastQueryResult());
                 });
@@ -1311,6 +1331,10 @@
                     document.querySelectorAll('.results-tab-content').forEach(content => content.classList.add('hidden'));
                     const targetContent = document.getElementById(`${btn.dataset.tab}-output-content`);
                     targetContent.classList.remove('hidden');
+                    // If user opened the Graph View tab, (re)render the latest graph
+                    if (btn.dataset.tab === 'visual') {
+                        try { updateVisualization(dbManager.getLastQueryResult()); } catch (e) { /* ignore rendering errors */ }
+                    }
                 });
             });
         });

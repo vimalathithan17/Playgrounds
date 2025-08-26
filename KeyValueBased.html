@@ -446,14 +446,18 @@
 
             const resultsTabs = document.querySelectorAll('.results-tab-btn');
             const resultsTabContents = document.querySelectorAll('.results-tab-content');
-            
+
             resultsTabs.forEach(tab => {
                 tab.addEventListener('click', () => {
                     resultsTabs.forEach(t => t.classList.remove('active'));
                     tab.classList.add('active');
-                    
+
+                    // Map tab name to the actual content element id. The console tab
+                    // uses 'console-output-content' while others follow '<name>-content'.
+                    const targetId = tab.dataset.tab === 'console' ? 'console-output-content' : `${tab.dataset.tab}-content`;
+
                     resultsTabContents.forEach(content => {
-                        if (content.id === `${tab.dataset.tab}-content`) {
+                        if (content.id === targetId) {
                             content.classList.remove('hidden');
                         } else {
                             content.classList.add('hidden');
@@ -463,7 +467,7 @@
                     if (tab.dataset.tab === 'visualization') {
                         renderVisualization();
                     } else if (tab.dataset.tab === 'console') {
-                        // Crucial Fix: Re-render the console history when the tab is clicked.
+                        // Re-render the console history when the tab is clicked.
                         renderConsole();
                     }
                 });
