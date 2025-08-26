@@ -11,12 +11,11 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/codemirror.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/theme/material-darker.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/codemirror.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/mode/cypher/cypher.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/mode/sql/sql.min.js"></script>
 
     <!-- highlight.js for static example highlighting -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cypher.min.js"></script>
 
     <!-- D3.js for visualization -->
     <script src="https://d3js.org/d3.v7.min.js"></script>
@@ -75,32 +74,8 @@
             background-color: #2d2d2d;
         }
         
-        /* Example Card Styles */
-        .example-card {
-            background-color: #252526;
-            border: 1px solid #3a3a3a;
-            border-radius: 0.5rem;
-            transition: background-color 0.2s ease-in-out, border-color 0.2s ease-in-out;
-            cursor: pointer;
-            padding: 1rem;
-        }
-        .example-card:hover {
-            background-color: #2d2d2d;
-            border-color: #555;
-        }
-        .example-card pre {
-            background: #1e1e1e;
-            padding: 0.75rem;
-            border-radius: 0.375rem;
-        }
-        .example-code { /* This class is on the <code> tag */
-            white-space: pre;
-            overflow-x: auto;
-            display: block;
-        }
-        .example-code::-webkit-scrollbar { height: 4px; }
-        .example-code::-webkit-scrollbar-track { background: #1a1a1a; }
-        .example-code::-webkit-scrollbar-thumb { background-color: #555; border-radius: 2px; }
+
+
 
 
         /* D3 Visualization Styles */
@@ -158,6 +133,11 @@
 
         <!-- Right Panel: Editor and Console/Visualizer -->
         <div id="right-panel" class="main-panel flex-1 flex-col w-full md:w-3/5 h-full bg-[#252526] hidden md:flex min-w-0">
+            <!-- Title Bar for Editor -->
+            <div class="flex-shrink-0 bg-[#282828] p-3 border-b border-gray-700">
+                <h3 class="text-lg font-semibold text-gray-200">Cypher Query Editor</h3>
+                <p class="text-sm text-gray-400">Write Cypher queries to explore and manipulate the graph database.</p>
+            </div>
             <div id="editor-container" class="flex-grow flex flex-col overflow-hidden" style="height: 70%;">
                 <div id="editor-wrapper" class="flex-grow relative">
                     <textarea id="command-editor"></textarea>
@@ -196,9 +176,46 @@
     </main>
 
     <nav class="md:hidden bg-[#282828] border-t border-gray-700 w-full flex-shrink-0">
-        <button class="mobile-nav-btn active flex-1 p-3 text-sm text-center font-medium border-t-2" data-view="info">Info</button>
-        <button class="mobile-nav-btn flex-1 p-3 text-sm text-center font-medium border-t-2 border-transparent" data-view="right">Editor & Results</button>
+        <button class="mobile-nav-btn active flex-1 p-3 text-sm text-center font-medium border-t-2" data-view="info">
+            <svg class="w-5 h-5 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+            </svg>
+            Info
+        </button>
+        <button class="mobile-nav-btn flex-1 p-3 text-sm text-center font-medium border-t-2 border-transparent" data-view="right">
+            <svg class="w-5 h-5 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+            </svg>
+            Editor
+        </button>
+        <button class="mobile-nav-btn flex-1 p-3 text-sm text-center font-medium border-t-2 border-transparent" data-view="graph">
+            <svg class="w-5 h-5 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"></path>
+            </svg>
+            Graph
+        </button>
     </nav>
+    
+    <!-- Mobile Full-Screen Graph View -->
+    <div id="mobile-graph-view" class="md:hidden fixed inset-0 bg-[#1e1e1e] z-50 hidden">
+        <div class="flex flex-col h-full">
+            <div class="flex items-center justify-between p-4 bg-[#282828] border-b border-gray-700">
+                <h3 class="text-lg font-semibold text-gray-200">Graph Visualization</h3>
+                <button id="close-mobile-graph" class="text-gray-400 hover:text-white">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            <div class="flex-1 relative">
+                <div class="absolute top-2 left-2 z-10">
+                    <button id="mobile-recenter-btn" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold px-3 py-1.5 rounded-md text-xs">Recenter</button>
+                </div>
+                <svg id="mobile-visual-output" class="w-full h-full"></svg>
+                <div class="absolute bottom-2 right-2 text-xs text-gray-500">Click to inspect, Drag to pin, Double-click to unpin</div>
+            </div>
+        </div>
+    </div>
     
     <!-- Node Details Modal -->
     <div id="details-modal-overlay" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center hidden">
@@ -261,6 +278,7 @@
                 this._nodeIdCounter = 0;
                 this._relIdCounter = 0;
                 this.constraints = new Map();
+                this.indexes = new Map();
             }
             _getNextNodeId() { return this._nodeIdCounter++; }
             _getNextRelId() { return this._relIdCounter++; }
@@ -379,16 +397,79 @@
                 this.txOperations = [];
             }
 
-            executeQuery(query, params = {}) {
+            // Enhanced Cypher query preprocessing
+            _cleanCypherQuery(query) {
+                const lines = query.split('\n');
+                return lines
+                    .map(line => {
+                        // Remove comments (// or /* */)
+                        line = line.replace(/\/\/.*$/, '');
+                        line = line.replace(/\/\*[\s\S]*?\*\//g, '');
+                        return line.trim();
+                    })
+                    .filter(line => line)
+                    .join(' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+            }
+
+            _substituteParameters(query, params) {
+                let result = query;
                 for (const key in params) {
                     const value = params[key];
-                    const paramRegex = new RegExp('\\$' + key, 'g');
-                    const replacement = typeof value === 'string' ? `'${value}'` : value;
-                    query = query.replace(paramRegex, replacement);
+                    const paramRegex = new RegExp('\\$' + key + '\\b', 'g');
+                    let replacement;
+                    
+                    if (typeof value === 'string') {
+                        replacement = `'${value.replace(/'/g, "\\'")}'`;
+                    } else if (typeof value === 'object') {
+                        replacement = JSON.stringify(value);
+                    } else {
+                        replacement = String(value);
+                    }
+                    
+                    result = result.replace(paramRegex, replacement);
                 }
+                return result;
+            }
 
-                const cleanQuery = query.trim().replace(/\s+/g, ' ');
-                const upperQuery = cleanQuery.toUpperCase();
+            _parseCypherPattern(pattern) {
+                // Enhanced pattern parsing for complex graph structures
+                const nodePattern = /\((\w+)?(?::(\w+))?\s*(?:\{([^}]*)\})?\)/g;
+                const relPattern = /-\[(\w+)?(?::(\w+))?\s*(?:\{([^}]*)\})?\]->/g;
+                
+                const nodes = [];
+                const relationships = [];
+                
+                let match;
+                while ((match = nodePattern.exec(pattern)) !== null) {
+                    nodes.push({
+                        variable: match[1] || null,
+                        label: match[2] || null,
+                        properties: match[3] ? this._parseProperties(match[3]) : {}
+                    });
+                }
+                
+                while ((match = relPattern.exec(pattern)) !== null) {
+                    relationships.push({
+                        variable: match[1] || null,
+                        type: match[2] || null,
+                        properties: match[3] ? this._parseProperties(match[3]) : {}
+                    });
+                }
+                
+                return { nodes, relationships };
+            }
+
+            executeQuery(query, params = {}) {
+                // Enhanced query preprocessing with comment support
+                const cleanQuery = this._cleanCypherQuery(query);
+                if (!cleanQuery) throw new Error("No valid Cypher statements found.");
+                
+                // Parameter substitution with enhanced support
+                let processedQuery = this._substituteParameters(cleanQuery, params);
+                
+                const upperQuery = processedQuery.toUpperCase().trim();
 
                 if (upperQuery === 'BEGIN') {
                     this.inTransaction = true;
@@ -424,6 +505,11 @@
                 
                 this.db = this.dbManager.getCurrentDb();
                 if (upperQuery.startsWith('CREATE CONSTRAINT')) return this._handleCreateConstraint(cleanQuery);
+                if (upperQuery.startsWith('CREATE INDEX')) return this._handleCreateIndex(cleanQuery);
+                if (upperQuery.startsWith('DROP INDEX')) return this._handleDropIndex(cleanQuery);
+                if (upperQuery.startsWith('CALL')) return this._handleCall(cleanQuery);
+                if (upperQuery.startsWith('FOREACH')) return this._handleForeach(cleanQuery);
+                if (upperQuery.includes('shortestPath') || upperQuery.includes('allShortestPaths')) return this._handlePathFunctions(cleanQuery);
                 if (upperQuery.startsWith('UNWIND')) return this._handleUnwind(cleanQuery);
                 if (upperQuery.startsWith('MERGE')) return this._handleMerge(cleanQuery);
                 if (upperQuery.includes('SET')) return this._handleSet(cleanQuery);
@@ -648,18 +734,26 @@
                         if (aggMatch) {
                             const [, func, inner, alias] = aggMatch;
                             const key = alias || part;
-                            const values = results.map(row => {
-                                const [v, p] = inner.split('.');
-                                return p ? row[v]?.properties?.[p] : row[v];
-                            }).filter(v => v !== undefined);
+                            
+                            // Enhanced function evaluation with comprehensive Neo4j built-ins
+                            const functionResult = this._evaluateCypherFunction(func, inner, results);
+                            if (functionResult !== undefined) {
+                                aggregated[key] = functionResult;
+                            } else {
+                                // Fallback to legacy handling
+                                const values = results.map(row => {
+                                    const [v, p] = inner.split('.');
+                                    return p ? row[v]?.properties?.[p] : row[v];
+                                }).filter(v => v !== undefined);
 
-                            switch (func.toUpperCase()) {
-                                case 'COUNT': aggregated[key] = values.length; break;
-                                case 'SUM': aggregated[key] = values.reduce((a, b) => a + b, 0); break;
-                                case 'AVG': aggregated[key] = values.reduce((a, b) => a + b, 0) / values.length; break;
-                                case 'MIN': aggregated[key] = Math.min(...values); break;
-                                case 'MAX': aggregated[key] = Math.max(...values); break;
-                                case 'COLLECT': aggregated[key] = values; break;
+                                switch (func.toUpperCase()) {
+                                    case 'COUNT': aggregated[key] = values.length; break;
+                                    case 'SUM': aggregated[key] = values.reduce((a, b) => a + b, 0); break;
+                                    case 'AVG': aggregated[key] = values.reduce((a, b) => a + b, 0) / values.length; break;
+                                    case 'MIN': aggregated[key] = Math.min(...values); break;
+                                    case 'MAX': aggregated[key] = Math.max(...values); break;
+                                    case 'COLLECT': aggregated[key] = values; break;
+                                }
                             }
                         }
                     });
@@ -668,15 +762,295 @@
                     return results.map(row => {
                         const newRow = {};
                         parts.forEach(part => {
-                             if (part.includes(' AS ')) {
-                                const [original, alias] = part.split(/\s+AS\s+/i);
-                                newRow[alias] = row[original];
+                            // Check for function calls in non-aggregated context
+                            const funcMatch = part.match(/(\w+)\((.*?)\)\s*(?:AS\s+(\w+))?/i);
+                            if (funcMatch) {
+                                const [, func, inner, alias] = funcMatch;
+                                const key = alias || part;
+                                
+                                const functionResult = this._evaluateCypherFunction(func, inner, [row]);
+                                if (functionResult !== undefined) {
+                                    newRow[key] = functionResult;
+                                } else {
+                                    // Fallback
+                                    const [v, p] = inner.split('.');
+                                    const value = p ? row[v]?.properties?.[p] : row[v];
+                                    newRow[key] = value;
+                                }
                             } else {
-                                newRow[part] = row[part];
+                                const alias = part.includes(' AS ') ? part.split(' AS ')[1].trim() : part;
+                                const expr = part.includes(' AS ') ? part.split(' AS ')[0].trim() : part;
+                                
+                                if (expr.includes('.')) {
+                                    const [v, p] = expr.split('.');
+                                    newRow[alias] = row[v]?.properties?.[p];
+                                } else {
+                                    newRow[alias] = row[expr];
+                                }
                             }
                         });
                         return newRow;
                     });
+                }
+            }
+            
+            // Comprehensive Cypher function evaluation
+            _evaluateCypherFunction(funcName, args, context) {
+                const func = funcName.toUpperCase();
+                const argParts = args ? args.split(',').map(a => a.trim()) : [];
+                
+                // Helper to get value from context
+                const getValue = (expr) => {
+                    if (!expr || !context || context.length === 0) return undefined;
+                    const row = context[0];
+                    
+                    if (expr.includes('.')) {
+                        const [v, p] = expr.split('.');
+                        return row[v]?.properties?.[p] || row[v]?.[p];
+                    }
+                    return row[expr] || expr;
+                };
+                
+                const getValues = (expr) => {
+                    return context.map(row => {
+                        if (expr.includes('.')) {
+                            const [v, p] = expr.split('.');
+                            return row[v]?.properties?.[p] || row[v]?.[p];
+                        }
+                        return row[expr];
+                    }).filter(v => v !== undefined);
+                };
+
+                switch (func) {
+                    // Aggregation functions
+                    case 'COUNT':
+                        if (args === '*') return context.length;
+                        return getValues(args).length;
+                    case 'SUM':
+                        return getValues(args).reduce((a, b) => a + b, 0);
+                    case 'AVG':
+                        const avgValues = getValues(args);
+                        return avgValues.length > 0 ? avgValues.reduce((a, b) => a + b, 0) / avgValues.length : null;
+                    case 'MIN':
+                        const minValues = getValues(args);
+                        return minValues.length > 0 ? Math.min(...minValues) : null;
+                    case 'MAX':
+                        const maxValues = getValues(args);
+                        return maxValues.length > 0 ? Math.max(...maxValues) : null;
+                    case 'COLLECT':
+                        return getValues(args);
+                    case 'STDEV':
+                        const stdevValues = getValues(args);
+                        if (stdevValues.length === 0) return null;
+                        const mean = stdevValues.reduce((a, b) => a + b, 0) / stdevValues.length;
+                        const variance = stdevValues.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / stdevValues.length;
+                        return Math.sqrt(variance);
+                    case 'STDEVP':
+                        const stdevpValues = getValues(args);
+                        if (stdevpValues.length === 0) return null;
+                        const meanP = stdevpValues.reduce((a, b) => a + b, 0) / stdevpValues.length;
+                        const varianceP = stdevpValues.reduce((sum, val) => sum + Math.pow(val - meanP, 2), 0) / (stdevpValues.length - 1);
+                        return Math.sqrt(varianceP);
+                    case 'PERCENTILECONT':
+                    case 'PERCENTILEDISC':
+                        const percentile = parseFloat(argParts[0]);
+                        const percValues = getValues(argParts[1]).sort((a, b) => a - b);
+                        if (percValues.length === 0) return null;
+                        const index = (percentile / 100) * (percValues.length - 1);
+                        return func === 'PERCENTILECONT' 
+                            ? percValues[Math.floor(index)] + (percValues[Math.ceil(index)] - percValues[Math.floor(index)]) * (index - Math.floor(index))
+                            : percValues[Math.round(index)];
+                            
+                    // String functions
+                    case 'TOLOWER':
+                        return String(getValue(args)).toLowerCase();
+                    case 'TOUPPER':
+                        return String(getValue(args)).toUpperCase();
+                    case 'TRIM':
+                        return String(getValue(args)).trim();
+                    case 'LTRIM':
+                        return String(getValue(args)).replace(/^\s+/, '');
+                    case 'RTRIM':
+                        return String(getValue(args)).replace(/\s+$/, '');
+                    case 'REVERSE':
+                        return String(getValue(args)).split('').reverse().join('');
+                    case 'SIZE':
+                        const sizeValue = getValue(args);
+                        if (Array.isArray(sizeValue)) return sizeValue.length;
+                        if (typeof sizeValue === 'string') return sizeValue.length;
+                        return null;
+                    case 'LENGTH':
+                        return String(getValue(args)).length;
+                    case 'SUBSTRING':
+                        const str = String(getValue(argParts[0]));
+                        const startPos = parseInt(argParts[1]) || 0;
+                        const length = argParts[2] ? parseInt(argParts[2]) : undefined;
+                        return length !== undefined ? str.substring(startPos, startPos + length) : str.substring(startPos);
+                    case 'LEFT':
+                        return String(getValue(argParts[0])).slice(0, parseInt(argParts[1]) || 0);
+                    case 'RIGHT':
+                        const rightStr = String(getValue(argParts[0]));
+                        const rightLen = parseInt(argParts[1]) || 0;
+                        return rightStr.slice(-rightLen);
+                    case 'SPLIT':
+                        return String(getValue(argParts[0])).split(argParts[1].replace(/['"]/g, ''));
+                    case 'REPLACE':
+                        return String(getValue(argParts[0])).replace(
+                            new RegExp(argParts[1].replace(/['"]/g, ''), 'g'),
+                            argParts[2].replace(/['"]/g, '')
+                        );
+                    case 'CONTAINS':
+                        return String(getValue(argParts[0])).includes(argParts[1].replace(/['"]/g, ''));
+                    case 'STARTSWITH':
+                        return String(getValue(argParts[0])).startsWith(argParts[1].replace(/['"]/g, ''));
+                    case 'ENDSWITH':
+                        return String(getValue(argParts[0])).endsWith(argParts[1].replace(/['"]/g, ''));
+                        
+                    // Mathematical functions
+                    case 'ABS':
+                        return Math.abs(getValue(args));
+                    case 'CEIL':
+                        return Math.ceil(getValue(args));
+                    case 'FLOOR':
+                        return Math.floor(getValue(args));
+                    case 'ROUND':
+                        const roundValue = getValue(argParts[0]);
+                        const precision = argParts[1] ? parseInt(argParts[1]) : 0;
+                        return Math.round(roundValue * Math.pow(10, precision)) / Math.pow(10, precision);
+                    case 'SIGN':
+                        const signValue = getValue(args);
+                        return signValue > 0 ? 1 : signValue < 0 ? -1 : 0;
+                    case 'SQRT':
+                        return Math.sqrt(getValue(args));
+                    case 'SIN':
+                        return Math.sin(getValue(args));
+                    case 'COS':
+                        return Math.cos(getValue(args));
+                    case 'TAN':
+                        return Math.tan(getValue(args));
+                    case 'ASIN':
+                        return Math.asin(getValue(args));
+                    case 'ACOS':
+                        return Math.acos(getValue(args));
+                    case 'ATAN':
+                        return Math.atan(getValue(args));
+                    case 'ATAN2':
+                        return Math.atan2(getValue(argParts[0]), getValue(argParts[1]));
+                    case 'COT':
+                        return 1 / Math.tan(getValue(args));
+                    case 'DEGREES':
+                        return getValue(args) * (180 / Math.PI);
+                    case 'RADIANS':
+                        return getValue(args) * (Math.PI / 180);
+                    case 'LOG':
+                        return Math.log(getValue(args));
+                    case 'LOG10':
+                        return Math.log10(getValue(args));
+                    case 'EXP':
+                        return Math.exp(getValue(args));
+                    case 'E':
+                        return Math.E;
+                    case 'PI':
+                        return Math.PI;
+                    case 'RAND':
+                        return Math.random();
+                    case 'RANGE':
+                        const rangeStart = parseInt(argParts[0]) || 0;
+                        const rangeEnd = parseInt(argParts[1]) || 0;
+                        const rangeStep = parseInt(argParts[2]) || 1;
+                        const range = [];
+                        for (let i = rangeStart; i <= rangeEnd; i += rangeStep) {
+                            range.push(i);
+                        }
+                        return range;
+                        
+                    // List functions
+                    case 'HEAD':
+                        const headList = getValue(args);
+                        return Array.isArray(headList) ? headList[0] : null;
+                    case 'TAIL':
+                        const tailList = getValue(args);
+                        return Array.isArray(tailList) ? tailList.slice(1) : null;
+                    case 'LAST':
+                        const lastList = getValue(args);
+                        return Array.isArray(lastList) ? lastList[lastList.length - 1] : null;
+                    case 'EXTRACT':
+                        // Simplified EXTRACT implementation
+                        const extractList = getValue(argParts[1]);
+                        const extractExpr = argParts[0];
+                        return Array.isArray(extractList) ? extractList.map(item => item) : null;
+                    case 'FILTER':
+                        // Simplified FILTER implementation
+                        const filterList = getValue(argParts[1]);
+                        return Array.isArray(filterList) ? filterList.filter(item => item !== null) : null;
+                    case 'REDUCE':
+                        // Simplified REDUCE implementation
+                        const reduceList = getValue(argParts[2]);
+                        const initialValue = getValue(argParts[1]);
+                        return Array.isArray(reduceList) ? reduceList.reduce((acc, val) => acc + val, initialValue) : initialValue;
+                        
+                    // Node/Relationship functions
+                    case 'ID':
+                        const idValue = getValue(args);
+                        return idValue?.id || idValue;
+                    case 'TYPE':
+                        const typeValue = getValue(args);
+                        return typeValue?.type || typeValue?.label;
+                    case 'LABELS':
+                        const labelsValue = getValue(args);
+                        return labelsValue?.label ? [labelsValue.label] : [];
+                    case 'KEYS':
+                        const keysValue = getValue(args);
+                        return keysValue?.properties ? Object.keys(keysValue.properties) : [];
+                    case 'PROPERTIES':
+                        const propsValue = getValue(args);
+                        return propsValue?.properties || {};
+                    case 'STARTNODE':
+                        const startRel = getValue(args);
+                        return startRel?.startNode;
+                    case 'ENDNODE':
+                        const endRel = getValue(args);
+                        return endRel?.endNode;
+                        
+                    // Date/Time functions
+                    case 'DATE':
+                        if (!args || args === '()') return new Date().toISOString().split('T')[0];
+                        return new Date(getValue(args)).toISOString().split('T')[0];
+                    case 'DATETIME':
+                        if (!args || args === '()') return new Date().toISOString();
+                        return new Date(getValue(args)).toISOString();
+                    case 'TIME':
+                        if (!args || args === '()') return new Date().toTimeString().split(' ')[0];
+                        return new Date(getValue(args)).toTimeString().split(' ')[0];
+                    case 'TIMESTAMP':
+                        return Date.now();
+                    case 'DURATION':
+                        // Simplified duration - return as string
+                        return `P${argParts[0] || 0}DT${argParts[1] || 0}H${argParts[2] || 0}M${argParts[3] || 0}S`;
+                        
+                    // Type checking functions
+                    case 'EXISTS':
+                        return getValue(args) !== undefined && getValue(args) !== null;
+                    case 'ISNULL':
+                        return getValue(args) === null || getValue(args) === undefined;
+                    case 'ISNAN':
+                        return isNaN(getValue(args));
+                    case 'ISINF':
+                        return !isFinite(getValue(args));
+                        
+                    // Comparison functions
+                    case 'COALESCE':
+                        for (const arg of argParts) {
+                            const val = getValue(arg);
+                            if (val !== null && val !== undefined) return val;
+                        }
+                        return null;
+                    case 'CASE':
+                        // Simplified CASE implementation
+                        return getValue(argParts[0]);
+                        
+                    default:
+                        return undefined;
                 }
             }
             
@@ -860,6 +1234,210 @@
                 return { type: 'db_manage', message: `Constraint created on :${label}(${key}).` };
             }
 
+            _handleCreateIndex(query) {
+                const match = query.match(/CREATE INDEX ON :(\w+)\((\w+)\)/i);
+                if (!match) throw new Error("Invalid CREATE INDEX syntax. Use: CREATE INDEX ON :Label(property)");
+                const [, label, property] = match;
+                const indexKey = `${label}.${property}`;
+                if (this.db.indexes.has(indexKey)) {
+                    throw new Error(`Index on :${label}(${property}) already exists.`);
+                }
+                this.db.indexes.set(indexKey, new Map());
+                return { type: 'db_manage', message: `Index created on :${label}(${property}).` };
+            }
+
+            _handleDropIndex(query) {
+                const match = query.match(/DROP INDEX ON :(\w+)\((\w+)\)/i);
+                if (!match) throw new Error("Invalid DROP INDEX syntax. Use: DROP INDEX ON :Label(property)");
+                const [, label, property] = match;
+                const indexKey = `${label}.${property}`;
+                if (!this.db.indexes.has(indexKey)) {
+                    throw new Error(`Index on :${label}(${property}) does not exist.`);
+                }
+                this.db.indexes.delete(indexKey);
+                return { type: 'db_manage', message: `Index on :${label}(${property}) dropped.` };
+            }
+
+            _handleCall(query) {
+                const procedureMatch = query.match(/CALL\s+(\w+(?:\.\w+)*)\((.*?)\)(?:\s+YIELD\s+(.*))?/i);
+                if (!procedureMatch) throw new Error("Invalid CALL syntax.");
+                
+                const [, procedureName, argsStr, yieldFields] = procedureMatch;
+                
+                // Built-in procedures
+                if (procedureName === 'db.labels') {
+                    const labels = new Set();
+                    this.db.nodes.forEach(node => node.labels.forEach(label => labels.add(label)));
+                    return { type: 'tabular', columns: ['label'], data: Array.from(labels).map(label => ({ label })) };
+                } else if (procedureName === 'db.relationshipTypes') {
+                    const types = new Set();
+                    this.db.relationships.forEach(rel => types.add(rel.type));
+                    return { type: 'tabular', columns: ['relationshipType'], data: Array.from(types).map(type => ({ relationshipType: type })) };
+                } else if (procedureName === 'db.propertyKeys') {
+                    const keys = new Set();
+                    this.db.nodes.forEach(node => Object.keys(node.properties).forEach(key => keys.add(key)));
+                    this.db.relationships.forEach(rel => Object.keys(rel.properties).forEach(key => keys.add(key)));
+                    return { type: 'tabular', columns: ['propertyKey'], data: Array.from(keys).map(key => ({ propertyKey: key })) };
+                } else if (procedureName === 'db.schema') {
+                    const schema = [];
+                    this.db.constraints.forEach((value, key) => {
+                        const [label, property] = key.split('.');
+                        schema.push({ type: 'CONSTRAINT', description: `UNIQUE constraint on :${label}(${property})` });
+                    });
+                    this.db.indexes.forEach((value, key) => {
+                        const [label, property] = key.split('.');
+                        schema.push({ type: 'INDEX', description: `INDEX on :${label}(${property})` });
+                    });
+                    return { type: 'tabular', columns: ['type', 'description'], data: schema };
+                } else {
+                    throw new Error(`Unknown procedure: ${procedureName}`);
+                }
+            }
+
+            _handleForeach(query) {
+                const match = query.match(/FOREACH\s*\(\s*(\w+)\s+IN\s+(.*?)\s*\|\s*(.*?)\s*\)/i);
+                if (!match) throw new Error("Invalid FOREACH syntax.");
+                
+                const [, variable, collection, statement] = match;
+                
+                // Simple implementation - execute statement for each item in collection
+                const results = [];
+                
+                // For demo purposes, assume collection is a simple list
+                const listMatch = collection.match(/\[(.*?)\]/);
+                if (listMatch) {
+                    const items = listMatch[1].split(',').map(item => item.trim().replace(/['"]/g, ''));
+                    items.forEach(item => {
+                        const modifiedStatement = statement.replace(new RegExp(variable, 'g'), `'${item}'`);
+                        try {
+                            const result = this.executeQuery(modifiedStatement);
+                            results.push(result);
+                        } catch (e) {
+                            // Continue with other items
+                        }
+                    });
+                }
+                
+                return { type: 'db_manage', message: `FOREACH completed. Executed ${results.length} statements.` };
+            }
+
+            _handlePathFunctions(query) {
+                // Simple shortest path implementation
+                if (query.includes('shortestPath')) {
+                    const pathMatch = query.match(/shortestPath\(\s*\((.*?)\)-\[.*?\]->\((.*?)\)\s*\)/i);
+                    if (!pathMatch) throw new Error("Invalid shortestPath syntax.");
+                    
+                    const [, startPattern, endPattern] = pathMatch;
+                    const startNodes = this._findNodesByPattern(startPattern);
+                    const endNodes = this._findNodesByPattern(endPattern);
+                    
+                    if (startNodes.length === 0 || endNodes.length === 0) {
+                        return { type: 'tabular', columns: ['path'], data: [] };
+                    }
+                    
+                    const paths = [];
+                    startNodes.forEach(startNode => {
+                        endNodes.forEach(endNode => {
+                            const path = this._findShortestPath(startNode.id, endNode.id);
+                            if (path.length > 0) {
+                                paths.push({ path: this._formatPath(path) });
+                            }
+                        });
+                    });
+                    
+                    return { type: 'tabular', columns: ['path'], data: paths };
+                }
+                
+                throw new Error("Path function not implemented.");
+            }
+
+            _findShortestPath(startId, endId) {
+                if (startId === endId) return [startId];
+                
+                const visited = new Set();
+                const queue = [[startId]];
+                
+                while (queue.length > 0) {
+                    const path = queue.shift();
+                    const currentId = path[path.length - 1];
+                    
+                    if (visited.has(currentId)) continue;
+                    visited.add(currentId);
+                    
+                    // Find connected nodes
+                    const connectedNodes = [];
+                    this.db.relationships.forEach(rel => {
+                        if (rel.startNode === currentId) connectedNodes.push(rel.endNode);
+                        if (rel.endNode === currentId) connectedNodes.push(rel.startNode);
+                    });
+                    
+                    for (const nodeId of connectedNodes) {
+                        if (nodeId === endId) {
+                            return [...path, nodeId];
+                        }
+                        if (!visited.has(nodeId)) {
+                            queue.push([...path, nodeId]);
+                        }
+                    }
+                }
+                
+                return []; // No path found
+            }
+
+            _formatPath(nodeIds) {
+                const segments = [];
+                for (let i = 0; i < nodeIds.length; i++) {
+                    const node = this.db.nodes.get(nodeIds[i]);
+                    segments.push({ node: this._formatNodeForOutput(node) });
+                    
+                    if (i < nodeIds.length - 1) {
+                        const rel = this._findRelationshipBetween(nodeIds[i], nodeIds[i + 1]);
+                        if (rel) segments.push({ relationship: this._formatRelForOutput(rel) });
+                    }
+                }
+                return { segments };
+            }
+
+            _findRelationshipBetween(startId, endId) {
+                for (const rel of this.db.relationships.values()) {
+                    if ((rel.startNode === startId && rel.endNode === endId) ||
+                        (rel.startNode === endId && rel.endNode === startId)) {
+                        return rel;
+                    }
+                }
+                return null;
+            }
+
+            _findNodesByPattern(pattern) {
+                // Simple pattern matching for shortestPath
+                const labelMatch = pattern.match(/:(\w+)/);
+                const propMatch = pattern.match(/\{([^}]+)\}/);
+                
+                const nodes = [];
+                this.db.nodes.forEach(node => {
+                    let matches = true;
+                    
+                    if (labelMatch && !node.labels.has(labelMatch[1])) {
+                        matches = false;
+                    }
+                    
+                    if (propMatch && matches) {
+                        const propStr = propMatch[1];
+                        const props = this._parseProperties(propStr);
+                        for (const [key, value] of Object.entries(props)) {
+                            if (node.properties[key] !== value) {
+                                matches = false;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (matches) nodes.push(node);
+                });
+                
+                return nodes;
+            }
+
             _formatNodeForOutput(node) { return { _id: node.id, _type: 'node', labels: Array.from(node.labels), properties: node.properties }; }
             _formatRelForOutput(rel) { return { _id: rel.id, _type: 'relationship', type: rel.type, startNode: rel.startNode, endNode: rel.endNode, properties: rel.properties }; }
         }
@@ -873,7 +1451,7 @@
 
             const paramEditor = document.getElementById('param-editor');
             const editor = CodeMirror.fromTextArea(document.getElementById('command-editor'), {
-                mode: 'cypher',
+                mode: 'text/x-sql',
                 theme: 'material-darker',
                 lineNumbers: true,
                 lineWrapping: true,
@@ -901,7 +1479,11 @@
                         <div class="text-gray-500 text-xl font-light hidden md:block">→</div>
                         <div class="text-gray-500 text-xl font-light md:hidden">↓</div>
                         <div class="flex flex-col items-center p-2">
-                            <svg class="w-10 h-10 mb-2 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                            <svg class="w-10 h-10 mb-2 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                <circle cx="6" cy="12" r="3" fill="currentColor"/>
+                                <circle cx="18" cy="12" r="3" fill="currentColor"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m0 0l-3-3m3 3l-3 3"/>
+                            </svg>
                             <h4 class="font-semibold text-gray-200">Relationships</h4>
                             <p class="text-xs text-gray-400">Directed connections with a type</p>
                              <code class="text-xs text-gray-500 mt-1 block">-[:ACTED_IN]-></code>
@@ -932,50 +1514,116 @@
             `;
             infoPanelContent.innerHTML = infoContent;
 
+            // Neo4j Tutorial: Building a Knowledge Management System
+            // Follow these examples in order to learn Cypher through a practical scenario
             const examples = {
-                "1. Database Admin": [
-                    { title: "Create a new database", query: "CREATE DATABASE movies" },
-                    { title: "Switch to the new database", query: "USE movies" },
-                    { title: "Create a unique constraint", query: "CREATE CONSTRAINT ON (p:Person) ASSERT p.name IS UNIQUE" },
-                    { title: "Drop a database", query: "DROP DATABASE movies" },
+                "🧠 Tutorial: Knowledge Management System": [
+                    { title: "📚 Neo4j Cypher Syntax Guide & Tutorial Introduction", query: "// 🚀 Welcome to Neo4j Cypher Tutorial!\n// Learn Neo4j by building a knowledge management system for a tech company\n\n// 📖 CYPHER QUERY LANGUAGE SYNTAX:\n// Basic patterns: (node)-[relationship]->(node)\n// Examples:\n//   CREATE (p:Person {name: 'Alice', age: 30})\n//   MATCH (p:Person) WHERE p.age > 25 RETURN p\n//   MERGE (p:Person {name: 'Bob'})-[:WORKS_FOR]->(c:Company)\n//   DELETE p  or  DETACH DELETE p\n\n// 🎯 PATTERN MATCHING:\n// (n:Label {property: 'value'})     - Node with label and properties\n// [r:TYPE {property: 'value'}]      - Relationship with type and properties\n// (a)-[:KNOWS]->(b)                 - Directed relationship\n// (a)-[:KNOWS]-(b)                  - Undirected relationship\n// (a)-[:KNOWS*1..3]->(b)            - Variable length path\n\n// 🔄 CORE OPERATIONS:\n// CREATE: Create new nodes/relationships\n// MATCH:  Find existing patterns\n// MERGE:  Find or create (upsert)\n// SET:    Update properties\n// REMOVE: Remove properties/labels\n// DELETE: Remove nodes/relationships\n\n// 📊 AGGREGATION & PROCESSING:\n// WITH:     Pipe results between query parts\n// COLLECT:  Aggregate values into lists\n// UNWIND:   Expand lists into rows\n// ORDER BY: Sort results\n// LIMIT:    Restrict number of results\n\n// 🔧 BUILT-IN FUNCTIONS:\n// String: substring(), replace(), split(), toLower()\n// Math: abs(), round(), sqrt(), rand()\n// Collection: size(), head(), tail(), range()\n// Date/Time: date(), datetime(), duration()\n\n// 💡 BEST PRACTICES:\n// 1. Use labels to categorize nodes\n// 2. Create indexes for frequently queried properties\n// 3. Use MERGE for upsert operations\n// 4. Leverage relationship direction for performance\n// 5. Use WITH to break complex queries into steps\n\n// Let's start building our knowledge management system!" },
                 ],
-                "2. Creating Data (CRUD)": [
-                    { title: "Create person nodes", query: "CREATE (p:Person {name: 'Tom Hanks', born: 1956})\nCREATE (p2:Person {name: 'Keanu Reeves', born: 1964})"},
-                    { title: "Create movie nodes", query: "CREATE (:Movie {title: 'Forrest Gump', released: 1994})\nCREATE (:Movie {title: 'The Matrix', released: 1999})"},
-                    { title: "Create a relationship", query: "MATCH (p:Person {name: 'Tom Hanks'}), (m:Movie {title: 'Forrest Gump'}) CREATE (p)-[:ACTED_IN]->(m)" },
+
+                "1️⃣ Company Structure - Creating Nodes": [
+                    { title: "Create employees with their basic information", query: "CREATE (alice:Employee {name: 'Alice Johnson', department: 'Engineering', level: 'Senior', email: 'alice@company.com', hire_date: '2020-03-15'})\nCREATE (bob:Employee {name: 'Bob Smith', department: 'Engineering', level: 'Lead', email: 'bob@company.com', hire_date: '2018-07-20'})\nCREATE (charlie:Employee {name: 'Charlie Brown', department: 'Data Science', level: 'Senior', email: 'charlie@company.com', hire_date: '2019-11-10'})" },
+                    { title: "Create more employees across different departments", query: "CREATE (diana:Employee {name: 'Diana Prince', department: 'Product', level: 'Manager', email: 'diana@company.com', hire_date: '2017-02-01'})\nCREATE (eve:Employee {name: 'Eve Wilson', department: 'Design', level: 'Senior', email: 'eve@company.com', hire_date: '2021-01-20'})\nCREATE (frank:Employee {name: 'Frank Miller', department: 'Engineering', level: 'Junior', email: 'frank@company.com', hire_date: '2023-06-15'})" },
+                    { title: "Create technology and skill nodes", query: "CREATE (python:Technology {name: 'Python', category: 'Programming Language'})\nCREATE (react:Technology {name: 'React', category: 'Frontend Framework'})\nCREATE (postgres:Technology {name: 'PostgreSQL', category: 'Database'})\nCREATE (aws:Technology {name: 'AWS', category: 'Cloud Platform'})\nCREATE (ml:Skill {name: 'Machine Learning', category: 'Data Science'})\nCREATE (leadership:Skill {name: 'Leadership', category: 'Management'})" },
+                    { title: "View all employees we created", query: "MATCH (e:Employee) \nRETURN e.name, e.department, e.level \nORDER BY e.hire_date" },
                 ],
-                 "3. Advanced Creation (MERGE)": [
-                    { title: "MERGE a node (creates if not exists)", query: "MERGE (c:City {name: 'Los Angeles'})" },
-                    { title: "MERGE with ON CREATE/MATCH", query: "MERGE (p:Person {name: 'Newcomer'}) ON CREATE SET p.joined = date() ON MATCH SET p.lastSeen = datetime()" },
-                    { title: "MERGE a full pattern", query: "MATCH (p:Person {name: 'Keanu Reeves'}), (m:Movie {title: 'The Matrix'}) MERGE (p)-[:ACTED_IN]->(m)" }
+
+                "2️⃣ Creating Relationships - Company Hierarchy": [
+                    { title: "Create reporting relationships (manager hierarchy)", query: "MATCH (bob:Employee {name: 'Bob Smith'}), (alice:Employee {name: 'Alice Johnson'})\nCREATE (alice)-[:REPORTS_TO]->(bob)\n\nMATCH (bob:Employee {name: 'Bob Smith'}), (frank:Employee {name: 'Frank Miller'})\nCREATE (frank)-[:REPORTS_TO]->(bob)\n\nMATCH (diana:Employee {name: 'Diana Prince'}), (eve:Employee {name: 'Eve Wilson'})\nCREATE (eve)-[:REPORTS_TO]->(diana)" },
+                    { title: "Create skill relationships", query: "MATCH (alice:Employee {name: 'Alice Johnson'}), (python:Technology {name: 'Python'})\nCREATE (alice)-[:SKILLED_IN {level: 'Expert', years: 5}]->(python)\n\nMATCH (alice:Employee {name: 'Alice Johnson'}), (react:Technology {name: 'React'})\nCREATE (alice)-[:SKILLED_IN {level: 'Advanced', years: 3}]->(react)\n\nMATCH (charlie:Employee {name: 'Charlie Brown'}), (python:Technology {name: 'Python'})\nCREATE (charlie)-[:SKILLED_IN {level: 'Expert', years: 4}]->(python)\n\nMATCH (charlie:Employee {name: 'Charlie Brown'}), (ml:Skill {name: 'Machine Learning'})\nCREATE (charlie)-[:SKILLED_IN {level: 'Expert', years: 6}]->(ml)" },
+                    { title: "Create collaboration relationships", query: "MATCH (alice:Employee {name: 'Alice Johnson'}), (charlie:Employee {name: 'Charlie Brown'})\nCREATE (alice)-[:COLLABORATES_WITH {project: 'ML Platform', since: '2023-01-15'}]->(charlie)\n\nMATCH (eve:Employee {name: 'Eve Wilson'}), (diana:Employee {name: 'Diana Prince'})\nCREATE (eve)-[:COLLABORATES_WITH {project: 'Product Redesign', since: '2023-03-01'}]->(diana)" },
+                    { title: "View the company structure", query: "MATCH (e1:Employee)-[r:REPORTS_TO]->(e2:Employee)\nRETURN e1.name + ' reports to ' + e2.name AS hierarchy" },
                 ],
-                "4. Reading & Filtering Data": [
-                    { title: "Read all people", query: "MATCH (p:Person) RETURN p" },
-                    { title: "Filter with WHERE", query: "MATCH (p:Person) WHERE p.born > 1960 RETURN p" },
-                    { title: "Filter with list predicate", query: "MATCH (p:Person) SET p:Actor\nMATCH (p:Person) WHERE any(label IN labels(p) WHERE label = 'Actor') RETURN p.name" },
-                    { title: "Sort results with ORDER BY", query: "MATCH (p:Person) RETURN p.name, p.born ORDER BY p.born DESC" },
-                    { title: "Paginate with SKIP and LIMIT", query: "MATCH (p:Person) RETURN p.name SKIP 1 LIMIT 1" },
+
+                "3️⃣ Projects & Knowledge - Complex Data Modeling": [
+                    { title: "Create project nodes with details", query: "CREATE (mlp:Project {name: 'ML Platform', status: 'In Progress', start_date: '2023-01-15', budget: 500000, description: 'AI/ML platform for company-wide use'})\nCREATE (redesign:Project {name: 'Product Redesign', status: 'Planning', start_date: '2023-03-01', budget: 300000, description: 'Complete UI/UX overhaul'})\nCREATE (migration:Project {name: 'Cloud Migration', status: 'Completed', start_date: '2022-06-01', end_date: '2023-01-30', budget: 800000, description: 'Migrate infrastructure to AWS'})" },
+                    { title: "Connect employees to projects", query: "MATCH (alice:Employee {name: 'Alice Johnson'}), (mlp:Project {name: 'ML Platform'})\nCREATE (alice)-[:WORKS_ON {role: 'Technical Lead', allocation: 80}]->(mlp)\n\nMATCH (charlie:Employee {name: 'Charlie Brown'}), (mlp:Project {name: 'ML Platform'})\nCREATE (charlie)-[:WORKS_ON {role: 'Data Scientist', allocation: 100}]->(mlp)\n\nMATCH (eve:Employee {name: 'Eve Wilson'}), (redesign:Project {name: 'Product Redesign'})\nCREATE (eve)-[:WORKS_ON {role: 'Lead Designer', allocation: 90}]->(redesign)\n\nMATCH (diana:Employee {name: 'Diana Prince'}), (redesign:Project {name: 'Product Redesign'})\nCREATE (diana)-[:WORKS_ON {role: 'Product Manager', allocation: 60}]->(redesign)" },
+                    { title: "Create knowledge documents", query: "CREATE (doc1:Document {title: 'Python Best Practices', type: 'Guide', created_date: '2023-02-15', author: 'Alice Johnson', tags: ['python', 'coding', 'standards']})\nCREATE (doc2:Document {title: 'ML Model Deployment Guide', type: 'Tutorial', created_date: '2023-04-10', author: 'Charlie Brown', tags: ['ml', 'deployment', 'aws']})\nCREATE (doc3:Document {title: 'Design System Documentation', type: 'Specification', created_date: '2023-03-20', author: 'Eve Wilson', tags: ['design', 'ui', 'components']})" },
+                    { title: "Connect documents to authors and technologies", query: "MATCH (alice:Employee {name: 'Alice Johnson'}), (doc1:Document {title: 'Python Best Practices'})\nCREATE (alice)-[:AUTHORED]->(doc1)\n\nMATCH (doc1:Document {title: 'Python Best Practices'}), (python:Technology {name: 'Python'})\nCREATE (doc1)-[:ABOUT]->(python)\n\nMATCH (charlie:Employee {name: 'Charlie Brown'}), (doc2:Document {title: 'ML Model Deployment Guide'})\nCREATE (charlie)-[:AUTHORED]->(doc2)\n\nMATCH (doc2:Document {title: 'ML Model Deployment Guide'}), (ml:Skill {name: 'Machine Learning'}), (aws:Technology {name: 'AWS'})\nCREATE (doc2)-[:ABOUT]->(ml)\nCREATE (doc2)-[:ABOUT]->(aws)" },
                 ],
-                "5. Aggregation & Chaining": [
-                    { title: "Count nodes with COUNT()", query: "MATCH (p:Person) RETURN COUNT(p)" },
-                    { title: "Collect values into a list", query: "MATCH (p:Person) RETURN COLLECT(p.name) AS names" },
-                    { title: "Chain queries with WITH", query: "MATCH (p:Person) WITH p ORDER BY p.born DESC LIMIT 1 RETURN p.name" }
+
+                "4️⃣ Basic Querying - Finding Information": [
+                    { title: "Find all employees in Engineering department", query: "MATCH (e:Employee {department: 'Engineering'}) \nRETURN e.name, e.level, e.hire_date \nORDER BY e.hire_date" },
+                    { title: "Find employees who know Python", query: "MATCH (e:Employee)-[:SKILLED_IN]->(t:Technology {name: 'Python'}) \nRETURN e.name, e.department" },
+                    { title: "Find all active projects", query: "MATCH (p:Project) \nWHERE p.status = 'In Progress' OR p.status = 'Planning' \nRETURN p.name, p.status, p.budget \nORDER BY p.budget DESC" },
+                    { title: "Find documents created in 2023", query: "MATCH (d:Document) \nWHERE d.created_date >= '2023-01-01' \nRETURN d.title, d.author, d.created_date \nORDER BY d.created_date DESC" },
                 ],
-                "6. Advanced Patterns": [
-                    { title: "UNWIND a list to create nodes", query: "UNWIND ['Toy Story', 'Sully'] AS movieName CREATE (:Movie {title: movieName})" },
-                    { title: "Find friends-of-friends (variable path)", query: "MATCH (p:Person {name: 'Keanu Reeves'})-[:ACTED_IN*2]-(coactor) RETURN coactor.name" },
-                    { title: "Query an undirected relationship", query: "MATCH (p:Person {name: 'Tom Hanks'})--(m:Movie) RETURN m.title" },
-                    { title: "Return a path variable", query: "MATCH path = (a)-[]->(b) RETURN path LIMIT 1" }
+
+                "5️⃣ Advanced Patterns - Multi-hop Relationships": [
+                    { title: "Find who reports to Bob (direct reports)", query: "MATCH (employee:Employee)-[:REPORTS_TO]->(bob:Employee {name: 'Bob Smith'}) \nRETURN employee.name + ' reports to ' + bob.name AS reporting_structure" },
+                    { title: "Find all people in Bob's team (including indirect reports)", query: "MATCH (bob:Employee {name: 'Bob Smith'})<-[:REPORTS_TO*1..3]-(team_member:Employee) \nRETURN team_member.name, team_member.level \nORDER BY team_member.name" },
+                    { title: "Find collaborators of collaborators (2nd degree connections)", query: "MATCH (alice:Employee {name: 'Alice Johnson'})-[:COLLABORATES_WITH*2]-(connection:Employee) \nRETURN DISTINCT connection.name, connection.department" },
+                    { title: "Find technology experts through skill relationships", query: "MATCH (e:Employee)-[s:SKILLED_IN]->(t:Technology) \nWHERE s.level = 'Expert' \nRETURN t.name AS technology, COLLECT(e.name) AS experts" },
                 ],
-                 "7. Updating & Deleting": [
-                    { title: "Update a property with SET", query: "MATCH (p:Person {name: 'Tom Hanks'}) SET p.born = 1955" },
-                    { title: "Delete a node with DETACH DELETE", query: "CREATE (:Person {name: 'Extra'})\nMATCH (p:Person {name: 'Extra'}) DETACH DELETE p" },
+
+                "6️⃣ Aggregation & Analytics": [
+                    { title: "Count employees by department", query: "MATCH (e:Employee) \nRETURN e.department, COUNT(e) AS employee_count \nORDER BY employee_count DESC" },
+                    { title: "Calculate average project budget", query: "MATCH (p:Project) \nRETURN AVG(p.budget) AS avg_budget, \n       MIN(p.budget) AS min_budget, \n       MAX(p.budget) AS max_budget" },
+                    { title: "Find most skilled employees (by number of skills)", query: "MATCH (e:Employee)-[:SKILLED_IN]->() \nRETURN e.name, e.department, COUNT(*) AS skill_count \nORDER BY skill_count DESC" },
+                    { title: "Technology popularity analysis", query: "MATCH (t:Technology)<-[:SKILLED_IN]-(e:Employee) \nRETURN t.name, t.category, COUNT(e) AS expert_count \nORDER BY expert_count DESC" },
                 ],
-                "8. Transactions": [
-                    { title: "Start a transaction", query: "BEGIN" },
-                    { title: "Commit a transaction", query: "COMMIT" },
-                    { title: "Rollback a transaction", query: "ROLLBACK" },
-                ]
+
+                "7️⃣ Using WITH for Complex Queries": [
+                    { title: "Find the most experienced employee per department", query: "MATCH (e:Employee) \nWITH e.department AS dept, e \nORDER BY e.hire_date \nWITH dept, COLLECT(e)[0] AS senior_employee \nRETURN dept, senior_employee.name, senior_employee.hire_date" },
+                    { title: "Find employees working on high-budget projects", query: "MATCH (p:Project) \nWHERE p.budget > 400000 \nWITH p \nMATCH (e:Employee)-[:WORKS_ON]->(p) \nRETURN e.name, p.name, p.budget \nORDER BY p.budget DESC" },
+                    { title: "Find knowledge authors and their expertise", query: "MATCH (e:Employee)-[:AUTHORED]->(d:Document) \nWITH e, COUNT(d) AS doc_count \nWHERE doc_count > 0 \nMATCH (e)-[:SKILLED_IN]->(tech) \nRETURN e.name, doc_count, COLLECT(tech.name) AS technologies" },
+                ],
+
+                "8️⃣ MERGE & Data Management": [
+                    { title: "Add new employee using MERGE (creates if not exists)", query: "MERGE (grace:Employee {name: 'Grace Hopper', email: 'grace@company.com'}) \nON CREATE SET grace.department = 'Engineering', \n              grace.level = 'Principal', \n              grace.hire_date = '2024-01-15' \nON MATCH SET grace.last_updated = timestamp()" },
+                    { title: "Ensure technology relationships exist", query: "MATCH (grace:Employee {name: 'Grace Hopper'}) \nMERGE (cobol:Technology {name: 'COBOL', category: 'Programming Language'}) \nMERGE (grace)-[:SKILLED_IN {level: 'Expert', years: 30}]->(cobol)" },
+                    { title: "Add project dependency relationships", query: "MERGE (infra:Project {name: 'Infrastructure Upgrade', status: 'Planning'}) \nMATCH (mlp:Project {name: 'ML Platform'}), (infra:Project {name: 'Infrastructure Upgrade'}) \nMERGE (mlp)-[:DEPENDS_ON]->(infra)" },
+                ],
+
+                "9️⃣ UNWIND & List Processing": [
+                    { title: "Create multiple technologies from a list", query: "UNWIND ['Docker', 'Kubernetes', 'Terraform', 'Git'] AS tech_name \nMERGE (t:Technology {name: tech_name}) \nON CREATE SET t.category = CASE tech_name \n  WHEN 'Docker' THEN 'Containerization'\n  WHEN 'Kubernetes' THEN 'Orchestration'\n  WHEN 'Terraform' THEN 'Infrastructure'\n  WHEN 'Git' THEN 'Version Control'\nEND" },
+                    { title: "Add skills to employees from arrays", query: "MATCH (frank:Employee {name: 'Frank Miller'}) \nUNWIND ['Docker', 'Git'] AS skill_name \nMATCH (t:Technology {name: skill_name}) \nMERGE (frank)-[:SKILLED_IN {level: 'Intermediate', years: 1}]->(t)" },
+                    { title: "Create team assignments", query: "MATCH (mlp:Project {name: 'ML Platform'}) \nUNWIND ['Alice Johnson', 'Charlie Brown', 'Frank Miller'] AS member_name \nMATCH (e:Employee {name: member_name}) \nMERGE (e)-[:WORKS_ON]->(mlp)" },
+                ],
+
+                "🔟 Advanced Functions & String Operations": [
+                    { title: "Find employees with names containing specific patterns", query: "MATCH (e:Employee) \nWHERE e.name CONTAINS 'son' OR e.name ENDS WITH 'Brown' \nRETURN e.name, e.department" },
+                    { title: "Extract and format hire year information", query: "MATCH (e:Employee) \nRETURN e.name, \n       e.hire_date, \n       toInteger(split(e.hire_date, '-')[0]) AS hire_year,\n       CASE \n         WHEN toInteger(split(e.hire_date, '-')[0]) < 2020 THEN 'Veteran'\n         ELSE 'Recent Hire'\n       END AS employee_type \nORDER BY hire_year" },
+                    { title: "Calculate experience and group employees", query: "MATCH (e:Employee) \nWITH e, \n     duration.between(date(e.hire_date), date()).years AS years_experience \nRETURN e.name, \n       years_experience,\n       CASE \n         WHEN years_experience >= 5 THEN 'Senior'\n         WHEN years_experience >= 2 THEN 'Mid-level'\n         ELSE 'Junior'\n       END AS experience_level \nORDER BY years_experience DESC" },
+                ],
+
+                "⚡ Path Finding & Graph Algorithms": [
+                    { title: "Find shortest path between employees", query: "MATCH path = shortestPath((alice:Employee {name: 'Alice Johnson'})-[*]-(eve:Employee {name: 'Eve Wilson'})) \nRETURN [node in nodes(path) | node.name] AS path_names, \n       length(path) AS path_length" },
+                    { title: "Find all paths between technologies", query: "MATCH path = (python:Technology {name: 'Python'})-[*1..3]-(aws:Technology {name: 'AWS'}) \nRETURN [node in nodes(path) | COALESCE(node.name, node.title)] AS connection_path \nLIMIT 5" },
+                    { title: "Find knowledge flow (who can teach what to whom)", query: "MATCH (teacher:Employee)-[:SKILLED_IN {level: 'Expert'}]->(tech:Technology)<-[:SKILLED_IN]-(student:Employee) \nWHERE teacher <> student \nRETURN teacher.name AS teacher, \n       tech.name AS technology, \n       COLLECT(student.name) AS potential_students" },
+                ],
+
+                "📊 Complex Analytics Queries": [
+                    { title: "Department collaboration analysis", query: "MATCH (e1:Employee)-[:COLLABORATES_WITH]-(e2:Employee) \nWHERE e1.department <> e2.department \nRETURN e1.department + ' <-> ' + e2.department AS collaboration, \n       COUNT(*) AS collaboration_count \nORDER BY collaboration_count DESC" },
+                    { title: "Project resource allocation report", query: "MATCH (p:Project)<-[w:WORKS_ON]-(e:Employee) \nWITH p, \n     SUM(w.allocation) AS total_allocation, \n     COUNT(e) AS team_size, \n     COLLECT({name: e.name, role: w.role, allocation: w.allocation}) AS team_details \nRETURN p.name, \n       p.budget, \n       team_size, \n       total_allocation, \n       team_details \nORDER BY p.budget DESC" },
+                    { title: "Knowledge gap analysis", query: "MATCH (p:Project)<-[:WORKS_ON]-(e:Employee) \nMATCH (p)-[:REQUIRES]->(required_tech:Technology) \nOPTIONAL MATCH (e)-[:SKILLED_IN]->(required_tech) \nWITH p, required_tech, \n     COUNT(e) AS total_team_members, \n     COUNT(CASE WHEN required_tech IS NOT NULL THEN 1 END) AS skilled_members \nRETURN p.name AS project, \n       required_tech.name AS technology, \n       skilled_members + '/' + total_team_members AS coverage" },
+                ],
+
+                "🔄 Data Updates & Modifications": [
+                    { title: "Update employee information", query: "MATCH (frank:Employee {name: 'Frank Miller'}) \nSET frank.level = 'Mid-level', \n    frank.last_promotion = date() \nRETURN frank.name, frank.level, frank.last_promotion" },
+                    { title: "Add properties to relationships", query: "MATCH (alice:Employee {name: 'Alice Johnson'})-[r:SKILLED_IN]->(python:Technology {name: 'Python'}) \nSET r.certification = 'Python Institute PCAP', \n    r.last_used = date() \nRETURN alice.name, python.name, r.certification" },
+                    { title: "Mark project as completed", query: "MATCH (p:Project {name: 'Product Redesign'}) \nSET p.status = 'Completed', \n    p.end_date = '2024-01-15', \n    p.final_budget = 280000 \nRETURN p.name, p.status, p.final_budget" },
+                ],
+
+                "🗑️ Cleanup & Node Management": [
+                    { title: "Remove unused relationships", query: "MATCH (e:Employee {name: 'Frank Miller'})-[r:WORKS_ON]->(p:Project {name: 'Cloud Migration'}) \nDELETE r" },
+                    { title: "Remove properties from nodes", query: "MATCH (e:Employee) \nREMOVE e.last_updated \nRETURN COUNT(e) AS updated_employees" },
+                    { title: "Delete nodes with their relationships", query: "CREATE (:TempNode {name: 'Temporary'}) \nMATCH (temp:TempNode {name: 'Temporary'}) \nDETACH DELETE temp" },
+                ],
+
+                "🔧 Schema & Constraints": [
+                    { title: "Create uniqueness constraint", query: "CREATE CONSTRAINT employee_email_unique \nON (e:Employee) \nASSERT e.email IS UNIQUE" },
+                    { title: "Create node key constraint", query: "CREATE CONSTRAINT project_name_key \nON (p:Project) \nASSERT p.name IS NODE KEY" },
+                    { title: "Show all constraints", query: "SHOW CONSTRAINTS" },
+                    { title: "Create index for performance", query: "CREATE INDEX employee_department_idx \nON :Employee(department)" },
+                ],
+
+                "❌ Common Error Examples": [
+                    { title: "Missing MATCH before CREATE relationship", query: "CREATE (alice)-[:WORKS_WITH]->(bob)" },
+                    { title: "Incorrect syntax for property update", query: "MATCH (e:Employee) SET e.name = 'Updated' WHERE e.name = 'Alice Johnson'" },
+                    { title: "Invalid aggregation without grouping", query: "MATCH (e:Employee) RETURN e.name, COUNT(*)" },
+                    { title: "Using undefined variable", query: "MATCH (e:Employee) RETURN e.name, p.name" },
+                ],
             };
             
             Object.entries(examples).forEach(([category, queries]) => {
@@ -985,10 +1633,10 @@
                 list.className = 'space-y-3';
                 queries.forEach(ex => {
                     const item = document.createElement('div');
-                    item.className = 'example-card';
+                    item.className = 'w-full text-left bg-gray-800/50 hover:bg-gray-700/70 text-gray-300 rounded-md overflow-hidden p-3 transition-colors duration-200 cursor-pointer';
                     item.innerHTML = `
-                        <p class="text-sm text-gray-400 mb-2">${ex.title}</p>
-                        <pre><code class="language-cypher example-code">${ex.query}</code></pre>
+                        <p class="text-sm font-semibold text-gray-300">${ex.title}</p>
+                        <pre class="text-gray-400 font-mono text-xs overflow-x-auto custom-scrollbar pt-1"><code>${ex.query}</code></pre>
                     `;
                     item.addEventListener('click', () => {
                         editor.setValue(ex.query);
@@ -1108,6 +1756,13 @@
                 const height = visualOutputContainer.clientHeight;
                 if (width === 0 || height === 0) return;
 
+                // Set proper SVG dimensions and viewBox
+                svgElement
+                    .attr("width", width)
+                    .attr("height", height)
+                    .attr("viewBox", `0 0 ${width} ${height}`)
+                    .style("overflow", "visible");
+
                 const graph = { nodes: [], links: [] };
                 const nodeMap = new Map();
 
@@ -1153,7 +1808,8 @@
                 simulation = d3.forceSimulation(graph.nodes)
                     .force("link", d3.forceLink(graph.links).id(d => d.id).distance(150))
                     .force("charge", d3.forceManyBody().strength(-500))
-                    .force("center", d3.forceCenter(0, 0));
+                    .force("center", d3.forceCenter(width / 2, height / 2))
+                    .force("collision", d3.forceCollide().radius(30));
 
                 const node = g.append("g").selectAll("g").data(graph.nodes).join("g")
                     .attr("class", "node")
@@ -1210,9 +1866,11 @@
                 svgElement.html("");
             }
             
-            function recenterVisualization(instant = false) {
-                const svgElement = d3.select("#visual-output");
-                const g = svgElement.select("g.content");
+            function recenterVisualization(instant = false, isMobile = false) {
+                const svgSelector = isMobile ? "#mobile-visual-output" : "#visual-output";
+                const svgElement = d3.select(svgSelector);
+                const contentClass = isMobile ? "mobile-content" : "content";
+                const g = svgElement.select(`g.${contentClass}`);
                 if (!g.node()) return;
 
                 const bounds = g.node().getBBox();
@@ -1226,18 +1884,139 @@
 
                 if (width === 0 || height === 0) return;
 
-                let scale = 0.85 / Math.max(width / fullWidth, height / fullHeight);
+                let scale = (isMobile ? 0.8 : 0.85) / Math.max(width / fullWidth, height / fullHeight);
                 // Cap scale to avoid excessive zoom for tiny graphs or overly large zooms
-                const MIN_SCALE = 0.25;
-                const MAX_SCALE = 2.0;
+                const MIN_SCALE = isMobile ? 0.3 : 0.25;
+                const MAX_SCALE = isMobile ? 1.5 : 2.0;
                 if (!isFinite(scale) || scale <= 0) scale = 1;
                 scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
                 const translate = [fullWidth / 2 - scale * midX, fullHeight / 2 - scale * midY];
 
                 const transform = d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale);
                 
+                const zoomBehavior = isMobile ? d3.zoom() : zoom;
                 const view = instant ? svgElement : svgElement.transition().duration(750);
-                view.call(zoom.transform, transform);
+                view.call(zoomBehavior.transform, transform);
+            }
+            
+            // Mobile visualization function
+            function updateMobileVisualization(data) {
+                const svgElement = d3.select("#mobile-visual-output");
+                clearMobileVisualization();
+                if (!data || !Array.isArray(data) || data.length === 0) return;
+
+                const container = document.getElementById('mobile-graph-view');
+                const width = container.clientWidth;
+                const height = container.clientHeight - 80; // Account for header
+                if (width === 0 || height === 0) return;
+
+                // Set proper SVG dimensions and viewBox for mobile
+                svgElement
+                    .attr("width", width)
+                    .attr("height", height)
+                    .attr("viewBox", `0 0 ${width} ${height}`)
+                    .style("overflow", "visible");
+
+                const graph = { nodes: [], links: [] };
+                const nodeMap = new Map();
+
+                function addNode(nodeData) {
+                    if (nodeData && nodeData._type === 'node' && !nodeMap.has(nodeData._id)) {
+                        nodeMap.set(nodeData._id, {
+                            id: nodeData._id,
+                            label: nodeData.labels[0] || 'Node',
+                            title: nodeData.properties.name || nodeData.properties.title || `ID: ${nodeData._id}`,
+                            properties: nodeData.properties
+                        });
+                    }
+                }
+
+                // Same data processing as desktop version
+                data.forEach(item => {
+                    if (!item) return;
+                    if (item._type === 'node') addNode(item);
+                    else if (typeof item === 'object' && item !== null) {
+                        Object.values(item).forEach(value => {
+                            if (value && value.segments) {
+                                value.segments.forEach(segment => {
+                                    addNode(segment.start);
+                                    addNode(segment.end);
+                                    graph.links.push({ source: segment.start._id, target: segment.end._id, type: segment.relationship.type });
+                                });
+                            }
+                            else if (value?._type === 'node') addNode(value);
+                            else if (value?._type === 'relationship') {
+                                addNode(executor._formatNodeForOutput(dbManager.getCurrentDb().nodes.get(value.startNode)));
+                                addNode(executor._formatNodeForOutput(dbManager.getCurrentDb().nodes.get(value.endNode)));
+                                graph.links.push({ source: value.startNode, target: value.endNode, type: value.type });
+                            }
+                        });
+                    }
+                });
+                graph.nodes = Array.from(nodeMap.values());
+                if (graph.nodes.length === 0) return;
+
+                const g = svgElement.append("g").attr("class", "mobile-content");
+                const mobileZoom = d3.zoom().on("zoom", e => g.attr('transform', e.transform));
+                svgElement.call(mobileZoom);
+
+                const mobileSimulation = d3.forceSimulation(graph.nodes)
+                    .force("link", d3.forceLink(graph.links).id(d => d.id).distance(100))
+                    .force("charge", d3.forceManyBody().strength(-300))
+                    .force("center", d3.forceCenter(width / 2, height / 2))
+                    .force("collision", d3.forceCollide().radius(25));
+
+                const node = g.append("g").selectAll("g").data(graph.nodes).join("g")
+                    .attr("class", "node")
+                    .call(drag(mobileSimulation))
+                    .on('click', showNodeDetails)
+                    .on('dblclick', (event, d) => {
+                        event.stopPropagation();
+                        d.fx = null;
+                        d.fy = null;
+                        d3.select(event.currentTarget).classed("fixed", false);
+                        mobileSimulation.alpha(0.1).restart();
+                    });
+
+                const link = g.append("g").selectAll("line").data(graph.links).join("line").attr("class", "link").attr("stroke", "#666");
+                const linkLabels = g.append("g").selectAll("text").data(graph.links).join("text").attr("class", "link-label").text(d => d.type);
+                
+                const color = d3.scaleOrdinal(d3.schemeCategory10);
+
+                node.append("circle").attr("r", 20).attr("fill", d => color(d.label)); // Smaller nodes for mobile
+                node.append("text").text(d => d.title.length > 10 ? d.title.substring(0, 10) + '...' : d.title).attr("dy", "0.3em").style("font-size", "10px");
+                node.append("title").text(d => JSON.stringify(d.properties, null, 2));
+
+                mobileSimulation.on("tick", () => {
+                    link.attr("x1", d => d.source.x).attr("y1", d => d.source.y).attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+                    node.attr("transform", d => `translate(${d.x},${d.y})`);
+                    linkLabels.attr("x", d => (d.source.x + d.target.x) / 2).attr("y", d => (d.source.y + d.target.y) / 2);
+                });
+
+                // Auto-center after a short delay
+                setTimeout(() => {
+                    const bounds = g.node().getBBox();
+                    const fullWidth = width;
+                    const fullHeight = height;
+                    const nodeWidth = bounds.width;
+                    const nodeHeight = bounds.height;
+                    const midX = bounds.x + nodeWidth / 2;
+                    const midY = bounds.y + nodeHeight / 2;
+
+                    if (nodeWidth === 0 || nodeHeight === 0) return;
+
+                    let scale = 0.8 / Math.max(nodeWidth / fullWidth, nodeHeight / fullHeight);
+                    scale = Math.max(0.3, Math.min(1.5, scale));
+                    const translate = [fullWidth / 2 - scale * midX, fullHeight / 2 - scale * midY];
+
+                    const transform = d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale);
+                    svgElement.transition().duration(500).call(mobileZoom.transform, transform);
+                }, 1000);
+            }
+            
+            function clearMobileVisualization() {
+                const svgElement = d3.select("#mobile-visual-output");
+                svgElement.html("");
             }
 
             // --- UI Event Handlers ---
@@ -1301,6 +2080,13 @@
                     btn.classList.add('active');
                     const view = btn.dataset.view;
 
+                    if (view === 'graph') {
+                        // Show full-screen mobile graph view
+                        document.getElementById('mobile-graph-view').classList.remove('hidden');
+                        updateMobileVisualization(dbManager.getLastQueryResult());
+                        return;
+                    }
+
                     // Hide all main panels and remove any mobile display helpers we may have added.
                     document.querySelectorAll('.main-panel').forEach(p => {
                         p.classList.add('hidden');
@@ -1319,9 +2105,19 @@
                         targetPanel.classList.add('block');
                     }
 
-                    if(view === 'editor') editor.refresh();
-                    if(view === 'visualizer') updateVisualization(dbManager.getLastQueryResult());
+                    if(view === 'right') editor.refresh();
                 });
+            });
+            
+            // Mobile graph view controls
+            document.getElementById('close-mobile-graph').addEventListener('click', () => {
+                document.getElementById('mobile-graph-view').classList.add('hidden');
+                // Return to info view
+                document.querySelector('.mobile-nav-btn[data-view="info"]').click();
+            });
+            
+            document.getElementById('mobile-recenter-btn').addEventListener('click', () => {
+                recenterVisualization(true); // true for mobile
             });
 
             resultsTabBtns.forEach(btn => {

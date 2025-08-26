@@ -45,19 +45,29 @@
                     <h3 class="text-lg font-semibold text-gray-200 mb-4 text-center">Data Model Hierarchy 🏛️</h3>
                     <div class="flex flex-col items-center justify-around gap-2 text-center">
                         <div class="flex flex-col items-center p-2">
-                            <svg class="w-12 h-12 mb-2 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7a8 4 0 0116 0zM12 3v4"></path></svg>
+                            <svg class="w-12 h-12 mb-2 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/>
+                                <circle cx="8" cy="9" r="1" fill="currentColor"/>
+                                <circle cx="8" cy="15" r="1" fill="currentColor"/>
+                            </svg>
                             <h4 class="font-semibold text-gray-200">Database</h4>
                             <p class="text-xs text-gray-400">Numbered DBs (e.g., 0, 1, 2...)</p>
                         </div>
                         <div class="text-gray-500 text-2xl font-light">↓</div>
                         <div class="flex flex-col items-center p-2">
-                            <svg class="w-12 h-12 mb-2 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 5.25a3 3 0 013 3m3 0a9 9 0 11-18 0 9 9 0 0118 0zM12.75 15.75a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                            <svg class="w-12 h-12 mb-2 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
+                                <circle cx="15" cy="9" r="1" fill="currentColor"/>
+                            </svg>
                             <h4 class="font-semibold text-gray-200">Key</h4>
                             <p class="text-xs text-gray-400">A unique string identifier</p>
                         </div>
                         <div class="text-gray-500 text-2xl font-light">↓</div>
                         <div class="flex flex-col items-center p-2">
-                           <svg class="w-12 h-12 mb-2 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
+                           <svg class="w-12 h-12 mb-2 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h1m0 0h1m-1 0v1m0-1V6m4 3h2M9 13h6M9 17h6"/>
+                            </svg>
                             <h4 class="font-semibold text-gray-200">Value</h4>
                             <p class="text-xs text-gray-400">String, List, Hash, Set, etc.</p>
                         </div>
@@ -92,6 +102,11 @@
 
         <!-- Right Panel for Editor and Results -->
         <div id="right-panel" class="flex flex-col w-full md:w-3/5 h-full bg-[#252526]">
+            <!-- Title Bar for Editor -->
+            <div class="flex-shrink-0 bg-[#282828] p-3 border-b border-gray-700">
+                <h3 class="text-lg font-semibold text-gray-200">Redis Command Editor</h3>
+                <p class="text-sm text-gray-400">Enter Redis commands below. Multiple commands supported (one per line).</p>
+            </div>
             <div id="editor-container" class="flex-grow flex flex-col overflow-hidden" style="height: 60%;">
                 <div id="editor-wrapper" class="flex-grow relative">
                     <textarea id="command-editor"></textarea>
@@ -137,9 +152,116 @@
     <script>
         // --- DEDICATED KEY-VALUE STORE CLASS (Complete) ---
         class KeyValueStore {
-            constructor() { this.databases = [new Map()]; this.expirations = [new Map()]; this.activeDbIndex = 0; this.transactionQueue = null; this.subscriptions = new Map(); this.pubSubCallback = null; }
+            constructor() { this.databases = [new Map()]; this.expirations = [new Map()]; this.activeDbIndex = 0; this.transactionQueue = null; this.subscriptions = new Map(); this.pubSubCallback = null; this.config = new Map([['timeout', '0'], ['tcp-keepalive', '0'], ['maxmemory', '0'], ['maxmemory-policy', 'noeviction'], ['save', ''], ['appendonly', 'no'], ['databases', '16']]); }
             setPubSubCallback(callback) { this.pubSubCallback = callback; }
-            execute(commandString, isFromTransaction = false) { try { if (!commandString || commandString.trim() === '') throw new Error("Command cannot be empty."); const parts = commandString.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g).map(p => p.replace(/^['"]|['"]$/g, '')); const command = parts[0].toUpperCase(); const args = parts.slice(1); if (this.transactionQueue !== null && !['EXEC', 'DISCARD'].includes(command) && !isFromTransaction) { this.transactionQueue.push(commandString); return { status: 'ok', data: 'QUEUED' }; } switch (command) { case 'SET': return this.set(args); case 'GET': return this.get(args); case 'INCR': return this.incrby(args, 1); case 'DECR': return this.incrby(args, -1); case 'INCRBY': return this.incrby(args, parseInt(args[1])); case 'DECRBY': return this.incrby(args, -parseInt(args[1])); case 'DEL': return this.del(args); case 'SELECT': return this.select(args); case 'EXPIRE': return this.expire(args); case 'TTL': return this.ttl(args); case 'EXISTS': return this.exists(args); case 'KEYS': return this.keys(args); case 'FLUSHDB': return this.flushdb(); case 'LPUSH': return this.lpush(args); case 'RPUSH': return this.rpush(args); case 'LPOP': return this.lpop(args); case 'RPOP': return this.rpop(args); case 'LRANGE': return this.lrange(args); case 'HSET': return this.hset(args); case 'HGET': return this.hget(args); case 'HGETALL': return this.hgetall(args); case 'HDEL': return this.hdel(args); case 'SADD': return this.sadd(args); case 'SMEMBERS': return this.smembers(args); case 'SREM': return this.srem(args); case 'SISMEMBER': return this.sismember(args); case 'SCARD': return this.scard(args); case 'ZADD': return this.zadd(args); case 'ZRANGE': return this.zrange(args); case 'ZREM': return this.zrem(args); case 'ZCARD': return this.zcard(args); case 'MULTI': return this.multi(); case 'EXEC': return this.exec(); case 'DISCARD': return this.discard(); case 'XADD': return this.xadd(args); case 'XRANGE': return this.xrange(args); case 'XREAD': return this.xread(args); case 'XGROUP': return this.xgroup(args); case 'XREADGROUP': return this.xreadgroup(args); case 'XACK': return this.xack(args); case 'SUBSCRIBE': return this.subscribe(args); case 'UNSUBSCRIBE': return this.unsubscribe(args); case 'PUBLISH': return this.publish(args); case 'GEOADD': return this.geoadd(args); case 'GEORADIUS': return this.georadius(args); default: throw new Error(`Unknown command: '${command}'`); } } catch (e) { if (isFromTransaction) throw e; return { status: 'error', message: e.message }; } }
+            
+            // Enhanced command tokenizer supporting nested structures and comments
+            _tokenizeCommand(commandString) {
+                const tokens = [];
+                let current = '';
+                let inQuotes = false;
+                let quoteChar = '';
+                let inBrackets = 0;
+                let inBraces = 0;
+                
+                for (let i = 0; i < commandString.length; i++) {
+                    const char = commandString[i];
+                    const nextChar = commandString[i + 1];
+                    
+                    if (!inQuotes && (char === '"' || char === "'")) {
+                        inQuotes = true;
+                        quoteChar = char;
+                        current += char;
+                    } else if (inQuotes && char === quoteChar) {
+                        inQuotes = false;
+                        current += char;
+                        quoteChar = '';
+                    } else if (!inQuotes && char === '[') {
+                        inBrackets++;
+                        current += char;
+                    } else if (!inQuotes && char === ']') {
+                        inBrackets--;
+                        current += char;
+                    } else if (!inQuotes && char === '{') {
+                        inBraces++;
+                        current += char;
+                    } else if (!inQuotes && char === '}') {
+                        inBraces--;
+                        current += char;
+                    } else if (!inQuotes && inBrackets === 0 && inBraces === 0 && /\s/.test(char)) {
+                        if (current.trim()) {
+                            tokens.push(current.trim().replace(/^['"]|['"]$/g, ''));
+                            current = '';
+                        }
+                    } else {
+                        current += char;
+                    }
+                }
+                
+                if (current.trim()) {
+                    tokens.push(current.trim().replace(/^['"]|['"]$/g, ''));
+                }
+                
+                return tokens;
+            }
+            
+            // Support for Redis pipelining
+            _parseMultipleCommands(commandString) {
+                const lines = commandString.split('\n')
+                    .map(line => line.trim())
+                    .filter(line => line && !line.startsWith('#') && !line.startsWith('//'));
+                return lines;
+            }
+            
+            _executePipeline(commands) {
+                const results = [];
+                for (const command of commands) {
+                    try {
+                        const result = this.execute(command, false);
+                        results.push(result.data);
+                    } catch (e) {
+                        results.push(`ERR ${e.message}`);
+                    }
+                }
+                return { status: 'ok', data: results };
+            }
+            
+            execute(commandString, isFromTransaction = false) { 
+                try { 
+                    if (!commandString || commandString.trim() === '') throw new Error("Command cannot be empty."); 
+                    
+                    // Support for Redis pipelining - multiple commands separated by newlines
+                    const commands = this._parseMultipleCommands(commandString);
+                    if (commands.length > 1 && !isFromTransaction) {
+                        return this._executePipeline(commands);
+                    }
+                    
+                    // Enhanced parsing with comment support
+                    const lines = commandString.split('\n');
+                    const cleanLines = lines
+                        .map(line => {
+                            // Remove comments (# or //)
+                            const commentIndex = Math.min(
+                                line.indexOf('#') === -1 ? Infinity : line.indexOf('#'),
+                                line.indexOf('//') === -1 ? Infinity : line.indexOf('//')
+                            );
+                            return commentIndex === Infinity ? line : line.substring(0, commentIndex);
+                        })
+                        .map(line => line.trim())
+                        .filter(line => line)
+                        .join(' ');
+                    
+                    if (!cleanLines) throw new Error("No valid commands found.");
+                    
+                    // Use enhanced tokenizer
+                    const parts = this._tokenizeCommand(cleanLines);
+                    const command = parts[0].toUpperCase(); 
+                    const args = parts.slice(1); 
+                    
+                    if (this.transactionQueue !== null && !['EXEC', 'DISCARD'].includes(command) && !isFromTransaction) { 
+                        this.transactionQueue.push(commandString); 
+                        return { status: 'ok', data: 'QUEUED' }; 
+                    } switch (command) { case 'SET': return this.set(args); case 'GET': return this.get(args); case 'INCR': return this.incrby(args, 1); case 'DECR': return this.incrby(args, -1); case 'INCRBY': return this.incrby(args, parseInt(args[1])); case 'DECRBY': return this.incrby(args, -parseInt(args[1])); case 'DEL': return this.del(args); case 'SELECT': return this.select(args); case 'EXPIRE': return this.expire(args); case 'TTL': return this.ttl(args); case 'EXISTS': return this.exists(args); case 'KEYS': return this.keys(args); case 'FLUSHDB': return this.flushdb(); case 'LPUSH': return this.lpush(args); case 'RPUSH': return this.rpush(args); case 'LPOP': return this.lpop(args); case 'RPOP': return this.rpop(args); case 'LRANGE': return this.lrange(args); case 'HSET': return this.hset(args); case 'HGET': return this.hget(args); case 'HGETALL': return this.hgetall(args); case 'HDEL': return this.hdel(args); case 'SADD': return this.sadd(args); case 'SMEMBERS': return this.smembers(args); case 'SREM': return this.srem(args); case 'SISMEMBER': return this.sismember(args); case 'SCARD': return this.scard(args); case 'ZADD': return this.zadd(args); case 'ZRANGE': return this.zrange(args); case 'ZREM': return this.zrem(args); case 'ZCARD': return this.zcard(args); case 'MULTI': return this.multi(); case 'EXEC': return this.exec(); case 'DISCARD': return this.discard(); case 'XADD': return this.xadd(args); case 'XRANGE': return this.xrange(args); case 'XREAD': return this.xread(args); case 'XGROUP': return this.xgroup(args); case 'XREADGROUP': return this.xreadgroup(args); case 'XACK': return this.xack(args); case 'SUBSCRIBE': return this.subscribe(args); case 'UNSUBSCRIBE': return this.unsubscribe(args); case 'PUBLISH': return this.publish(args); case 'GEOADD': return this.geoadd(args); case 'GEORADIUS': return this.georadius(args); case 'PFADD': return this.pfadd(args); case 'PFCOUNT': return this.pfcount(args); case 'PFMERGE': return this.pfmerge(args); case 'SETBIT': return this.setbit(args); case 'GETBIT': return this.getbit(args); case 'BITCOUNT': return this.bitcount(args); case 'BITOP': return this.bitop(args); case 'MGET': return this.mget(args); case 'MSET': return this.mset(args); case 'STRLEN': return this.strlen(args); case 'APPEND': return this.append(args); case 'GETRANGE': return this.getrange(args); case 'SETRANGE': return this.setrange(args); case 'GETSET': return this.getset(args); case 'SETNX': return this.setnx(args); case 'SETEX': return this.setex(args); case 'LLEN': return this.llen(args); case 'LINDEX': return this.lindex(args); case 'LSET': return this.lset(args); case 'LTRIM': return this.ltrim(args); case 'HEXISTS': return this.hexists(args); case 'HINCRBY': return this.hincrby(args); case 'HKEYS': return this.hkeys(args); case 'HVALS': return this.hvals(args); case 'HLEN': return this.hlen(args); case 'HMSET': return this.hmset(args); case 'HMGET': return this.hmget(args); case 'SPOP': return this.spop(args); case 'SRANDMEMBER': return this.srandmember(args); case 'SUNION': return this.sunion(args); case 'SINTER': return this.sinter(args); case 'SDIFF': return this.sdiff(args); case 'ZRANK': return this.zrank(args); case 'ZSCORE': return this.zscore(args); case 'ZINCRBY': return this.zincrby(args); case 'ZCOUNT': return this.zcount(args); case 'ZRANGEBYSCORE': return this.zrangebyscore(args); case 'ZREVRANGE': return this.zrevrange(args); case 'PING': return this.ping(args); case 'ECHO': return this.echo(args); case 'TIME': return this.time(args); case 'INFO': return this.info(args); case 'TYPE': return this.type(args); case 'PERSIST': return this.persist(args); case 'EXPIREAT': return this.expireat(args); case 'PEXPIRE': return this.pexpire(args); case 'PTTL': return this.pttl(args); case 'RENAME': return this.rename(args); case 'RENAMENX': return this.renamenx(args); case 'RANDOMKEY': return this.randomkey(args); case 'DBSIZE': return this.dbsize(args); case 'FLUSHALL': return this.flushall(args); case 'CONFIG': return this.config(args); case 'CLIENT': return this.client(args); case 'MEMORY': return this.memory(args); case 'LASTSAVE': return this.lastsave(args); case 'SAVE': return this.save(args); case 'BGSAVE': return this.bgsave(args); case 'SHUTDOWN': return this.shutdown(args); default: throw new Error(`Unknown command: '${command}'`); } } catch (e) { if (isFromTransaction) throw e; return { status: 'error', message: e.message }; } }
             _isExpired(key) { const dbExpirations = this.expirations[this.activeDbIndex]; if (dbExpirations.has(key) && dbExpirations.get(key) < Date.now()) { this.databases[this.activeDbIndex].delete(key); dbExpirations.delete(key); return true; } return false; }
             _getKey(key, expectedType) { if (this._isExpired(key)) return undefined; const db = this.databases[this.activeDbIndex]; const value = db.get(key); if (value === undefined) return undefined; const typeError = "WRONGTYPE Operation against a key holding the wrong kind of value"; if (expectedType === 'string' && !(typeof value === 'string')) throw new Error(typeError); if (expectedType === 'list' && !Array.isArray(value)) throw new Error(typeError); if (expectedType === 'hash' && !(value instanceof Map)) throw new Error(typeError); if (expectedType === 'set' && !(value instanceof Set)) throw new Error(typeError); if (expectedType === 'zset' && (!Array.isArray(value) || (value.length > 0 && !value[0].hasOwnProperty('score')))) throw new Error(typeError); if (expectedType === 'stream' && (!value.hasOwnProperty('entries') || !value.hasOwnProperty('groups'))) throw new Error(typeError); if (expectedType === 'geo' && (!Array.isArray(value) || (value.length > 0 && !value[0].hasOwnProperty('lon')))) throw new Error(typeError); return value; }
             set(args) { if (args.length !== 2) throw new Error("SET requires a key and a value."); const [key, value] = args; this.databases[this.activeDbIndex].set(key, value); this.expirations[this.activeDbIndex].delete(key); return { status: 'ok', data: 'OK' }; }
@@ -187,6 +309,150 @@
             geoadd(args) { if (args.length < 4 || args.length % 3 !== 1) throw new Error("GEOADD requires key and one or more lon-lat-member triplets."); const key = args[0]; const db = this.databases[this.activeDbIndex]; let geoSet = this._getKey(key, 'geo'); if (geoSet === undefined) { geoSet = []; db.set(key, geoSet); } let addedCount = 0; for (let i = 1; i < args.length; i += 3) { const [lon, lat, member] = [parseFloat(args[i]), parseFloat(args[i+1]), args[i+2]]; if (isNaN(lon) || isNaN(lat)) throw new Error("Longitude and latitude must be numbers."); if (!geoSet.some(item => item.member === member)) { geoSet.push({ lon, lat, member }); addedCount++; } } return { status: 'ok', data: `(integer) ${addedCount}` }; }
             georadius(args) { if (args.length < 5) throw new Error("GEORADIUS requires key, lon, lat, radius, and unit."); const [key, lon, lat, radius, unit] = args.map((a, i) => i > 0 && i < 4 ? parseFloat(a) : a); const geoSet = this._getKey(key, 'geo') || []; const results = []; geoSet.forEach(item => { const dist = this._haversineDistance([lat, lon], [item.lat, item.lon], unit.toLowerCase()); if (dist <= radius) { results.push(item.member); } }); return { status: 'ok', data: results }; }
             _haversineDistance([lat1, lon1], [lat2, lon2], unit) { const R = unit === 'km' ? 6371 : unit === 'mi' ? 3959 : unit === 'ft' ? 20902231 : 6371000; const dLat = (lat2 - lat1) * Math.PI / 180; const dLon = (lon2 - lon1) * Math.PI / 180; const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2); const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)); return R * c; }
+            
+            // HyperLogLog approximation (simplified implementation)
+            pfadd(args) { if (args.length < 2) throw new Error("PFADD requires a key and at least one element."); const [key, ...elements] = args; const db = this.databases[this.activeDbIndex]; let hll = this._getKey(key, 'hll'); if (hll === undefined) { hll = new Set(); db.set(key, hll); } let addedCount = 0; elements.forEach(elem => { const hash = this._simpleHash(elem); if (!hll.has(hash)) { hll.add(hash); addedCount++; } }); return { status: 'ok', data: `(integer) ${addedCount}` }; }
+            pfcount(args) { if (args.length < 1) throw new Error("PFCOUNT requires at least one key."); let totalCount = 0; args.forEach(key => { const hll = this._getKey(key, 'hll'); if (hll) totalCount += hll.size; }); return { status: 'ok', data: `(integer) ${Math.round(totalCount * 0.7213 / (1 + 1.079 / totalCount))}` }; }
+            pfmerge(args) { if (args.length < 2) throw new Error("PFMERGE requires a destination key and at least one source key."); const [destKey, ...sourceKeys] = args; const db = this.databases[this.activeDbIndex]; let merged = new Set(); sourceKeys.forEach(key => { const hll = this._getKey(key, 'hll'); if (hll) hll.forEach(hash => merged.add(hash)); }); db.set(destKey, merged); return { status: 'ok', data: 'OK' }; }
+            
+            // Bitmap operations  
+            setbit(args) { if (args.length !== 3) throw new Error("SETBIT requires key, offset, and value."); const [key, offsetStr, valueStr] = args; const offset = parseInt(offsetStr); const value = parseInt(valueStr); if (isNaN(offset) || offset < 0) throw new Error("Offset must be a non-negative integer."); if (value !== 0 && value !== 1) throw new Error("Value must be 0 or 1."); const db = this.databases[this.activeDbIndex]; let bitmap = this._getKey(key, 'bitmap'); if (bitmap === undefined) { bitmap = new Uint8Array(Math.ceil((offset + 1) / 8)); db.set(key, bitmap); } else if (bitmap.length * 8 <= offset) { const newBitmap = new Uint8Array(Math.ceil((offset + 1) / 8)); newBitmap.set(bitmap); bitmap = newBitmap; db.set(key, bitmap); } const byteIndex = Math.floor(offset / 8); const bitIndex = offset % 8; const oldValue = (bitmap[byteIndex] >> (7 - bitIndex)) & 1; if (value === 1) { bitmap[byteIndex] |= (1 << (7 - bitIndex)); } else { bitmap[byteIndex] &= ~(1 << (7 - bitIndex)); } return { status: 'ok', data: `(integer) ${oldValue}` }; }
+            getbit(args) { if (args.length !== 2) throw new Error("GETBIT requires key and offset."); const [key, offsetStr] = args; const offset = parseInt(offsetStr); if (isNaN(offset) || offset < 0) throw new Error("Offset must be a non-negative integer."); const bitmap = this._getKey(key, 'bitmap'); if (!bitmap || bitmap.length * 8 <= offset) return { status: 'ok', data: '(integer) 0' }; const byteIndex = Math.floor(offset / 8); const bitIndex = offset % 8; const value = (bitmap[byteIndex] >> (7 - bitIndex)) & 1; return { status: 'ok', data: `(integer) ${value}` }; }
+            bitcount(args) { if (args.length < 1) throw new Error("BITCOUNT requires a key."); const [key] = args; const bitmap = this._getKey(key, 'bitmap'); if (!bitmap) return { status: 'ok', data: '(integer) 0' }; let count = 0; for (let i = 0; i < bitmap.length; i++) { let byte = bitmap[i]; while (byte) { count += byte & 1; byte >>= 1; } } return { status: 'ok', data: `(integer) ${count}` }; }
+            bitop(args) { if (args.length < 3) throw new Error("BITOP requires operation, destination key, and at least one source key."); const [operation, destKey, ...sourceKeys] = args; const op = operation.toUpperCase(); if (!['AND', 'OR', 'XOR', 'NOT'].includes(op)) throw new Error("Operation must be AND, OR, XOR, or NOT."); const db = this.databases[this.activeDbIndex]; const bitmaps = sourceKeys.map(key => this._getKey(key, 'bitmap') || new Uint8Array(0)); const maxLength = Math.max(...bitmaps.map(b => b.length), 1); const result = new Uint8Array(maxLength); for (let i = 0; i < maxLength; i++) { let value = op === 'NOT' ? 255 : (op === 'AND' ? 255 : 0); bitmaps.forEach(bitmap => { const byte = i < bitmap.length ? bitmap[i] : 0; if (op === 'AND') value &= byte; else if (op === 'OR') value |= byte; else if (op === 'XOR') value ^= byte; else if (op === 'NOT') value = ~bitmaps[0][i] & 255; }); result[i] = value; } db.set(destKey, result); return { status: 'ok', data: `(integer) ${maxLength}` }; }
+            
+            _simpleHash(str) { let hash = 0; for (let i = 0; i < str.length; i++) { const char = str.charCodeAt(i); hash = ((hash << 5) - hash) + char; hash = hash & hash; } return Math.abs(hash); }
+            
+            // Additional Redis Commands
+            mget(args) { if (args.length < 1) throw new Error("MGET requires at least one key."); const results = args.map(key => { const value = this._getKey(key, 'string'); return value !== undefined ? `"${value}"` : '(nil)'; }); return { status: 'ok', data: results }; }
+            mset(args) { if (args.length < 2 || args.length % 2 !== 0) throw new Error("MSET requires pairs of key-value arguments."); const db = this.databases[this.activeDbIndex]; for (let i = 0; i < args.length; i += 2) { db.set(args[i], args[i + 1]); this.expirations[this.activeDbIndex].delete(args[i]); } return { status: 'ok', data: 'OK' }; }
+            strlen(args) { if (args.length !== 1) throw new Error("STRLEN requires a key."); const value = this._getKey(args[0], 'string'); return { status: 'ok', data: `(integer) ${value ? value.length : 0}` }; }
+            append(args) { if (args.length !== 2) throw new Error("APPEND requires a key and value."); const [key, appendValue] = args; let current = this._getKey(key, 'string') || ''; current += appendValue; this.databases[this.activeDbIndex].set(key, current); return { status: 'ok', data: `(integer) ${current.length}` }; }
+            getrange(args) { if (args.length !== 3) throw new Error("GETRANGE requires key, start and end."); const [key, startStr, endStr] = args; const value = this._getKey(key, 'string') || ''; const start = parseInt(startStr); const end = parseInt(endStr); const result = value.slice(start, end + 1); return { status: 'ok', data: `"${result}"` }; }
+            setrange(args) { if (args.length !== 3) throw new Error("SETRANGE requires key, offset and value."); const [key, offsetStr, value] = args; const offset = parseInt(offsetStr); let current = this._getKey(key, 'string') || ''; current = current.padEnd(offset, '\0') + value; this.databases[this.activeDbIndex].set(key, current); return { status: 'ok', data: `(integer) ${current.length}` }; }
+            getset(args) { if (args.length !== 2) throw new Error("GETSET requires key and value."); const [key, value] = args; const old = this._getKey(key, 'string'); this.databases[this.activeDbIndex].set(key, value); return { status: 'ok', data: old !== undefined ? `"${old}"` : '(nil)' }; }
+            setnx(args) { if (args.length !== 2) throw new Error("SETNX requires key and value."); const [key, value] = args; if (this._getKey(key) !== undefined) return { status: 'ok', data: '(integer) 0' }; this.databases[this.activeDbIndex].set(key, value); return { status: 'ok', data: '(integer) 1' }; }
+            setex(args) { if (args.length !== 3) throw new Error("SETEX requires key, seconds and value."); const [key, secondsStr, value] = args; const seconds = parseInt(secondsStr); this.databases[this.activeDbIndex].set(key, value); this.expirations[this.activeDbIndex].set(key, Date.now() + (seconds * 1000)); return { status: 'ok', data: 'OK' }; }
+            
+            // List commands
+            llen(args) { if (args.length !== 1) throw new Error("LLEN requires a key."); const list = this._getKey(args[0], 'list'); return { status: 'ok', data: `(integer) ${list ? list.length : 0}` }; }
+            lindex(args) { if (args.length !== 2) throw new Error("LINDEX requires key and index."); const [key, indexStr] = args; const list = this._getKey(key, 'list'); if (!list) return { status: 'ok', data: '(nil)' }; const index = parseInt(indexStr); const item = index >= 0 ? list[index] : list[list.length + index]; return { status: 'ok', data: item !== undefined ? `"${item}"` : '(nil)' }; }
+            lset(args) { if (args.length !== 3) throw new Error("LSET requires key, index and value."); const [key, indexStr, value] = args; const list = this._getKey(key, 'list'); if (!list) throw new Error("ERR no such key"); const index = parseInt(indexStr); if (index < 0 || index >= list.length) throw new Error("ERR index out of range"); list[index] = value; return { status: 'ok', data: 'OK' }; }
+            ltrim(args) { if (args.length !== 3) throw new Error("LTRIM requires key, start and stop."); const [key, startStr, stopStr] = args; const list = this._getKey(key, 'list'); if (!list) return { status: 'ok', data: 'OK' }; const start = parseInt(startStr); const stop = parseInt(stopStr); const trimmed = list.slice(start, stop + 1); this.databases[this.activeDbIndex].set(key, trimmed); return { status: 'ok', data: 'OK' }; }
+            
+            // Hash commands
+            hexists(args) { if (args.length !== 2) throw new Error("HEXISTS requires key and field."); const [key, field] = args; const hash = this._getKey(key, 'hash'); return { status: 'ok', data: `(integer) ${hash && hash.has(field) ? 1 : 0}` }; }
+            hincrby(args) { if (args.length !== 3) throw new Error("HINCRBY requires key, field and increment."); const [key, field, incrStr] = args; const incr = parseInt(incrStr); let hash = this._getKey(key, 'hash'); if (!hash) { hash = new Map(); this.databases[this.activeDbIndex].set(key, hash); } const current = parseInt(hash.get(field) || '0'); const newValue = current + incr; hash.set(field, newValue.toString()); return { status: 'ok', data: `(integer) ${newValue}` }; }
+            hkeys(args) { if (args.length !== 1) throw new Error("HKEYS requires a key."); const hash = this._getKey(args[0], 'hash'); return { status: 'ok', data: hash ? Array.from(hash.keys()) : [] }; }
+            hvals(args) { if (args.length !== 1) throw new Error("HVALS requires a key."); const hash = this._getKey(args[0], 'hash'); return { status: 'ok', data: hash ? Array.from(hash.values()) : [] }; }
+            hlen(args) { if (args.length !== 1) throw new Error("HLEN requires a key."); const hash = this._getKey(args[0], 'hash'); return { status: 'ok', data: `(integer) ${hash ? hash.size : 0}` }; }
+            hmset(args) { if (args.length < 3 || args.length % 2 === 0) throw new Error("HMSET requires key and pairs of field-value."); const key = args[0]; let hash = this._getKey(key, 'hash'); if (!hash) { hash = new Map(); this.databases[this.activeDbIndex].set(key, hash); } for (let i = 1; i < args.length; i += 2) { hash.set(args[i], args[i + 1]); } return { status: 'ok', data: 'OK' }; }
+            hmget(args) { if (args.length < 2) throw new Error("HMGET requires key and at least one field."); const [key, ...fields] = args; const hash = this._getKey(key, 'hash'); const results = fields.map(field => hash && hash.has(field) ? `"${hash.get(field)}"` : '(nil)'); return { status: 'ok', data: results }; }
+            
+            // Set commands
+            spop(args) { if (args.length < 1) throw new Error("SPOP requires a key."); const [key, countStr] = args; const set = this._getKey(key, 'set'); if (!set || set.size === 0) return { status: 'ok', data: '(nil)' }; const count = countStr ? parseInt(countStr) : 1; const items = Array.from(set); const popped = []; for (let i = 0; i < Math.min(count, items.length); i++) { const randomIndex = Math.floor(Math.random() * items.length); const item = items.splice(randomIndex, 1)[0]; set.delete(item); popped.push(`"${item}"`); } return { status: 'ok', data: count === 1 ? popped[0] : popped }; }
+            srandmember(args) { if (args.length < 1) throw new Error("SRANDMEMBER requires a key."); const [key, countStr] = args; const set = this._getKey(key, 'set'); if (!set || set.size === 0) return { status: 'ok', data: '(nil)' }; const items = Array.from(set); const count = countStr ? parseInt(countStr) : 1; if (count === 1) { const randomItem = items[Math.floor(Math.random() * items.length)]; return { status: 'ok', data: `"${randomItem}"` }; } const result = []; for (let i = 0; i < Math.min(Math.abs(count), items.length); i++) { const randomItem = items[Math.floor(Math.random() * items.length)]; result.push(`"${randomItem}"`); } return { status: 'ok', data: result }; }
+            sunion(args) { if (args.length < 1) throw new Error("SUNION requires at least one key."); const result = new Set(); args.forEach(key => { const set = this._getKey(key, 'set'); if (set) set.forEach(item => result.add(item)); }); return { status: 'ok', data: Array.from(result) }; }
+            sinter(args) { if (args.length < 1) throw new Error("SINTER requires at least one key."); const firstSet = this._getKey(args[0], 'set'); if (!firstSet) return { status: 'ok', data: [] }; let result = new Set(firstSet); for (let i = 1; i < args.length; i++) { const set = this._getKey(args[i], 'set'); if (!set) return { status: 'ok', data: [] }; result = new Set([...result].filter(x => set.has(x))); } return { status: 'ok', data: Array.from(result) }; }
+            sdiff(args) { if (args.length < 1) throw new Error("SDIFF requires at least one key."); const firstSet = this._getKey(args[0], 'set'); if (!firstSet) return { status: 'ok', data: [] }; let result = new Set(firstSet); for (let i = 1; i < args.length; i++) { const set = this._getKey(args[i], 'set'); if (set) set.forEach(item => result.delete(item)); } return { status: 'ok', data: Array.from(result) }; }
+            
+            // Sorted set commands  
+            zrank(args) { if (args.length !== 2) throw new Error("ZRANK requires key and member."); const [key, member] = args; const zset = this._getKey(key, 'zset'); if (!zset) return { status: 'ok', data: '(nil)' }; const sorted = zset.sort((a, b) => a.score - b.score); const index = sorted.findIndex(item => item.member === member); return { status: 'ok', data: index >= 0 ? `(integer) ${index}` : '(nil)' }; }
+            zscore(args) { if (args.length !== 2) throw new Error("ZSCORE requires key and member."); const [key, member] = args; const zset = this._getKey(key, 'zset'); if (!zset) return { status: 'ok', data: '(nil)' }; const item = zset.find(item => item.member === member); return { status: 'ok', data: item ? item.score.toString() : '(nil)' }; }
+            zincrby(args) { if (args.length !== 3) throw new Error("ZINCRBY requires key, increment and member."); const [key, incrStr, member] = args; const incr = parseFloat(incrStr); let zset = this._getKey(key, 'zset'); if (!zset) { zset = []; this.databases[this.activeDbIndex].set(key, zset); } const existingIndex = zset.findIndex(item => item.member === member); if (existingIndex >= 0) { zset[existingIndex].score += incr; } else { zset.push({ member, score: incr }); } return { status: 'ok', data: zset.find(item => item.member === member).score.toString() }; }
+            zcount(args) { if (args.length !== 3) throw new Error("ZCOUNT requires key, min and max."); const [key, minStr, maxStr] = args; const zset = this._getKey(key, 'zset'); if (!zset) return { status: 'ok', data: '(integer) 0' }; const min = parseFloat(minStr); const max = parseFloat(maxStr); const count = zset.filter(item => item.score >= min && item.score <= max).length; return { status: 'ok', data: `(integer) ${count}` }; }
+            zrangebyscore(args) { if (args.length < 3) throw new Error("ZRANGEBYSCORE requires key, min and max."); const [key, minStr, maxStr] = args; const zset = this._getKey(key, 'zset'); if (!zset) return { status: 'ok', data: [] }; const min = parseFloat(minStr); const max = parseFloat(maxStr); const filtered = zset.filter(item => item.score >= min && item.score <= max).sort((a, b) => a.score - b.score); return { status: 'ok', data: filtered.map(item => item.member) }; }
+            zrevrange(args) { if (args.length < 3) throw new Error("ZREVRANGE requires key, start and stop."); const [key, startStr, stopStr] = args; const zset = this._getKey(key, 'zset'); if (!zset) return { status: 'ok', data: [] }; const start = parseInt(startStr); const stop = parseInt(stopStr); const sorted = zset.sort((a, b) => b.score - a.score); const sliced = sorted.slice(start, stop + 1); return { status: 'ok', data: sliced.map(item => item.member) }; }
+            
+            // Utility commands
+            ping(args) { return { status: 'ok', data: args.length > 0 ? args[0] : 'PONG' }; }
+            echo(args) { if (args.length !== 1) throw new Error("ECHO requires a message."); return { status: 'ok', data: `"${args[0]}"` }; }
+            time(args) { const now = Date.now(); const seconds = Math.floor(now / 1000); const microseconds = (now % 1000) * 1000; return { status: 'ok', data: [seconds.toString(), microseconds.toString()] }; }
+            info(args) { const section = args[0] || 'default'; const info = { server: 'Redis Compatible emulator', version: '1.0.0', mode: 'standalone', databases: this.databases.length }; return { status: 'ok', data: Object.entries(info).map(([k, v]) => `${k}:${v}`).join('\r\n') }; }
+            type(args) { if (args.length !== 1) throw new Error("TYPE requires a key."); const key = args[0]; const value = this._getKey(key); if (value === undefined) return { status: 'ok', data: 'none' }; if (typeof value === 'string') return { status: 'ok', data: 'string' }; if (Array.isArray(value)) { if (value.length > 0 && value[0].hasOwnProperty('score')) return { status: 'ok', data: 'zset' }; return { status: 'ok', data: 'list' }; } if (value instanceof Set) return { status: 'ok', data: 'set' }; if (value instanceof Map) return { status: 'ok', data: 'hash' }; return { status: 'ok', data: 'string' }; }
+            persist(args) { if (args.length !== 1) throw new Error("PERSIST requires a key."); const key = args[0]; if (!this._getKey(key)) return { status: 'ok', data: '(integer) 0' }; const removed = this.expirations[this.activeDbIndex].delete(key); return { status: 'ok', data: `(integer) ${removed ? 1 : 0}` }; }
+            expireat(args) { if (args.length !== 2) throw new Error("EXPIREAT requires key and timestamp."); const [key, timestampStr] = args; const timestamp = parseInt(timestampStr); if (!this._getKey(key)) return { status: 'ok', data: '(integer) 0' }; this.expirations[this.activeDbIndex].set(key, timestamp * 1000); return { status: 'ok', data: '(integer) 1' }; }
+            pexpire(args) { if (args.length !== 2) throw new Error("PEXPIRE requires key and milliseconds."); const [key, msStr] = args; const ms = parseInt(msStr); if (!this._getKey(key)) return { status: 'ok', data: '(integer) 0' }; this.expirations[this.activeDbIndex].set(key, Date.now() + ms); return { status: 'ok', data: '(integer) 1' }; }
+            pttl(args) { if (args.length !== 1) throw new Error("PTTL requires a key."); const key = args[0]; if (!this._getKey(key)) return { status: 'ok', data: '(integer) -2' }; if (!this.expirations[this.activeDbIndex].has(key)) return { status: 'ok', data: '(integer) -1' }; const remainingMs = this.expirations[this.activeDbIndex].get(key) - Date.now(); return { status: 'ok', data: `(integer) ${Math.max(0, remainingMs)}` }; }
+            rename(args) { if (args.length !== 2) throw new Error("RENAME requires old and new key."); const [oldKey, newKey] = args; const value = this._getKey(oldKey); if (value === undefined) throw new Error("ERR no such key"); const db = this.databases[this.activeDbIndex]; db.set(newKey, value); db.delete(oldKey); const expiration = this.expirations[this.activeDbIndex].get(oldKey); if (expiration) { this.expirations[this.activeDbIndex].set(newKey, expiration); this.expirations[this.activeDbIndex].delete(oldKey); } return { status: 'ok', data: 'OK' }; }
+            renamenx(args) { if (args.length !== 2) throw new Error("RENAMENX requires old and new key."); const [oldKey, newKey] = args; if (this._getKey(newKey) !== undefined) return { status: 'ok', data: '(integer) 0' }; const value = this._getKey(oldKey); if (value === undefined) throw new Error("ERR no such key"); this.rename(args); return { status: 'ok', data: '(integer) 1' }; }
+            randomkey(args) { const db = this.databases[this.activeDbIndex]; const keys = Array.from(db.keys()).filter(key => !this._isExpired(key)); return { status: 'ok', data: keys.length > 0 ? `"${keys[Math.floor(Math.random() * keys.length)]}"` : '(nil)' }; }
+            dbsize(args) { const db = this.databases[this.activeDbIndex]; const validKeys = Array.from(db.keys()).filter(key => !this._isExpired(key)); return { status: 'ok', data: `(integer) ${validKeys.length}` }; }
+            flushall(args) { this.databases.forEach((db, index) => { db.clear(); this.expirations[index].clear(); }); return { status: 'ok', data: 'OK' }; }
+            
+            // Configuration and admin commands
+            config(args) {
+                if (args.length < 1) throw new Error("CONFIG requires a subcommand");
+                const subcommand = args[0].toUpperCase();
+                
+                if (subcommand === 'GET') {
+                    if (args.length !== 2) throw new Error("CONFIG GET requires a parameter name");
+                    const param = args[1].toLowerCase();
+                    if (param === '*') {
+                        return { status: 'ok', data: Array.from(this.config.entries()).flat() };
+                    }
+                    const value = this.config.get(param);
+                    return { status: 'ok', data: value !== undefined ? [param, value] : [] };
+                } else if (subcommand === 'SET') {
+                    if (args.length !== 3) throw new Error("CONFIG SET requires parameter name and value");
+                    const [, param, value] = args;
+                    this.config.set(param.toLowerCase(), value);
+                    return { status: 'ok', data: 'OK' };
+                } else if (subcommand === 'RESETSTAT') {
+                    return { status: 'ok', data: 'OK' };
+                } else if (subcommand === 'REWRITE') {
+                    return { status: 'ok', data: 'OK' };
+                } else {
+                    throw new Error(`Unknown CONFIG subcommand: ${subcommand}`);
+                }
+            }
+            
+            client(args) {
+                if (args.length < 1) throw new Error("CLIENT requires a subcommand");
+                const subcommand = args[0].toUpperCase();
+                
+                if (subcommand === 'LIST') {
+                    return { status: 'ok', data: 'id=1 addr=127.0.0.1:6379 fd=1 name= age=1 idle=0 flags=N db=0 sub=0 psub=0 multi=-1 qbuf=0 qbuf-free=32768 obl=0 oll=0 omem=0 events=r cmd=client' };
+                } else if (subcommand === 'GETNAME') {
+                    return { status: 'ok', data: '(nil)' };
+                } else if (subcommand === 'SETNAME') {
+                    return { status: 'ok', data: 'OK' };
+                } else if (subcommand === 'KILL') {
+                    return { status: 'ok', data: 'OK' };
+                } else {
+                    throw new Error(`Unknown CLIENT subcommand: ${subcommand}`);
+                }
+            }
+            
+            memory(args) {
+                const subcommand = args[0]?.toUpperCase() || 'USAGE';
+                
+                if (subcommand === 'USAGE') {
+                    return { status: 'ok', data: `(integer) 1024` };
+                } else if (subcommand === 'STATS') {
+                    return { status: 'ok', data: { 'peak.allocated': 1024, 'total.allocated': 512, 'startup.allocated': 256 } };
+                } else {
+                    throw new Error(`Unknown MEMORY subcommand: ${subcommand}`);
+                }
+            }
+            
+            lastsave(args) {
+                return { status: 'ok', data: `(integer) ${Math.floor(Date.now() / 1000)}` };
+            }
+            
+            save(args) {
+                return { status: 'ok', data: 'OK' };
+            }
+            
+            bgsave(args) {
+                return { status: 'ok', data: 'Background saving started' };
+            }
+            
+            shutdown(args) {
+                return { status: 'ok', data: 'OK' };
+            }
+            
+            _getKey(key, expectedType) { if (this._isExpired(key)) return undefined; const db = this.databases[this.activeDbIndex]; const value = db.get(key); if (value === undefined) return undefined; const typeError = "WRONGTYPE Operation against a key holding the wrong kind of value"; if (expectedType === 'string' && !(typeof value === 'string')) throw new Error(typeError); if (expectedType === 'list' && !Array.isArray(value)) throw new Error(typeError); if (expectedType === 'hash' && !(value instanceof Map)) throw new Error(typeError); if (expectedType === 'set' && !(value instanceof Set)) throw new Error(typeError); if (expectedType === 'zset' && (!Array.isArray(value) || (value.length > 0 && !value[0].hasOwnProperty('score')))) throw new Error(typeError); if (expectedType === 'stream' && (!value.hasOwnProperty('entries') || !value.hasOwnProperty('groups'))) throw new Error(typeError); if (expectedType === 'geo' && (!Array.isArray(value) || (value.length > 0 && !value[0].hasOwnProperty('lon')))) throw new Error(typeError); if (expectedType === 'hll' && !(value instanceof Set)) throw new Error(typeError); if (expectedType === 'bitmap' && !(value instanceof Uint8Array)) throw new Error(typeError); return value; }
         }
 
         // --- UI LOGIC
@@ -222,62 +488,140 @@
             };
             streamConfigInput.value = JSON.stringify(defaultStreamConfig, null, 2);
 
+            // Redis Tutorial: Building an E-commerce Analytics System
+            // Follow these examples in order to learn Redis through a practical scenario
             const exampleCategories = {
-                "How to Use Streams": [
-                    { desc: "1. Configure & Start Producer: Edit the JSON schema and click 'Start' to begin generating data.", cmd: '# Click the "Start" button on the left' },
-                    { desc: "2. Create a Consumer Group: This creates a 'processors' group that will read from the start of the stream.", cmd: 'XGROUP CREATE sensor:log processors 0-0' },
-                    { desc: "3. Read a Message: Act as a consumer named 'worker-1' and read one new message.", cmd: 'XREADGROUP GROUP processors worker-1 STREAMS sensor:log >' },
-                    { desc: "4. Acknowledge the Message: Copy the ID from the message you received above to mark it as processed.", cmd: '# Replace the ID below with the one you received!\nXACK sensor:log processors "1672531200000-0"' },
+                "🏪 Tutorial: E-commerce Analytics System": [
+                    { desc: "📚 Redis Command Syntax Guide & Tutorial Introduction", cmd: '# 🚀 Welcome to Redis Tutorial!\n# Learn Redis by building an e-commerce analytics system step by step\n\n# 📖 REDIS COMMAND SYNTAX:\n# Basic format: COMMAND key [value] [options]\n# Examples:\n#   SET key "value"           - Set a string value\n#   GET key                   - Get a string value\n#   LPUSH list item1 item2    - Add items to list (left)\n#   HSET hash field value     - Set hash field\n#   SADD set member1 member2  - Add to set\n#   ZADD zset score member    - Add to sorted set\n#   EXPIRE key seconds        - Set expiration\n\n# 🔗 PIPELINE COMMANDS:\n# Multiple commands can be sent together for efficiency\n# Just put each command on a new line\n\n# 💡 BEST PRACTICES:\n# 1. Use meaningful key names (e.g., user:123:profile)\n# 2. Set TTL for temporary data\n# 3. Use appropriate data structures for your use case\n# 4. Use transactions for atomic operations\n\n# Let\'s start building our e-commerce system!' },
                 ],
-                "How to Use Pub/Sub": [
-                    { desc: "1. Subscribe to a Channel: This opens the Subscriptions tab to listen for messages.", cmd: 'SUBSCRIBE alerts news' },
-                    { desc: "2. Publish a Message: Run this command and watch the message appear instantly in the 'Subscriptions' tab.", cmd: 'PUBLISH alerts "System critical: high temperature detected!"' },
-                    { desc: "3. Unsubscribe from a Channel", cmd: 'UNSUBSCRIBE alerts' },
+                
+                "1️⃣ Strings & Counters - Site Metrics": [
+                    { desc: "Set basic site information using SET command", cmd: 'SET site:name "TechStore"\nSET site:version "1.2.0"\nSET site:owner "Alice"' },
+                    { desc: "Retrieve site information using GET command", cmd: 'GET site:name\nGET site:version\nGET site:owner' },
+                    { desc: "Initialize page view counter with SET, then increment with INCR", cmd: 'SET page:views 0\nINCR page:views\nINCR page:views\nINCR page:views' },
+                    { desc: "Increment by larger amounts using INCRBY (simulating traffic spikes)", cmd: 'INCRBY page:views 25\nINCRBY page:views 50\nGET page:views' },
+                    { desc: "Track daily sales total and increment with each sale", cmd: 'SET sales:today 0\nINCRBY sales:today 299\nINCRBY sales:today 199\nINCRBY sales:today 99\nGET sales:today' },
+                    { desc: "Use MSET to set multiple values at once for efficiency", cmd: 'MSET users:online 150 products:count 2500 orders:pending 23' },
+                    { desc: "Use MGET to retrieve multiple values efficiently", cmd: 'MGET users:online products:count orders:pending page:views' },
                 ],
-                "DB & Key Management": [
-                    { desc: "Set a key and make it expire in 10 seconds", cmd: 'SET mykey "some value"\nEXPIRE mykey 10' },
-                    { desc: "Check the remaining time to live", cmd: 'TTL mykey' },
-                    { desc: "Check if one or more keys exist", cmd: 'EXISTS mykey anotherkey' },
-                    { desc: "Switch to DB 2 and set a key", cmd: 'SELECT 2\nSET key_in_db2 "hello"' },
-                    { desc: "Clear all keys from the current DB", cmd: 'FLUSHDB' },
+
+                "2️⃣ Key Management & Expiration": [
+                    { desc: "Set temporary session data with TTL using SETEX (expires in 30 seconds)", cmd: 'SETEX session:user123 30 "logged_in"\nGET session:user123' },
+                    { desc: "Check time remaining with TTL command", cmd: 'TTL session:user123' },
+                    { desc: "Set flash sale data and make it expire in 10 seconds", cmd: 'SET flash:sale "50% off laptops"\nEXPIRE flash:sale 10\nTTL flash:sale' },
+                    { desc: "Check if keys exist before operations using EXISTS", cmd: 'EXISTS session:user123 flash:sale site:name nonexistent:key' },
+                    { desc: "Delete specific keys using DEL command", cmd: 'DEL flash:sale\nEXISTS flash:sale' },
+                    { desc: "Use multiple databases - switch to DB 1 for test data", cmd: 'SELECT 1\nSET test:data "development_mode"\nGET test:data' },
+                    { desc: "Switch back to main database (DB 0)", cmd: 'SELECT 0\nGET site:name' },
                 ],
-                "String & Counter Commands": [
-                    { desc: "Set a simple key-value pair", cmd: 'SET user:name "Alice"' },
-                    { desc: "Get the value", cmd: 'GET user:name' },
-                    { desc: "Increment a counter", cmd: 'INCR page:views' },
-                    { desc: "Increment by a specific amount", cmd: 'INCRBY page:views 10' },
+
+                "3️⃣ Lists - Task Queues & Activity Logs": [
+                    { desc: "Create a task queue using LPUSH (adds to left/front)", cmd: 'LPUSH order:queue "process_order_001"\nLPUSH order:queue "process_order_002"\nLPUSH order:queue "process_order_003"' },
+                    { desc: "View the entire queue using LRANGE (0 to -1 means all items)", cmd: 'LRANGE order:queue 0 -1' },
+                    { desc: "Process tasks from queue using RPOP (removes from right/back - FIFO)", cmd: 'RPOP order:queue\nRPOP order:queue\nLRANGE order:queue 0 -1' },
+                    { desc: "Add new priority task to front of queue", cmd: 'LPUSH order:queue "urgent_order_004"\nLRANGE order:queue 0 -1' },
+                    { desc: "Create activity log by pushing to right (chronological order)", cmd: 'RPUSH user:123:activity "login"\nRPUSH user:123:activity "view_product_laptop"\nRPUSH user:123:activity "add_to_cart"' },
+                    { desc: "View recent activity (last 5 items)", cmd: 'LRANGE user:123:activity -5 -1' },
+                    { desc: "Get specific item by index using LINDEX", cmd: 'LINDEX user:123:activity 0\nLINDEX user:123:activity -1' },
+                    { desc: "Get queue length using LLEN", cmd: 'LLEN order:queue\nLLEN user:123:activity' },
                 ],
-                "List Commands": [
-                    { desc: "Push items to the left (stack behavior)", cmd: 'LPUSH tasks "task3" "task2" "task1"' },
-                    { desc: "Push an item to the right (queue behavior)", cmd: 'RPUSH tasks "task4"' },
-                    { desc: "View all items in the list", cmd: 'LRANGE tasks 0 -1' },
-                    { desc: "Pop an item from the left", cmd: 'LPOP tasks' },
+
+                "4️⃣ Hashes - User Profiles & Product Data": [
+                    { desc: "Create user profile using HSET (field-value pairs)", cmd: 'HSET user:123 name "John Doe"\nHSET user:123 email "john@example.com"\nHSET user:123 age 28' },
+                    { desc: "Set multiple fields at once using HMSET", cmd: 'HMSET user:123 city "New York" country "USA" premium true points 1500' },
+                    { desc: "Get single field using HGET", cmd: 'HGET user:123 name\nHGET user:123 email' },
+                    { desc: "Get multiple fields using HMGET", cmd: 'HMGET user:123 name email city points' },
+                    { desc: "Get all fields and values using HGETALL", cmd: 'HGETALL user:123' },
+                    { desc: "Increment numeric field using HINCRBY", cmd: 'HINCRBY user:123 points 250\nHGET user:123 points' },
+                    { desc: "Create product with multiple attributes", cmd: 'HMSET product:laptop001 name "Gaming Laptop" price 1299 stock 15 category "electronics" rating 4.5' },
+                    { desc: "Update stock when item is sold", cmd: 'HINCRBY product:laptop001 stock -1\nHGET product:laptop001 stock' },
+                    { desc: "Check if field exists using HEXISTS", cmd: 'HEXISTS user:123 email\nHEXISTS user:123 phone' },
+                    { desc: "Remove field using HDEL", cmd: 'HDEL user:123 age\nHGETALL user:123' },
                 ],
-                "Hash Commands": [
-                    { desc: "Set multiple fields for a user object", cmd: 'HSET user:1 name "Bob" email "bob@example.com"' },
-                    { desc: "Get a single field", cmd: 'HGET user:1 email' },
-                    { desc: "Get all fields and values", cmd: 'HGETALL user:1' },
-                    { desc: "Delete a field", cmd: 'HDEL user:1 email' },
+
+                "5️⃣ Sets - Tags & Categories": [
+                    { desc: "Create product tags using SADD (unique members only)", cmd: 'SADD product:laptop001:tags "gaming" "portable" "high-performance" "rgb"\nSADD product:laptop001:tags "gaming"' },
+                    { desc: "View all tags using SMEMBERS", cmd: 'SMEMBERS product:laptop001:tags' },
+                    { desc: "Check if tag exists using SISMEMBER", cmd: 'SISMEMBER product:laptop001:tags "gaming"\nSISMEMBER product:laptop001:tags "budget"' },
+                    { desc: "Create tags for another product", cmd: 'SADD product:mouse001:tags "gaming" "wireless" "rgb" "ergonomic"' },
+                    { desc: "Find common tags between products using SINTER", cmd: 'SINTER product:laptop001:tags product:mouse001:tags' },
+                    { desc: "Find all unique tags using SUNION", cmd: 'SUNION product:laptop001:tags product:mouse001:tags' },
+                    { desc: "Create user\'s favorite categories", cmd: 'SADD user:123:interests "electronics" "gaming" "books" "music"' },
+                    { desc: "Find products matching user interests", cmd: 'SISMEMBER user:123:interests "electronics"\nSISMEMBER user:123:interests "sports"' },
+                    { desc: "Remove tag using SREM", cmd: 'SREM product:laptop001:tags "rgb"\nSMEMBERS product:laptop001:tags' },
+                    { desc: "Get number of members using SCARD", cmd: 'SCARD product:laptop001:tags\nSCARD user:123:interests' },
                 ],
-                "Set Commands": [
-                    { desc: "Add unique members to a set", cmd: 'SADD user:1:friends "alice" "bob" "charlie" "alice"' },
-                    { desc: "Get all members", cmd: 'SMEMBERS user:1:friends' },
-                    { desc: "Check if a member exists", cmd: 'SISMEMBER user:1:friends "bob"' },
-                    { desc: "Remove a member", cmd: 'SREM user:1:friends "charlie"' },
+
+                "6️⃣ Sorted Sets - Leaderboards & Rankings": [
+                    { desc: "Create sales leaderboard using ZADD (score member)", cmd: 'ZADD sales:monthly 1299 "laptop001"\nZADD sales:monthly 299 "mouse001"\nZADD sales:monthly 599 "keyboard001"' },
+                    { desc: "Add more sales data", cmd: 'ZADD sales:monthly 2499 "monitor001" 199 "headset001" 99 "mousepad001"' },
+                    { desc: "Get top 3 products by sales using ZREVRANGE (highest first)", cmd: 'ZREVRANGE sales:monthly 0 2 WITHSCORES' },
+                    { desc: "Get bottom 2 products using ZRANGE", cmd: 'ZRANGE sales:monthly 0 1 WITHSCORES' },
+                    { desc: "Get total number of products using ZCARD", cmd: 'ZCARD sales:monthly' },
+                    { desc: "Find rank of specific product using ZREVRANK", cmd: 'ZREVRANK sales:monthly "laptop001"\nZREVRANK sales:monthly "mousepad001"' },
+                    { desc: "Get score of specific product using ZSCORE", cmd: 'ZSCORE sales:monthly "monitor001"' },
+                    { desc: "Update sales for a product using ZINCRBY", cmd: 'ZINCRBY sales:monthly 300 "headset001"\nZSCORE sales:monthly "headset001"' },
+                    { desc: "Find products in price range using ZRANGEBYSCORE", cmd: 'ZRANGEBYSCORE sales:monthly 200 600 WITHSCORES' },
+                    { desc: "Remove product from leaderboard using ZREM", cmd: 'ZREM sales:monthly "mousepad001"\nZCARD sales:monthly' },
                 ],
-                "Sorted Set Commands": [
-                    { desc: "Add players to a leaderboard with scores", cmd: 'ZADD leaderboard 1500 "Alice" 2200 "Bob" 980 "Charlie"' },
-                    { desc: "Get the number of players", cmd: 'ZCARD leaderboard' },
-                    { desc: "Get top 2 players with their scores", cmd: 'ZRANGE leaderboard 0 1 WITHSCORES' },
-                    { desc: "Remove a player", cmd: 'ZREM leaderboard "Charlie"' },
+
+                "7️⃣ Geospatial - Store Locations": [
+                    { desc: "Add store locations using GEOADD (longitude latitude member)", cmd: 'GEOADD stores 13.36 38.11 "store_palermo"\nGEOADD stores 15.08 37.50 "store_catania"' },
+                    { desc: "Add more store locations", cmd: 'GEOADD stores 8.54 47.37 "store_zurich" 2.35 48.85 "store_paris" -0.12 51.50 "store_london"' },
+                    { desc: "Find distance between stores using GEODIST", cmd: 'GEODIST stores "store_paris" "store_london" km' },
+                    { desc: "Find stores within 500km of Paris using GEORADIUS", cmd: 'GEORADIUS stores 2.35 48.85 500 km WITHDIST' },
+                    { desc: "Find nearby stores to a specific store using GEORADIUSBYMEMBER", cmd: 'GEORADIUSBYMEMBER stores "store_zurich" 800 km WITHDIST' },
+                    { desc: "Get coordinates of a store using GEOPOS", cmd: 'GEOPOS stores "store_paris" "store_london"' },
                 ],
-                "Geospatial Commands": [
-                    { desc: "Add city coordinates to a geo set", cmd: 'GEOADD cities 13.36 38.11 "Palermo" 15.08 37.50 "Catania"' },
-                    { desc: "Add more locations", cmd: 'GEOADD cities 8.54 47.37 "Zurich" 2.35 48.85 "Paris"' },
-                    { desc: "Find cities within 200km of a point", cmd: 'GEORADIUS cities 14 37.5 200 km' },
+
+                "8️⃣ Transactions - Atomic Operations": [
+                    { desc: "Start transaction with MULTI, then queue commands", cmd: 'MULTI\nHINCRBY user:123 points -500\nHSET user:123 last_purchase "laptop001"\nINCR purchases:total' },
+                    { desc: "Execute all commands atomically with EXEC", cmd: 'EXEC' },
+                    { desc: "Verify the transaction worked", cmd: 'HGET user:123 points\nHGET user:123 last_purchase\nGET purchases:total' },
+                    { desc: "Demo transaction rollback - start transaction then discard", cmd: 'MULTI\nSET temp:data "this will be discarded"\nINCR some:counter\nDISCARD' },
+                    { desc: "Verify nothing was executed", cmd: 'GET temp:data' },
                 ],
-                "Transaction Commands": [
-                    { desc: "A successful atomic operation", cmd: 'MULTI\nINCR user:1:logins\nLPUSH user:1:history "login"\nEXEC' },
+
+                "9️⃣ Pipeline Commands - Batch Operations": [
+                    { desc: "Use pipeline for bulk operations (multiple commands sent together)", cmd: 'SET bulk:1 "value1"\nSET bulk:2 "value2"\nSET bulk:3 "value3"\nINCR bulk:counter\nINCR bulk:counter' },
+                    { desc: "Verify bulk operations completed", cmd: 'MGET bulk:1 bulk:2 bulk:3\nGET bulk:counter' },
+                ],
+
+                "🔟 Advanced Features - HyperLogLog & Streams": [
+                    { desc: "Track unique visitors using HyperLogLog (memory efficient)", cmd: 'PFADD unique:visitors "user1" "user2" "user3" "user1"\nPFCOUNT unique:visitors' },
+                    { desc: "Add more visitors and count", cmd: 'PFADD unique:visitors "user4" "user5" "user2"\nPFCOUNT unique:visitors' },
+                    { desc: "Create activity stream using XADD", cmd: 'XADD activity:stream * user "john" action "login" timestamp "2025-01-01T10:00:00Z"' },
+                    { desc: "Add more activities to stream", cmd: 'XADD activity:stream * user "alice" action "purchase" product "laptop001"\nXADD activity:stream * user "bob" action "view" product "mouse001"' },
+                    { desc: "Read from stream using XREAD", cmd: 'XREAD STREAMS activity:stream 0-0' },
+                    { desc: "Get stream length using XLEN", cmd: 'XLEN activity:stream' },
+                ],
+
+                "📊 Pub/Sub - Real-time Notifications": [
+                    { desc: "Subscribe to notifications (opens Subscriptions tab)", cmd: 'SUBSCRIBE orders alerts promotions' },
+                    { desc: "Publish order notification", cmd: 'PUBLISH orders "New order #1001 received from user123"' },
+                    { desc: "Publish alert", cmd: 'PUBLISH alerts "Low stock warning: laptop001 has only 2 items left"' },
+                    { desc: "Publish promotion", cmd: 'PUBLISH promotions "Flash sale: 20% off all gaming accessories!"' },
+                    { desc: "Unsubscribe from specific channel", cmd: 'UNSUBSCRIBE promotions' },
+                ],
+
+                "🔧 Database Administration": [
+                    { desc: "Get information about the database", cmd: 'INFO memory\nINFO keyspace' },
+                    { desc: "View all keys matching pattern", cmd: 'KEYS *user*\nKEYS product:*' },
+                    { desc: "Get database size", cmd: 'DBSIZE' },
+                    { desc: "Test connection", cmd: 'PING' },
+                    { desc: "Get configuration values", cmd: 'CONFIG GET maxmemory\nCONFIG GET *' },
+                    { desc: "Set configuration values", cmd: 'CONFIG SET timeout 300\nCONFIG SET maxmemory 100mb' },
+                    { desc: "View client connections", cmd: 'CLIENT LIST' },
+                    { desc: "Get memory usage information", cmd: 'MEMORY USAGE user:123\nMEMORY STATS' },
+                    { desc: "Database persistence commands", cmd: 'LASTSAVE\nSAVE\nBGSAVE' },
+                    { desc: "Clear current database (BE CAREFUL!)", cmd: 'FLUSHDB' },
+                    { desc: "Verify database is empty", cmd: 'DBSIZE' },
+                ],
+
+                "❌ Common Error Examples": [
+                    { desc: "Wrong number of arguments", cmd: 'SET\nGET' },
+                    { desc: "Wrong data type operation", cmd: 'SET mystring "hello"\nLPUSH mystring "item"' },
+                    { desc: "Operation on non-existent key", cmd: 'LPOP nonexistent:list' },
                 ],
             };
 

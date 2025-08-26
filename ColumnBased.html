@@ -155,6 +155,11 @@
 
         <!-- Right Panel: Editor and Console -->
         <div id="right-panel" class="flex flex-col w-full md:w-3/5 h-full bg-[#252526]">
+            <!-- Title Bar for Editor -->
+            <div class="flex-shrink-0 bg-[#282828] p-3 border-b border-gray-700">
+                <h3 class="text-lg font-semibold text-gray-200">Cassandra CQL Editor</h3>
+                <p class="text-sm text-gray-400">Enter CQL commands. Supports keyspace operations, table creation, and data manipulation.</p>
+            </div>
             <div id="editor-container" class="flex-grow flex flex-col overflow-hidden" style="height: 60%;">
                 <div id="editor-wrapper" class="flex-grow relative">
                     <textarea id="command-editor"></textarea>
@@ -171,12 +176,18 @@
                     <div class="flex items-center justify-between p-2">
                         <div class="flex">
                             <button class="results-tab-btn active px-3 py-1 text-sm font-medium border-b-2 border-transparent" data-tab="console">Console</button>
+                            <button class="results-tab-btn px-3 py-1 text-sm font-medium border-b-2 border-transparent" data-tab="visualization">Database Structure</button>
                         </div>
                         <button id="clear-console-btn" class="text-xs text-gray-400 hover:text-white">Clear</button>
                     </div>
                 </div>
                 <div id="console-output-content" class="results-tab-content flex-grow bg-[#1e1e1e] overflow-auto custom-scrollbar p-3 console-output">
                     <span class="prompt">></span> Welcome! This final version includes UDTs and Built-in Functions.
+                </div>
+                <div id="visualization-content" class="results-tab-content flex-grow bg-[#1e1e1e] overflow-auto custom-scrollbar p-3 hidden">
+                    <div id="database-visualization" class="w-full h-full">
+                        <!-- Database structure visualization will be rendered here -->
+                    </div>
                 </div>
             </div>
         </div>
@@ -194,19 +205,84 @@
             constructor() {
                 this.keyspaces = new Map();
                 this.currentKeyspace = null;
-                this.keyspaces.set('system', { tables: new Map(), udts: new Map() });
+                this.keyspaces.set('system', { tables: new Map(), udts: new Map(), materializedViews: new Map() });
+            }
+
+            // Enhanced CQL command parsing
+            _cleanCQLCommand(commandString) {
+                const lines = commandString.split('\n');
+                return lines
+                    .map(line => {
+                        // Remove comments (-- or /* */)
+                        line = line.replace(/--.*$/, '');
+                        line = line.replace(/\/\*[\s\S]*?\*\//g, '');
+                        return line.trim();
+                    })
+                    .filter(line => line)
+                    .join(' ');
+            }
+
+            _parseCQLCommand(commandString) {
+                const tokens = [];
+                let current = '';
+                let inQuotes = false;
+                let quoteChar = '';
+                let inBrackets = 0;
+                let inBraces = 0;
+                let inParens = 0;
+                
+                for (let i = 0; i < commandString.length; i++) {
+                    const char = commandString[i];
+                    
+                    if (!inQuotes && (char === '"' || char === "'")) {
+                        inQuotes = true;
+                        quoteChar = char;
+                        current += char;
+                    } else if (inQuotes && char === quoteChar && commandString[i-1] !== '\\') {
+                        inQuotes = false;
+                        current += char;
+                        quoteChar = '';
+                    } else if (!inQuotes) {
+                        if (char === '[') inBrackets++;
+                        else if (char === ']') inBrackets--;
+                        else if (char === '{') inBraces++;
+                        else if (char === '}') inBraces--;
+                        else if (char === '(') inParens++;
+                        else if (char === ')') inParens--;
+                        
+                        if (inBrackets === 0 && inBraces === 0 && inParens === 0 && /\s/.test(char)) {
+                            if (current.trim()) {
+                                tokens.push(current.trim().replace(/^['"]|['"]$/g, ''));
+                                current = '';
+                            }
+                        } else {
+                            current += char;
+                        }
+                    } else {
+                        current += char;
+                    }
+                }
+                
+                if (current.trim()) {
+                    tokens.push(current.trim().replace(/^['"]|['"]$/g, ''));
+                }
+                
+                return tokens;
             }
 
             execute(commandString) {
                 try {
                     if (!commandString || commandString.trim() === '') throw new Error("Command cannot be empty.");
                     
-                    if (commandString.trim().toUpperCase().startsWith('BEGIN BATCH')) {
-                        return this.batch(commandString);
+                    // Enhanced parsing with comment support
+                    const cleanCommand = this._cleanCQLCommand(commandString);
+                    if (!cleanCommand) throw new Error("No valid commands found.");
+                    
+                    if (cleanCommand.trim().toUpperCase().startsWith('BEGIN BATCH')) {
+                        return this.batch(cleanCommand);
                     }
 
-                    const parts = commandString.match(/(?:[^\s"']+|"[^"]*"|'[^']*'|\[[^\]]*\]|\{[^}]*\})/g)
-                                             .map(p => p.replace(/^['"]|['"]$/g, ''));
+                    const parts = this._parseCQLCommand(cleanCommand);
                     const command = parts[0].toUpperCase();
                     const args = parts.slice(1);
 
@@ -215,12 +291,24 @@
                         case 'CREATE': return this.create(args);
                         case 'ALTER': return this.alter(args);
                         case 'DESCRIBE': return this.describe(args);
+                        case 'DESC': return this.describe(args); // Alias for DESCRIBE
                         case 'DROP': return this.drop(args);
-                        case 'PUT': return this.put(args);
+                        case 'INSERT': return this.insert(args);
                         case 'UPDATE': return this.update(args);
                         case 'SELECT': return this.select(args);
                         case 'DELETE': return this.delete(args);
                         case 'TRUNCATE': return this.truncate(args);
+                        case 'COPY': return this.copy(args);
+                        case 'EXPAND': return this.expand(args);
+                        case 'CONSISTENCY': return this.consistency(args);
+                        case 'TRACING': return this.tracing(args);
+                        case 'CAPTURE': return this.capture(args);
+                        case 'SOURCE': return this.source(args);
+                        case 'SHOW': return this.show(args);
+                        case 'LOGIN': return this.login(args);
+                        case 'EXIT': case 'QUIT': return { status: 'ok', data: 'Goodbye!' };
+                        case 'CLEAR': case 'CLS': return { status: 'ok', data: 'Screen cleared' };
+                        case 'HELP': return this.help(args);
                         default: throw new Error(`Unknown command: '${command}'`);
                     }
                 } catch (e) {
@@ -232,27 +320,310 @@
 
             _validateAndParseValue(value, type) { /* ... (No change) ... */ const udt = this.keyspaces.get(this.currentKeyspace).udts.get(type.replace(/frozen<|>|\s/g, '')); if (udt) { const udtValue = {}; const fields = value.slice(1, -1).split(','); fields.forEach(f => { const [key, val] = f.split(':'); const fieldName = key.trim(); const fieldType = udt.get(fieldName); if (!fieldType) throw new Error(`Field '${fieldName}' not found in UDT '${type}'.`); udtValue[fieldName] = this._validateAndParseValue(val.trim(), fieldType); }); return udtValue; } if (type.includes('<')) return this._parseCollection(value, type); switch (type) { case 'text': return value; case 'int': const i = parseInt(value, 10); if (isNaN(i)) throw new Error(`Invalid int: '${value}'`); return i; case 'float': const f = parseFloat(value); if (isNaN(f)) throw new Error(`Invalid float: '${value}'`); return f; case 'boolean': if (value.toLowerCase() === 'true') return true; if (value.toLowerCase() === 'false') return false; throw new Error(`Invalid boolean: '${value}'`); case 'timeuuid': return value; default: throw new Error(`Unknown type: '${type}'`); } }
 
-            use(args) { /* ... (No change) ... */ if (args.length !== 1) throw new Error("Syntax error: USE <keyspace_name>"); const keyspaceName = args[0]; if (!this.keyspaces.has(keyspaceName)) { this.keyspaces.set(keyspaceName, { tables: new Map(), udts: new Map() }); } this.currentKeyspace = keyspaceName; return { status: 'ok', data: `Now using keyspace '${keyspaceName}'.` }; }
+            use(args) { /* ... (No change) ... */ if (args.length !== 1) throw new Error("Syntax error: USE <keyspace_name>"); const keyspaceName = args[0]; if (!this.keyspaces.has(keyspaceName)) { this.keyspaces.set(keyspaceName, { tables: new Map(), udts: new Map(), materializedViews: new Map() }); } this.currentKeyspace = keyspaceName; return { status: 'ok', data: `Now using keyspace '${keyspaceName}'.` }; }
 
-            create(args) { /* ... (No change) ... */ if (!this.currentKeyspace) throw new Error("No keyspace selected."); const type = args[0].toUpperCase(); const ks = this.keyspaces.get(this.currentKeyspace); if (type === 'TABLE') { const tableName = args[1]; if (ks.tables.has(tableName)) throw new Error(`Table '${tableName}' already exists.`); const body = args.join(' '); const pkMatch = body.match(/PRIMARY KEY\s*\(([^)]+)\)/i); if(!pkMatch) throw new Error("PRIMARY KEY definition is required."); const primaryKeyCols = pkMatch[1].split(',').map(c => c.trim()); const partitionKey = primaryKeyCols[0]; const clusteringKeys = primaryKeyCols.slice(1); const colsMatch = body.match(/\(([^)]+)\)/); const defs = colsMatch[1].replace(/PRIMARY KEY\s*\([^)]+\)/i, '').split(',').map(d => d.trim()).filter(Boolean); const columns = new Map(); defs.forEach(def => { const [name, ...typeParts] = def.trim().split(/\s+/); const colType = typeParts.join(' ').toLowerCase(); if (!name || !colType) throw new Error(`Invalid column definition: '${def}'`); columns.set(name, colType); }); ks.tables.set(tableName, { meta: { columns, indexes: new Set(), primaryKey: { partitionKey, clusteringKeys } }, data: new Map() }); return { status: 'ok', data: `Table '${tableName}' created.` }; } else if (type === 'INDEX') { if (args.length < 4 || args[1].toUpperCase() !== 'ON') throw new Error("Syntax: CREATE INDEX ON <table> (column)"); const tableName = args[2]; const columnName = args[3].replace(/[()]/g, ''); const table = ks.tables.get(tableName); if (!table) throw new Error(`Table '${tableName}' not found.`); if (!table.meta.columns.has(columnName)) throw new Error(`Column '${columnName}' not found.`); table.meta.indexes.add(columnName); return { status: 'ok', data: `Index created on ${tableName}(${columnName}).` }; } else if (type === 'TYPE') { const typeName = args[1]; if (ks.udts.has(typeName)) throw new Error(`Type '${typeName}' already exists.`); const body = args.join(' '); const colsMatch = body.match(/\(([^)]+)\)/); if (!colsMatch) throw new Error("Invalid TYPE definition."); const fields = new Map(); colsMatch[1].split(',').forEach(def => { const [name, fieldType] = def.trim().split(/\s+/); if (!name || !fieldType) throw new Error(`Invalid field definition: '${def}'`); fields.set(name, fieldType.toLowerCase()); }); ks.udts.set(typeName, fields); return { status: 'ok', data: `Type '${typeName}' created.` }; } else { throw new Error("Only CREATE TABLE, CREATE INDEX, and CREATE TYPE are supported."); } }
+            create(args) { /* ... (No change) ... */ if (!this.currentKeyspace) throw new Error("No keyspace selected."); const type = args[0].toUpperCase(); const ks = this.keyspaces.get(this.currentKeyspace); if (type === 'TABLE') { const tableName = args[1]; if (ks.tables.has(tableName)) throw new Error(`Table '${tableName}' already exists.`); const body = args.join(' '); const pkMatch = body.match(/PRIMARY KEY\s*\(([^)]+)\)/i); if(!pkMatch) throw new Error("PRIMARY KEY definition is required."); const primaryKeyCols = pkMatch[1].split(',').map(c => c.trim()); const partitionKey = primaryKeyCols[0]; const clusteringKeys = primaryKeyCols.slice(1); const colsMatch = body.match(/\(([^)]+)\)/); const defs = colsMatch[1].replace(/PRIMARY KEY\s*\([^)]+\)/i, '').split(',').map(d => d.trim()).filter(Boolean); const columns = new Map(); defs.forEach(def => { const [name, ...typeParts] = def.trim().split(/\s+/); const colType = typeParts.join(' ').toLowerCase(); if (!name || !colType) throw new Error(`Invalid column definition: '${def}'`); columns.set(name, colType); }); ks.tables.set(tableName, { meta: { columns, indexes: new Set(), primaryKey: { partitionKey, clusteringKeys } }, data: new Map() }); return { status: 'ok', data: `Table '${tableName}' created.` }; } else if (type === 'MATERIALIZED' && args[1].toUpperCase() === 'VIEW') { return this.createMaterializedView(args.slice(2)); } else if (type === 'INDEX') { if (args.length < 4 || args[1].toUpperCase() !== 'ON') throw new Error("Syntax: CREATE INDEX ON <table> (column)"); const tableName = args[2]; const columnName = args[3].replace(/[()]/g, ''); const table = ks.tables.get(tableName); if (!table) throw new Error(`Table '${tableName}' not found.`); if (!table.meta.columns.has(columnName)) throw new Error(`Column '${columnName}' not found.`); table.meta.indexes.add(columnName); return { status: 'ok', data: `Index created on ${tableName}(${columnName}).` }; } else if (type === 'TYPE') { const typeName = args[1]; if (ks.udts.has(typeName)) throw new Error(`Type '${typeName}' already exists.`); const body = args.join(' '); const colsMatch = body.match(/\(([^)]+)\)/); if (!colsMatch) throw new Error("Invalid TYPE definition."); const fields = new Map(); colsMatch[1].split(',').forEach(def => { const [name, fieldType] = def.trim().split(/\s+/); if (!name || !fieldType) throw new Error(`Invalid field definition: '${def}'`); fields.set(name, fieldType.toLowerCase()); }); ks.udts.set(typeName, fields); return { status: 'ok', data: `Type '${typeName}' created.` }; } else { throw new Error("Only CREATE TABLE, CREATE MATERIALIZED VIEW, CREATE INDEX, and CREATE TYPE are supported."); } }
 
             alter(args) { /* ... (No change) ... */ if (args.length < 4 || args[0].toUpperCase() !== 'TABLE') throw new Error("Syntax: ALTER TABLE <table> ADD|DROP column [type]"); const tableName = args[1]; const table = this.keyspaces.get(this.currentKeyspace).tables.get(tableName); if (!table) throw new Error(`Table '${tableName}' not found.`); const action = args[2].toUpperCase(); const colName = args[3]; if (action === 'ADD') { const colType = args[4]; if (!colType) throw new Error("Data type required for new column."); if (table.meta.columns.has(colName)) throw new Error(`Column '${colName}' already exists.`); table.meta.columns.set(colName, colType.toLowerCase()); return { status: 'ok', data: `Column '${colName}' added.` }; } else if (action === 'DROP') { if (!table.meta.columns.delete(colName)) throw new Error(`Column '${colName}' not found.`); for (const partition of table.data.values()) { for (const row of partition) { row.delete(colName); } } return { status: 'ok', data: `Column '${colName}' dropped.` }; } else { throw new Error("Only ADD and DROP are supported for ALTER TABLE."); } }
 
             describe(args) { /* ... (No change) ... */ if (args.length !== 2 || args[0].toUpperCase() !== 'TABLE') throw new Error("Syntax: DESCRIBE TABLE <name>"); if (!this.currentKeyspace) throw new Error("No keyspace selected."); const tableName = args[1]; const table = this.keyspaces.get(this.currentKeyspace).tables.get(tableName); if (!table) throw new Error(`Table '${tableName}' not found.`); return { status: 'ok', data: { columns: Object.fromEntries(table.meta.columns), primary_key: table.meta.primaryKey, indexes: Array.from(table.meta.indexes) }}; }
 
-            drop(args) { /* ... (No change) ... */ if (args.length < 2) throw new Error("Invalid DROP syntax."); const type = args[0].toUpperCase(); const name = args[1]; if (type === 'TABLE') { if (!this.currentKeyspace) throw new Error("No keyspace selected."); if (!this.keyspaces.get(this.currentKeyspace).tables.delete(name)) throw new Error(`Table '${name}' not found.`); return { status: 'ok', data: `Table '${name}' dropped.` }; } else if (type === 'KEYSPACE') { if (!this.keyspaces.delete(name)) throw new Error(`Keyspace '${name}' not found.`); if (this.currentKeyspace === name) this.currentKeyspace = null; return { status: 'ok', data: `Keyspace '${name}' dropped.` }; } else { throw new Error("Only DROP TABLE and DROP KEYSPACE are supported."); } }
+            drop(args) { /* ... (No change) ... */ if (args.length < 2) throw new Error("Invalid DROP syntax."); const type = args[0].toUpperCase(); if (type === 'MATERIALIZED' && args[1].toUpperCase() === 'VIEW') { const name = args[2]; if (!this.currentKeyspace) throw new Error("No keyspace selected."); if (!this.keyspaces.get(this.currentKeyspace).materializedViews.delete(name)) throw new Error(`Materialized view '${name}' not found.`); return { status: 'ok', data: `Materialized view '${name}' dropped.` }; } const name = args[1]; if (type === 'TABLE') { if (!this.currentKeyspace) throw new Error("No keyspace selected."); if (!this.keyspaces.get(this.currentKeyspace).tables.delete(name)) throw new Error(`Table '${name}' not found.`); return { status: 'ok', data: `Table '${name}' dropped.` }; } else if (type === 'KEYSPACE') { if (!this.keyspaces.delete(name)) throw new Error(`Keyspace '${name}' not found.`); if (this.currentKeyspace === name) this.currentKeyspace = null; return { status: 'ok', data: `Keyspace '${name}' dropped.` }; } else { throw new Error("Only DROP TABLE, DROP MATERIALIZED VIEW, and DROP KEYSPACE are supported."); } }
 
-            put(args) { /* ... (No change) ... */ if (!this.currentKeyspace) throw new Error("No keyspace selected."); let ifNotExists = false; const ifIndex = args.findIndex(arg => arg.toUpperCase() === 'IF'); if (ifIndex > -1 && args[ifIndex+1].toUpperCase() === 'NOT' && args[ifIndex+2].toUpperCase() === 'EXISTS') { ifNotExists = true; args.splice(ifIndex, 3); } let ttl = null; const usingIndex = args.findIndex(arg => arg.toUpperCase() === 'USING'); if (usingIndex > -1) { if (args[usingIndex+1].toUpperCase() !== 'TTL' || !args[usingIndex+2]) throw new Error("Syntax: USING TTL <seconds>"); ttl = parseInt(args[usingIndex+2], 10); if (isNaN(ttl)) throw new Error("TTL must be an integer."); args.splice(usingIndex, 3); } const intoIndex = args.findIndex(arg => arg.toUpperCase() === 'INTO'); const keyIndex = args.findIndex(arg => arg.toUpperCase() === 'KEY'); if (intoIndex !== 0 || keyIndex < 2) throw new Error("Syntax: PUT INTO <table> KEY <key> col=val ..."); const tableName = args[1]; const primaryKey = args[keyIndex + 1]; const columnArgs = args.slice(keyIndex + 2); if (columnArgs.length === 0) throw new Error("PUT requires at least one column=value pair."); const table = this.keyspaces.get(this.currentKeyspace).tables.get(tableName); if (!table) throw new Error(`Table '${tableName}' not found.`); if (!table.data.has(primaryKey)) table.data.set(primaryKey, []); const partition = table.data.get(primaryKey); const { clusteringKeys } = table.meta.primaryKey; const newRow = new Map(); let clusteringKeyValues = {}; clusteringKeys.forEach(ck => { const arg = columnArgs.find(a => a.startsWith(ck + '=')); if (!arg) throw new Error(`Missing value for clustering key '${ck}'.`); const value = arg.split(/=(.*)/s)[1]; newRow.set(ck, { value: this._validateAndParseValue(value, table.meta.columns.get(ck)), timestamp: Date.now(), expiresAt: null }); clusteringKeyValues[ck] = newRow.get(ck).value; }); const existingRowIndex = partition.findIndex(row => clusteringKeys.every(ck => row.get(ck).value === clusteringKeyValues[ck])); if (ifNotExists && existingRowIndex > -1) { return { status: 'ok', data: { '[applied]': false, ...Object.fromEntries(this._getValidRow(partition[existingRowIndex])) } }; } columnArgs.forEach(arg => { const [colName, colValue] = arg.split(/=(.*)/s); if (!colName || colValue === undefined) throw new Error(`Invalid column format: '${arg}'.`); if (clusteringKeys.includes(colName.trim())) return; const type = table.meta.columns.get(colName.trim()); if (!type) throw new Error(`Column '${colName}' is not defined for this table.`); const valToParse = colValue.trim() === 'now()' && type === 'timeuuid' ? `${Date.now()}-${Math.random().toString(16).slice(2)}` : colValue.trim(); const parsedValue = this._validateAndParseValue(valToParse, type); newRow.set(colName.trim(), { value: parsedValue, timestamp: Date.now(), expiresAt: ttl ? Date.now() + ttl * 1000 : null }); }); if (existingRowIndex > -1) { partition[existingRowIndex] = new Map([...partition[existingRowIndex], ...newRow]); } else { partition.push(newRow); partition.sort((a, b) => { for (const ck of clusteringKeys) { if (a.get(ck).value < b.get(ck).value) return -1; if (a.get(ck).value > b.get(ck).value) return 1; } return 0; }); } return { status: 'ok', data: ifNotExists ? { '[applied]': true } : 'OK' }; }
+
 
             update(args) { /* ... (No change) ... */ if (!this.currentKeyspace) throw new Error("No keyspace selected."); const tableName = args[0]; const table = this.keyspaces.get(this.currentKeyspace).tables.get(tableName); if (!table) throw new Error(`Table '${tableName}' not found.`); const whereIndex = args.findIndex(arg => arg.toUpperCase() === 'WHERE'); if (whereIndex === -1) throw new Error("UPDATE requires a WHERE clause."); const setClause = args.slice(1, whereIndex).join(' '); const whereClause = args.slice(whereIndex + 1); const { partitionKey, clusteringKeys } = table.meta.primaryKey; const partitionKeyValue = this._validateAndParseValue(whereClause.find(s => s.startsWith(partitionKey)).split('=')[1].trim(), table.meta.columns.get(partitionKey)); const partition = table.data.get(partitionKeyValue); if(!partition) return { status: 'ok', data: 'OK (partition not found)' }; const targetRow = partition.find(row => clusteringKeys.every(ck => { const filter = whereClause.find(s => s.startsWith(ck)); if(!filter) return true; const filterVal = this._validateAndParseValue(filter.split('=')[1].trim(), table.meta.columns.get(ck)); return row.get(ck).value === filterVal; })); if(!targetRow) return { status: 'ok', data: 'OK (row not found)' }; const setOperations = setClause.replace('SET ', '').split(','); setOperations.forEach(op => { const [colName, expression] = op.trim().split('=').map(s => s.trim()); const currentData = targetRow.get(colName); const colType = table.meta.columns.get(colName); if (expression.includes('+')) { const toAdd = this._validateAndParseValue(expression.split('+')[1].trim(), colType); if (currentData.value instanceof Set) { toAdd.forEach(v => currentData.value.add(v)); } else if (Array.isArray(currentData.value)) { currentData.value.push(...toAdd); } } else if (expression.includes('-')) { const toRemove = this._validateAndParseValue(expression.split('-')[1].trim(), colType); if (currentData.value instanceof Set) { toRemove.forEach(v => currentData.value.delete(v)); } else if (Array.isArray(currentData.value)) { currentData.value = currentData.value.filter(v => !toRemove.includes(v)); } } else { targetRow.set(colName, { value: this._validateAndParseValue(expression, colType), timestamp: Date.now(), expiresAt: currentData.expiresAt }); } }); return { status: 'ok', data: 'OK' }; }
             
             _getValidRow(rowMap) { /* ... (No change) ... */ if (!rowMap) return null; const validRow = new Map(); for (const [col, data] of rowMap.entries()) { if (!data.expiresAt || data.expiresAt >= Date.now()) { validRow.set(col, data); } } return validRow.size > 0 ? validRow : null; }
 
-            select(args) { /* ... (No change) ... */ if (!this.currentKeyspace) throw new Error("No keyspace selected."); let allowFiltering = false; let limit = Infinity; let orderBy = 'ASC'; const allowFilteringIndex = args.findIndex(arg => arg.toUpperCase() === 'ALLOW'); if(allowFilteringIndex > -1 && args[allowFilteringIndex+1].toUpperCase() === 'FILTERING') { allowFiltering = true; args.splice(allowFilteringIndex, 2); } const limitIndex = args.findIndex(arg => arg.toUpperCase() === 'LIMIT'); if (limitIndex > -1) { limit = parseInt(args[limitIndex + 1], 10); if (isNaN(limit)) throw new Error("LIMIT value must be an integer."); args.splice(limitIndex, 2); } const orderIndex = args.findIndex(arg => arg.toUpperCase() === 'ORDER'); if (orderIndex > -1 && args[orderIndex+1].toUpperCase() === 'BY') { orderBy = args[orderIndex+3].toUpperCase(); args.splice(orderIndex, 4); } const fromIndex = args.findIndex(arg => arg.toUpperCase() === 'FROM'); if (fromIndex === -1) throw new Error("Syntax error: Missing FROM clause."); const tableName = args[fromIndex + 1]; const table = this.keyspaces.get(this.currentKeyspace).tables.get(tableName); if (!table) throw new Error(`Table '${tableName}' not found.`); const columnsToSelect = args.slice(0, fromIndex).join(',').split(',').map(c => c.trim()); const projectRow = (row) => { if (!row) return null; const resultRow = new Map(); if (columnsToSelect.length === 1 && columnsToSelect[0] === '*') { for (const [col, data] of row.entries()) resultRow.set(col, data.value); } else { columnsToSelect.forEach(colName => { const funcMatch = colName.match(/(\w+)\(([^)]+)\)/); if(funcMatch) return; if (row.has(colName)) resultRow.set(colName, row.get(colName).value); }); } return resultRow; }; const whereIndex = args.findIndex(arg => arg.toUpperCase() === 'WHERE'); const getResults = () => { if (whereIndex === -1) { const allResults = []; for(const [pkey, partition] of table.data.entries()){ for(const row of partition) { const validRow = this._getValidRow(row); if(validRow) allResults.push(projectRow(validRow)); }} return allResults; } const whereClause = args.slice(whereIndex + 1); const partitionKey = table.meta.primaryKey.partitionKey; const inClauseMatch = whereClause.join(' ').match(new RegExp(`${partitionKey}\\s+IN\\s+\\(([^)]+)\\)`, 'i')); if (inClauseMatch) { const keys = inClauseMatch[1].split(',').map(k => k.trim()); const allResults = []; keys.forEach(key => { const partition = table.data.get(this._validateAndParseValue(key, table.meta.columns.get(partitionKey))) || []; partition.forEach(row => { const validRow = this._getValidRow(row); if (validRow) allResults.push(projectRow(validRow)); }); }); return allResults; } const partitionKeyFilter = whereClause.find(s => s.startsWith(partitionKey + '=')); if (!partitionKeyFilter) throw new Error(`Query must include a filter on the partition key ('${partitionKey}').`); const partitionKeyValue = this._validateAndParseValue(partitionKeyFilter.split('=')[1].trim(), table.meta.columns.get(partitionKey)); const partition = table.data.get(partitionKeyValue) || []; let filteredRows = partition.map(r => this._getValidRow(r)).filter(Boolean); const clusteringKey = table.meta.primaryKey.clusteringKeys[0]; if (clusteringKey) { const ckFilter = whereClause.find(s => s.includes(clusteringKey)); if (ckFilter) { const operatorMatch = ckFilter.match(/([<>=]+)/); if (!operatorMatch) throw new Error("Invalid operator in WHERE clause."); const operator = operatorMatch[1]; const value = this._validateAndParseValue(ckFilter.split(operator)[1].trim(), table.meta.columns.get(clusteringKey)); filteredRows = filteredRows.filter(row => { const rowVal = row.get(clusteringKey).value; switch (operator) { case '=': return rowVal === value; case '>': return rowVal > value; case '<': return rowVal < value; case '>=': return rowVal >= value; case '<=': return rowVal <= value; default: return false; } }); } } if (orderBy === 'DESC') filteredRows.reverse(); return filteredRows.map(projectRow); }; const results = getResults(); const aggMatch = columnsToSelect[0].match(/(\w+)\(([^)]+)\)/); if (aggMatch) { const [, func, col] = aggMatch; const values = results.map(r => r.get(col)).filter(v => v !== undefined && v !== null); if (func.toUpperCase() === 'COUNT') return { status: 'ok', data: { 'count': results.length } }; if (values.length === 0) return { status: 'ok', data: { [func.toLowerCase()]: null } }; switch (func.toUpperCase()) { case 'SUM': return { status: 'ok', data: { 'sum': values.reduce((a, b) => a + b, 0) } }; case 'AVG': return { status: 'ok', data: { 'avg': values.reduce((a, b) => a + b, 0) / values.length } }; case 'MIN': return { status: 'ok', data: { 'min': Math.min(...values) } }; case 'MAX': return { status: 'ok', data: { 'max': Math.max(...values) } }; case 'DATEOF': return { status: 'ok', data: { 'dateOf': new Date(parseInt(values[0].split('-')[0])).toISOString() } }; case 'CAST': const asType = col.split('AS')[1].trim(); return { status: 'ok', data: results.map(r => ({ cast: this._validateAndParseValue(String(r.get(col.split('AS')[0].trim())), asType) })) }; default: throw new Error(`Unknown aggregate function '${func}'`); } } return { status: 'ok', data: results.slice(0, limit) }; }
+            select(args) { /* ... (No change) ... */ if (!this.currentKeyspace) throw new Error("No keyspace selected."); let allowFiltering = false; let limit = Infinity; let orderBy = 'ASC'; const allowFilteringIndex = args.findIndex(arg => arg.toUpperCase() === 'ALLOW'); if(allowFilteringIndex > -1 && args[allowFilteringIndex+1].toUpperCase() === 'FILTERING') { allowFiltering = true; args.splice(allowFilteringIndex, 2); } const limitIndex = args.findIndex(arg => arg.toUpperCase() === 'LIMIT'); if (limitIndex > -1) { limit = parseInt(args[limitIndex + 1], 10); if (isNaN(limit)) throw new Error("LIMIT value must be an integer."); args.splice(limitIndex, 2); } const orderIndex = args.findIndex(arg => arg.toUpperCase() === 'ORDER'); if (orderIndex > -1 && args[orderIndex+1].toUpperCase() === 'BY') { orderBy = args[orderIndex+3].toUpperCase(); args.splice(orderIndex, 4); } const fromIndex = args.findIndex(arg => arg.toUpperCase() === 'FROM'); if (fromIndex === -1) throw new Error("Syntax error: Missing FROM clause."); const tableName = args[fromIndex + 1]; const ks = this.keyspaces.get(this.currentKeyspace); let table = ks.tables.get(tableName); let isMaterializedView = false; if (!table) { table = ks.materializedViews.get(tableName); isMaterializedView = true; } if (!table) throw new Error(`Table or materialized view '${tableName}' not found.`); const columnsToSelect = args.slice(0, fromIndex).join(',').split(',').map(c => c.trim()); const projectRow = (row) => { if (!row) return null; const resultRow = new Map(); if (columnsToSelect.length === 1 && columnsToSelect[0] === '*') { for (const [col, data] of row.entries()) resultRow.set(col, isMaterializedView ? data : data.value); } else { columnsToSelect.forEach(colName => { const funcMatch = colName.match(/(\w+)\(([^)]+)\)/); if(funcMatch) return; if (row.has(colName)) resultRow.set(colName, isMaterializedView ? row.get(colName) : row.get(colName).value); }); } return resultRow; }; const whereIndex = args.findIndex(arg => arg.toUpperCase() === 'WHERE'); const getResults = () => { if (whereIndex === -1) { const allResults = []; for(const [pkey, partition] of table.data.entries()){ for(const row of partition) { const validRow = isMaterializedView ? row : this._getValidRow(row); if(validRow) allResults.push(projectRow(validRow)); }} return allResults; } const whereClause = args.slice(whereIndex + 1); const partitionKey = table.meta.primaryKey.partitionKey; const inClauseMatch = whereClause.join(' ').match(new RegExp(`${partitionKey}\\s+IN\\s+\\(([^)]+)\\)`, 'i')); if (inClauseMatch) { const keys = inClauseMatch[1].split(',').map(k => k.trim()); const allResults = []; keys.forEach(key => { const partition = table.data.get(this._validateAndParseValue(key, table.meta.columns.get(partitionKey))) || []; partition.forEach(row => { const validRow = isMaterializedView ? row : this._getValidRow(row); if (validRow) allResults.push(projectRow(validRow)); }); }); return allResults; } const partitionKeyFilter = whereClause.find(s => s.startsWith(partitionKey + '=')); if (!partitionKeyFilter) throw new Error(`Query must include a filter on the partition key ('${partitionKey}').`); const partitionKeyValue = this._validateAndParseValue(partitionKeyFilter.split('=')[1].trim(), table.meta.columns.get(partitionKey)); const partition = table.data.get(partitionKeyValue) || []; let filteredRows = partition.map(r => isMaterializedView ? r : this._getValidRow(r)).filter(Boolean); const clusteringKey = table.meta.primaryKey.clusteringKeys[0]; if (clusteringKey) { const ckFilter = whereClause.find(s => s.includes(clusteringKey)); if (ckFilter) { const operatorMatch = ckFilter.match(/([<>=]+)/); if (!operatorMatch) throw new Error("Invalid operator in WHERE clause."); const operator = operatorMatch[1]; const value = this._validateAndParseValue(ckFilter.split(operator)[1].trim(), table.meta.columns.get(clusteringKey)); filteredRows = filteredRows.filter(row => { const rowVal = isMaterializedView ? row.get(clusteringKey) : row.get(clusteringKey).value; switch (operator) { case '=': return rowVal === value; case '>': return rowVal > value; case '<': return rowVal < value; case '>=': return rowVal >= value; case '<=': return rowVal <= value; default: return false; } }); } } if (orderBy === 'DESC') filteredRows.reverse(); return filteredRows.map(projectRow); }; const results = getResults(); const aggMatch = columnsToSelect[0].match(/(\w+)\(([^)]+)\)/); if (aggMatch) { const [, func, col] = aggMatch; const values = results.map(r => r.get(col)).filter(v => v !== undefined && v !== null); if (func.toUpperCase() === 'COUNT') return { status: 'ok', data: { 'count': results.length } }; if (values.length === 0) return { status: 'ok', data: { [func.toLowerCase()]: null } }; switch (func.toUpperCase()) { case 'SUM': return { status: 'ok', data: { 'sum': values.reduce((a, b) => a + b, 0) } }; case 'AVG': return { status: 'ok', data: { 'avg': values.reduce((a, b) => a + b, 0) / values.length } }; case 'MIN': return { status: 'ok', data: { 'min': Math.min(...values) } }; case 'MAX': return { status: 'ok', data: { 'max': Math.max(...values) } }; case 'DATEOF': return { status: 'ok', data: { 'dateOf': new Date(parseInt(values[0].split('-')[0])).toISOString() } }; case 'CAST': const asType = col.split('AS')[1].trim(); return { status: 'ok', data: results.map(r => ({ cast: this._validateAndParseValue(String(r.get(col.split('AS')[0].trim())), asType) })) }; default: throw new Error(`Unknown aggregate function '${func}'`); } } return { status: 'ok', data: results.slice(0, limit) }; }
             
+            createMaterializedView(args) {
+                const body = args.join(' ');
+                const asMatch = body.match(/^(\w+)\s+AS\s+(.+)$/i);
+                if (!asMatch) throw new Error("Invalid materialized view syntax. Expected: <view_name> AS <select_statement>");
+                
+                const viewName = asMatch[1];
+                const selectStatement = asMatch[2];
+                
+                // Parse the SELECT statement for validation
+                const fromMatch = selectStatement.match(/FROM\s+(\w+)/i);
+                if (!fromMatch) throw new Error("Materialized view must specify a source table");
+                
+                const sourceTable = fromMatch[1];
+                const ks = this.keyspaces.get(this.currentKeyspace);
+                if (!ks.tables.has(sourceTable)) throw new Error(`Source table '${sourceTable}' not found`);
+                
+                const primaryKeyMatch = selectStatement.match(/PRIMARY\s+KEY\s*\(([^)]+)\)/i);
+                if (!primaryKeyMatch) throw new Error("Materialized view must specify PRIMARY KEY");
+                
+                if (ks.materializedViews.has(viewName)) {
+                    throw new Error(`Materialized view '${viewName}' already exists`);
+                }
+                
+                ks.materializedViews.set(viewName, {
+                    sourceTable: sourceTable,
+                    selectStatement: selectStatement,
+                    meta: {
+                        columns: new Map(ks.tables.get(sourceTable).meta.columns),
+                        primaryKey: { 
+                            partitionKey: primaryKeyMatch[1].split(',')[0].trim(),
+                            clusteringKeys: primaryKeyMatch[1].split(',').slice(1).map(k => k.trim())
+                        }
+                    },
+                    data: new Map()
+                });
+                
+                // Populate the materialized view with current data
+                this._refreshMaterializedView(viewName);
+                
+                return { status: 'ok', data: `Materialized view '${viewName}' created.` };
+            }
+            
+            _refreshMaterializedView(viewName) {
+                const ks = this.keyspaces.get(this.currentKeyspace);
+                const mv = ks.materializedViews.get(viewName);
+                const sourceTable = ks.tables.get(mv.sourceTable);
+                
+                mv.data.clear();
+                
+                // Copy data from source table to materialized view
+                for (const [partitionKey, partition] of sourceTable.data) {
+                    for (const row of partition) {
+                        const newPartitionKey = row.get(mv.meta.primaryKey.partitionKey)?.value;
+                        if (newPartitionKey !== undefined) {
+                            if (!mv.data.has(newPartitionKey)) {
+                                mv.data.set(newPartitionKey, []);
+                            }
+                            mv.data.get(newPartitionKey).push(new Map(row));
+                        }
+                    }
+                }
+            }
+
             delete(args) { /* ... (No change) ... */ if (!this.currentKeyspace) throw new Error("No keyspace selected."); const whereIndex = args.findIndex(arg => arg.toUpperCase() === 'WHERE'); if (whereIndex === -1) throw new Error("DELETE requires a WHERE clause."); const fromIndex = args.findIndex(arg => arg.toUpperCase() === 'FROM'); const tableName = args[fromIndex + 1]; const table = this.keyspaces.get(this.currentKeyspace).tables.get(tableName); if (!table) throw new Error(`Table '${tableName}' not found.`); const whereClause = args.slice(whereIndex + 1); const { partitionKey, clusteringKeys } = table.meta.primaryKey; const partitionKeyValue = this._validateAndParseValue(whereClause.find(s => s.startsWith(partitionKey)).split('=')[1].trim(), table.meta.columns.get(partitionKey)); const partition = table.data.get(partitionKeyValue); if(!partition) return { status: 'ok', data: 'OK (partition not found)' }; const targetRow = partition.find(row => clusteringKeys.every(ck => { const filter = whereClause.find(s => s.startsWith(ck)); if(!filter) return true; const filterVal = this._validateAndParseValue(filter.split('=')[1].trim(), table.meta.columns.get(ck)); return row.get(ck).value === filterVal; })); if(!targetRow) return { status: 'ok', data: 'OK (row not found)' }; const columnsToDelete = args.slice(0, fromIndex).join(' ').split(',').map(s => s.trim()).filter(Boolean); if (columnsToDelete.length > 0) { const [colName, collectionPart] = columnsToDelete[0].split('['); if (collectionPart) { const currentCollection = targetRow.get(colName).value; const toDelete = this._validateAndParseValue(args[fromIndex-1], table.meta.columns.get(colName)); if(currentCollection instanceof Set) { toDelete.forEach(v => currentCollection.delete(v)); } else if(Array.isArray(currentCollection)) { targetRow.get(colName).value = currentCollection.filter(v => !toDelete.includes(v)); } } else { columnsToDelete.forEach(c => targetRow.delete(c)); } } else { const index = partition.indexOf(targetRow); partition.splice(index, 1); } return { status: 'ok', data: 'OK' }; }
 
             truncate(args) { /* ... (No change) ... */ if(args.length !== 1) throw new Error("Syntax: TRUNCATE <table>"); const tableName = args[0]; const table = this.keyspaces.get(this.currentKeyspace).tables.get(tableName); if (!table) throw new Error(`Table '${tableName}' not found.`); table.data.clear(); return { status: 'ok', data: `Table '${tableName}' truncated.` }; }
+            
+            // Standard CQL INSERT command
+            insert(args) {
+                if (!this.currentKeyspace) throw new Error("No keyspace selected.");
+                
+                // Parse INSERT INTO table (columns) VALUES (values) [IF NOT EXISTS] [USING TTL seconds]
+                const intoIndex = args.findIndex(arg => arg.toUpperCase() === 'INTO');
+                const valuesIndex = args.findIndex(arg => arg.toUpperCase() === 'VALUES');
+                
+                if (intoIndex === -1 || valuesIndex === -1) {
+                    throw new Error("Syntax: INSERT INTO table (columns) VALUES (values)");
+                }
+                
+                const tableName = args[intoIndex + 1];
+                const table = this.keyspaces.get(this.currentKeyspace).tables.get(tableName);
+                if (!table) throw new Error(`Table '${tableName}' not found.`);
+                
+                // Check for IF NOT EXISTS
+                let ifNotExists = false;
+                const ifIndex = args.findIndex(arg => arg.toUpperCase() === 'IF');
+                if (ifIndex > -1 && args[ifIndex+1]?.toUpperCase() === 'NOT' && args[ifIndex+2]?.toUpperCase() === 'EXISTS') {
+                    ifNotExists = true;
+                }
+                
+                // Check for USING TTL
+                let ttl = null;
+                const usingIndex = args.findIndex(arg => arg.toUpperCase() === 'USING');
+                if (usingIndex > -1 && args[usingIndex+1]?.toUpperCase() === 'TTL') {
+                    ttl = parseInt(args[usingIndex+2], 10);
+                    if (isNaN(ttl)) throw new Error("TTL must be an integer.");
+                }
+                
+                // Parse columns and values
+                const columnsStr = args.slice(intoIndex + 2, valuesIndex).join(' ');
+                const valuesStr = args.slice(valuesIndex + 1, ifIndex > valuesIndex ? ifIndex : usingIndex > valuesIndex ? usingIndex : args.length).join(' ');
+                
+                const columns = columnsStr.replace(/[()]/g, '').split(',').map(c => c.trim());
+                const values = valuesStr.replace(/[()]/g, '').split(',').map(v => v.trim());
+                
+                if (columns.length !== values.length) {
+                    throw new Error("Number of columns and values must match.");
+                }
+                
+                // Validate partition key exists
+                const { partitionKey, clusteringKeys } = table.meta.primaryKey;
+                const partitionKeyIndex = columns.indexOf(partitionKey);
+                if (partitionKeyIndex === -1) {
+                    throw new Error(`Partition key '${partitionKey}' is required.`);
+                }
+                
+                const partitionKeyValue = this._validateAndParseValue(values[partitionKeyIndex], table.meta.columns.get(partitionKey));
+                
+                // Get or create partition
+                if (!table.data.has(partitionKeyValue)) table.data.set(partitionKeyValue, []);
+                const partition = table.data.get(partitionKeyValue);
+                
+                // Create new row
+                const newRow = new Map();
+                let clusteringKeyValues = {};
+                
+                // Set clustering key values
+                clusteringKeys.forEach(ck => {
+                    const ckIndex = columns.indexOf(ck);
+                    if (ckIndex === -1) throw new Error(`Missing value for clustering key '${ck}'.`);
+                    const value = this._validateAndParseValue(values[ckIndex], table.meta.columns.get(ck));
+                    newRow.set(ck, { value, timestamp: Date.now(), expiresAt: null });
+                    clusteringKeyValues[ck] = value;
+                });
+                
+                // Check if row already exists (for IF NOT EXISTS)
+                const existingRowIndex = partition.findIndex(row => 
+                    clusteringKeys.every(ck => row.get(ck)?.value === clusteringKeyValues[ck])
+                );
+                
+                if (ifNotExists && existingRowIndex > -1) {
+                    return { status: 'ok', data: { '[applied]': false, ...Object.fromEntries(this._getValidRow(partition[existingRowIndex])) } };
+                }
+                
+                // Set all column values
+                columns.forEach((colName, idx) => {
+                    const type = table.meta.columns.get(colName);
+                    if (!type) throw new Error(`Column '${colName}' is not defined for this table.`);
+                    
+                    let value = values[idx];
+                    // Handle built-in functions
+                    if (value === 'now()' && type === 'timeuuid') {
+                        value = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+                    }
+                    
+                    const parsedValue = this._validateAndParseValue(value, type);
+                    newRow.set(colName, { 
+                        value: parsedValue, 
+                        timestamp: Date.now(), 
+                        expiresAt: ttl ? Date.now() + ttl * 1000 : null 
+                    });
+                });
+                
+                // Insert or update row
+                if (existingRowIndex > -1) {
+                    partition[existingRowIndex] = new Map([...partition[existingRowIndex], ...newRow]);
+                } else {
+                    partition.push(newRow);
+                    // Sort by clustering keys
+                    partition.sort((a, b) => {
+                        for (const ck of clusteringKeys) {
+                            const aVal = a.get(ck)?.value;
+                            const bVal = b.get(ck)?.value;
+                            if (aVal < bVal) return -1;
+                            if (aVal > bVal) return 1;
+                        }
+                        return 0;
+                    });
+                }
+                
+                return { status: 'ok', data: ifNotExists ? { '[applied]': true } : 'OK' };
+            }
+            
+            // Additional CQL commands
+            copy(args) {
+                return { status: 'ok', data: 'COPY command not implemented in this emulator.' };
+            }
+            
+            expand(args) {
+                const setting = args[0]?.toUpperCase();
+                if (setting === 'ON' || setting === 'OFF') {
+                    return { status: 'ok', data: `Expand ${setting.toLowerCase()}` };
+                }
+                return { status: 'ok', data: 'Usage: EXPAND ON|OFF' };
+            }
+            
+            consistency(args) {
+                const level = args[0]?.toUpperCase();
+                const validLevels = ['ONE', 'TWO', 'THREE', 'QUORUM', 'ALL', 'LOCAL_QUORUM', 'EACH_QUORUM', 'LOCAL_ONE'];
+                if (validLevels.includes(level)) {
+                    return { status: 'ok', data: `Consistency level set to ${level}` };
+                }
+                return { status: 'ok', data: `Current consistency level: ONE\nValid levels: ${validLevels.join(', ')}` };
+            }
+            
+            tracing(args) {
+                const setting = args[0]?.toUpperCase();
+                if (setting === 'ON' || setting === 'OFF') {
+                    return { status: 'ok', data: `Tracing ${setting.toLowerCase()}` };
+                }
+                return { status: 'ok', data: 'Usage: TRACING ON|OFF' };
+            }
+            
+            capture(args) {
+                if (args.length === 0) {
+                    return { status: 'ok', data: 'Usage: CAPTURE filename.txt' };
+                }
+                return { status: 'ok', data: `Output capture to ${args[0]} (simulated)` };
+            }
+            
+            source(args) {
+                if (args.length === 0) {
+                    return { status: 'ok', data: 'Usage: SOURCE filename.cql' };
+                }
+                return { status: 'ok', data: `Executing script ${args[0]} (simulated)` };
+            }
+            
+            show(args) {
+                if (args.length === 0) {
+                    return { status: 'ok', data: 'Usage: SHOW VERSION|HOST|CLUSTER' };
+                }
+                
+                const target = args[0].toUpperCase();
+                switch (target) {
+                    case 'VERSION':
+                        return { status: 'ok', data: 'Cassandra Emulator 1.0.0' };
+                    case 'HOST':
+                        return { status: 'ok', data: 'Connected to: localhost:9042' };
+                    case 'CLUSTER':
+                        return { status: 'ok', data: 'Cluster: Test Cluster\nPartitioner: Murmur3Partitioner' };
+                    default:
+                        return { status: 'ok', data: 'Unknown SHOW target. Use VERSION, HOST, or CLUSTER' };
+                }
+            }
+            
+            login(args) {
+                if (args.length !== 2) {
+                    return { status: 'ok', data: 'Usage: LOGIN username password' };
+                }
+                return { status: 'ok', data: `Logged in as ${args[0]} (simulated)` };
+            }
+            
+            help(args) {
+                const helpText = `
+CQL Commands:
+  USE keyspace                    - Switch to keyspace
+  CREATE KEYSPACE name            - Create keyspace
+  CREATE TABLE name (...)         - Create table
+  CREATE INDEX ON table(col)      - Create index
+  CREATE TYPE name (...)          - Create user-defined type
+  
+  INSERT INTO table (cols) VALUES (vals) - Insert data
+  UPDATE table SET ... WHERE ... - Update data
+  SELECT ... FROM table WHERE ... - Query data
+  DELETE FROM table WHERE ...     - Delete data
+  
+  DROP TABLE|KEYSPACE name        - Drop objects
+  ALTER TABLE name ADD|DROP col   - Modify table schema
+  TRUNCATE table                  - Remove all data
+  DESCRIBE TABLE name             - Show table schema
+  
+Built-in Functions:
+  now()                          - Generate timeuuid
+  dateOf(timeuuid)              - Extract date from timeuuid
+  COUNT(*), SUM(col), AVG(col)   - Aggregate functions
+  MIN(col), MAX(col)             - Min/max functions
+  CAST(col AS type)              - Type casting
+  
+System Commands:
+  SHOW VERSION|HOST|CLUSTER      - Show system info
+  CONSISTENCY level              - Set consistency
+  TRACING ON|OFF                 - Enable query tracing
+  HELP                          - Show this help
+                `;
+                return { status: 'ok', data: helpText };
+            }
 
             batch(commandString) { /* ... (No change) ... */ const commands = commandString.replace(/BEGIN BATCH|APPLY BATCH;/gi, '').split(';').map(s => s.trim()).filter(Boolean); commands.forEach(cmd => { const result = this.execute(cmd); if (result.status === 'error') throw new Error(`Error in BATCH: ${result.message}`); }); return { status: 'ok', data: 'Batch applied.' }; }
         }
@@ -272,62 +643,140 @@
             const clearConsoleBtn = document.getElementById('clear-console-btn');
             const exampleCategoriesContainer = document.getElementById('example-categories');
 
+            // Cassandra Tutorial: Building an IoT Data Management System
+            // Follow these examples in order to learn Cassandra CQL through a practical scenario
             const examples = [
-                 {
-                    category: '1. Basic Setup & CRUD',
+                {
+                    category: '🌐 Tutorial: IoT Data Management System',
                     commands: [
-                        { description: 'Create and use a keyspace', code: `USE user_profiles;` },
-                        { description: 'Create a simple table with data types', code: `CREATE TABLE users (\n  username text,\n  email text,\n  age int,\n  PRIMARY KEY (username)\n);` },
-                        { description: 'Insert data with a simple key', code: `PUT INTO users KEY alice\n  username='Alice' email='alice@example.com' age=30;` },
-                        { description: 'Select data with a simple key', code: `SELECT * FROM users WHERE username = alice;` },
-                        { description: 'Delete the user alice', code: `DELETE FROM users WHERE username = alice;` },
+                        { description: '📚 Cassandra CQL Syntax Guide & Tutorial Introduction', code: '-- 🚀 Welcome to Cassandra CQL Tutorial!\n-- Learn Cassandra by building an IoT data management system step by step\n\n-- 📖 CASSANDRA CQL SYNTAX:\n-- Basic format: COMMAND [keyspace.]table\n-- Examples:\n--   CREATE TABLE users (id int PRIMARY KEY, name text);\n--   INSERT INTO users (id, name) VALUES (1, \'Alice\');\n--   SELECT * FROM users WHERE id = 1;\n--   UPDATE users SET name = \'Bob\' WHERE id = 1;\n--   DELETE FROM users WHERE id = 1;\n\n-- 🔑 PRIMARY KEY DESIGN:\n-- PRIMARY KEY (partition_key, clustering_key)\n-- Partition key determines data distribution\n-- Clustering key determines sort order within partition\n\n-- 📊 DATA TYPES:\n-- Basic: text, int, bigint, float, double, boolean, timestamp\n-- Collections: list<type>, set<type>, map<key_type, value_type>\n-- Advanced: uuid, timeuuid, inet, counter\n\n-- ⚡ QUERY PATTERNS:\n-- MUST include partition key in WHERE clause\n-- Can use clustering key with =, >, <, >=, <= operators\n-- Use ALLOW FILTERING for non-partition key queries (carefully!)\n\n-- 🏗️ BEST PRACTICES:\n-- 1. Design tables for your queries (query-first approach)\n-- 2. Minimize partition size (< 100MB recommended)\n-- 3. Use time-series patterns for time-based data\n-- 4. Leverage materialized views for different query patterns\n-- 5. Use batches for atomic writes to same partition\n\n-- Let\'s start building our IoT platform!' },
                     ]
                 },
                 {
-                    category: '2. Clustering Columns (Time Series)',
+                    category: '1️⃣ Keyspace & Basic Schema Design',
                     commands: [
-                        { description: 'Create a table for sensor data, partitioned by device and clustered by time', code: `CREATE TABLE sensor_data (\n  device_id text,\n  event_time int,\n  reading float,\n  PRIMARY KEY (device_id, event_time)\n);` },
-                        { description: 'Insert several readings for device-001', code: `PUT INTO sensor_data KEY device-001\n  device_id='device-001' event_time=100 reading=12.5;\nPUT INTO sensor_data KEY device-001\n  device_id='device-001' event_time=102 reading=12.6;` },
-                        { description: 'Select all data for device-001 (sorted by event_time ASC)', code: `SELECT * FROM sensor_data WHERE device_id = device-001;` },
-                        { description: 'Select recent readings using a range query', code: `SELECT * FROM sensor_data\nWHERE device_id = device-001 AND event_time > 100;` },
-                        { description: 'Get the latest reading by reversing the order', code: `SELECT * FROM sensor_data\nWHERE device_id = device-001\nORDER BY event_time DESC LIMIT 1;` },
+                        { description: 'Create keyspace for our IoT platform', code: 'CREATE KEYSPACE iot_platform \nWITH REPLICATION = {\n  \'class\': \'SimpleStrategy\',\n  \'replication_factor\': 3\n};' },
+                        { description: 'Switch to our keyspace', code: 'USE iot_platform;' },
+                        { description: 'Create devices table with basic info', code: 'CREATE TABLE devices (\n  device_id text,\n  device_name text,\n  device_type text,\n  location text,\n  status text,\n  last_seen timestamp,\n  PRIMARY KEY (device_id)\n);' },
+                        { description: 'Register our first IoT devices', code: 'INSERT INTO devices (\n  device_id, device_name, device_type, location, status\n) VALUES (\n  \'sensor_001\', \'Temperature Sensor A\', \'temperature\', \'Building A - Floor 1\', \'active\'\n);' },
+                        { description: 'Register more devices', code: 'INSERT INTO devices (\n  device_id, device_name, device_type, location, status\n) VALUES (\n  \'sensor_002\', \'Humidity Sensor B\', \'humidity\', \'Building A - Floor 2\', \'active\'\n);\n\nINSERT INTO devices (\n  device_id, device_name, device_type, location, status\n) VALUES (\n  \'sensor_003\', \'Motion Detector C\', \'motion\', \'Building B - Entrance\', \'active\'\n);' },
+                        { description: 'View all registered devices', code: 'SELECT * FROM devices;' },
                     ]
                 },
                 {
-                    category: '3. Collections, Updates & Batches',
+                    category: '2️⃣ Time Series Data - Sensor Readings',
                     commands: [
-                        { description: 'Create a table with collection types', code: `CREATE TABLE user_details (\n  username text,\n  phone_numbers list<text>,\n  awards set<text>,\n  PRIMARY KEY (username)\n);` },
-                        { description: 'Insert a user with collections', code: `PUT INTO user_details KEY chloe\n  username='Chloe' phone_numbers=['555-1234'] awards={'MVP'};` },
-                        { description: 'Add a new phone number to the list', code: `UPDATE user_details\nSET phone_numbers = phone_numbers + ['555-9999']\nWHERE username = chloe;` },
-                        { description: 'Remove an award from the set', code: `UPDATE user_details\nSET awards = awards - {'MVP'}\nWHERE username = chloe;` },
-                        { description: 'Perform multiple updates in a single batch', code: `BEGIN BATCH\n  UPDATE user_details SET awards = awards + {'Top Performer'} WHERE username = chloe;\n  PUT INTO users KEY david username='David' email='david@example.com';\nAPPLY BATCH;` },
+                        { description: 'Create time series table for sensor data (partitioned by device, clustered by time)', code: 'CREATE TABLE sensor_readings (\n  device_id text,\n  timestamp timestamp,\n  reading_value double,\n  reading_unit text,\n  reading_type text,\n  PRIMARY KEY (device_id, timestamp)\n) WITH CLUSTERING ORDER BY (timestamp DESC);' },
+                        { description: 'Insert temperature readings for sensor_001', code: 'INSERT INTO sensor_readings (\n  device_id, timestamp, reading_value, reading_unit, reading_type\n) VALUES (\n  \'sensor_001\', \'2025-01-15 10:00:00\', 22.5, \'celsius\', \'temperature\'\n);\n\nINSERT INTO sensor_readings (\n  device_id, timestamp, reading_value, reading_unit, reading_type\n) VALUES (\n  \'sensor_001\', \'2025-01-15 10:05:00\', 23.1, \'celsius\', \'temperature\'\n);' },
+                        { description: 'Insert humidity readings for sensor_002', code: 'INSERT INTO sensor_readings (\n  device_id, timestamp, reading_value, reading_unit, reading_type\n) VALUES (\n  \'sensor_002\', \'2025-01-15 10:00:00\', 65.2, \'percent\', \'humidity\'\n);\n\nINSERT INTO sensor_readings (\n  device_id, timestamp, reading_value, reading_unit, reading_type\n) VALUES (\n  \'sensor_002\', \'2025-01-15 10:05:00\', 64.8, \'percent\', \'humidity\'\n);' },
+                        { description: 'Get all readings for a specific device (newest first)', code: 'SELECT * FROM sensor_readings \nWHERE device_id = \'sensor_001\';' },
+                        { description: 'Get readings from a specific time range', code: 'SELECT * FROM sensor_readings \nWHERE device_id = \'sensor_001\' \n  AND timestamp >= \'2025-01-15 10:00:00\' \n  AND timestamp <= \'2025-01-15 10:05:00\';' },
+                        { description: 'Get the latest reading for a device', code: 'SELECT * FROM sensor_readings \nWHERE device_id = \'sensor_002\' \nLIMIT 1;' },
                     ]
                 },
                 {
-                    category: '4. Aggregates & IN Clause',
+                    category: '3️⃣ User-Defined Types & Complex Data',
                     commands: [
-                        { description: 'Get the total number of sensor readings', code: `SELECT COUNT(*) FROM sensor_data;` },
-                        { description: 'Get the average reading for device-001', code: `SELECT AVG(reading) FROM sensor_data\nWHERE device_id = device-001;` },
-                        { description: 'Select multiple users by key', code: `PUT INTO users KEY bob username='Bob' email='bob@example.com';\nSELECT * FROM users WHERE username IN (alice, bob);` },
-                    ]
-                },
-                 {
-                    category: '5. LWT, Altering Schema & TTL',
-                    commands: [
-                        { description: 'Safely insert a user only if they don\'t already exist', code: `PUT INTO users KEY erin\n  username='Erin' email='erin@example.com'\n  IF NOT EXISTS;` },
-                        { description: 'Add a new column to the users table', code: `ALTER TABLE users ADD city text;` },
-                        { description: 'Update a user with the new column', code: `UPDATE users SET city = 'Dublin' WHERE username = erin;` },
-                        { description: 'Insert a temporary key that expires in 60 seconds', code: `PUT INTO users KEY temp_user\n  username='Temp' USING TTL 60;` },
+                        { description: 'Create UDT for device configuration', code: 'CREATE TYPE device_config (\n  sampling_rate int,\n  threshold_min double,\n  threshold_max double,\n  alert_enabled boolean\n);' },
+                        { description: 'Create UDT for location coordinates', code: 'CREATE TYPE coordinates (\n  latitude double,\n  longitude double,\n  altitude double\n);' },
+                        { description: 'Create enhanced devices table with UDTs', code: 'CREATE TABLE enhanced_devices (\n  device_id text,\n  device_name text,\n  device_type text,\n  location_name text,\n  coordinates frozen<coordinates>,\n  config frozen<device_config>,\n  tags set<text>,\n  metadata map<text, text>,\n  created_at timestamp,\n  PRIMARY KEY (device_id)\n);' },
+                        { description: 'Insert device with complex data structures', code: 'INSERT INTO enhanced_devices (\n  device_id, device_name, device_type, location_name,\n  coordinates, config, tags, metadata, created_at\n) VALUES (\n  \'sensor_004\', \'Smart Temperature Sensor\', \'temperature\',\n  \'Building C - Server Room\',\n  {latitude: 40.7589, longitude: -73.9851, altitude: 100.5},\n  {sampling_rate: 30, threshold_min: 18.0, threshold_max: 25.0, alert_enabled: true},\n  {\'critical\', \'server-room\', \'temperature\'},\n  {\'manufacturer\': \'TechCorp\', \'model\': \'TC-T100\', \'firmware\': \'v1.2.3\'},\n  \'2025-01-15 09:00:00\'\n);' },
+                        { description: 'Insert another enhanced device', code: 'INSERT INTO enhanced_devices (\n  device_id, device_name, device_type, location_name,\n  coordinates, config, tags, metadata, created_at\n) VALUES (\n  \'sensor_005\', \'Environmental Monitor\', \'multi-sensor\',\n  \'Building C - Lobby\',\n  {latitude: 40.7590, longitude: -73.9850, altitude: 95.0},\n  {sampling_rate: 60, threshold_min: 20.0, threshold_max: 30.0, alert_enabled: false},\n  {\'environmental\', \'lobby\', \'multi-sensor\'},\n  {\'manufacturer\': \'EnviroTech\', \'model\': \'ET-M200\'},\n  \'2025-01-15 09:30:00\'\n);' },
+                        { description: 'Query devices with UDT fields', code: 'SELECT device_id, device_name, coordinates, config \nFROM enhanced_devices;' },
                     ]
                 },
                 {
-                    category: '6. UDTs & Built-in Functions',
+                    category: '4️⃣ Collections & Data Manipulation',
                     commands: [
-                        { description: 'Create a User-Defined Type for addresses', code: `CREATE TYPE full_address (\n  street text,\n  city text,\n  zip_code int\n);` },
-                        { description: 'Create a table that uses the UDT', code: `CREATE TABLE contacts (\n  id int,\n  event_id timeuuid,\n  address frozen<full_address>,\n  PRIMARY KEY (id, event_id)\n);` },
-                        { description: 'Insert data using the UDT and now() function', code: `PUT INTO contacts KEY 1\n  id=1 event_id=now() address={street:'123 Main St', city:'Anytown', zip_code:12345};` },
-                        { description: 'Extract the timestamp from the generated timeuuid', code: `SELECT dateOf(event_id) FROM contacts WHERE id = 1;` },
-                        { description: 'Cast a column to another type in a query', code: `SELECT CAST(age AS float) FROM users WHERE username = erin;` },
+                        { description: 'Update device tags (add new tags to set)', code: 'UPDATE enhanced_devices \nSET tags = tags + {\'high-priority\', \'monitored\'} \nWHERE device_id = \'sensor_004\';' },
+                        { description: 'Remove a tag from the set', code: 'UPDATE enhanced_devices \nSET tags = tags - {\'monitored\'} \nWHERE device_id = \'sensor_004\';' },
+                        { description: 'Add metadata entries to map', code: 'UPDATE enhanced_devices \nSET metadata = metadata + {\'last_maintenance\': \'2025-01-10\', \'warranty_expires\': \'2026-01-15\'} \nWHERE device_id = \'sensor_004\';' },
+                        { description: 'Create alerts table with list of affected devices', code: 'CREATE TABLE device_alerts (\n  alert_id timeuuid,\n  severity text,\n  message text,\n  affected_devices list<text>,\n  created_at timestamp,\n  resolved boolean,\n  PRIMARY KEY (alert_id)\n);' },
+                        { description: 'Create an alert affecting multiple devices', code: 'INSERT INTO device_alerts (\n  alert_id, severity, message, affected_devices, created_at, resolved\n) VALUES (\n  now(), \'high\', \'Temperature threshold exceeded\',\n  [\'sensor_001\', \'sensor_004\'], \'2025-01-15 11:00:00\', false\n);' },
+                        { description: 'Add more devices to the alert', code: 'UPDATE device_alerts \nSET affected_devices = affected_devices + [\'sensor_005\'] \nWHERE alert_id = now();' },
+                    ]
+                },
+                {
+                    category: '5️⃣ Advanced Querying & Filtering',
+                    commands: [
+                        { description: 'Create secondary index on device type for filtering', code: 'CREATE INDEX ON enhanced_devices (device_type);' },
+                        { description: 'Find all temperature sensors', code: 'SELECT device_id, device_name, location_name \nFROM enhanced_devices \nWHERE device_type = \'temperature\';' },
+                        { description: 'Query multiple devices by ID using IN clause', code: 'SELECT device_id, device_name, tags \nFROM enhanced_devices \nWHERE device_id IN (\'sensor_004\', \'sensor_005\');' },
+                        { description: 'Use ALLOW FILTERING for complex queries (use carefully in production)', code: 'SELECT device_id, device_name, created_at \nFROM enhanced_devices \nWHERE created_at > \'2025-01-15 09:15:00\' \nALLOW FILTERING;' },
+                    ]
+                },
+                {
+                    category: '6️⃣ Time-based Analytics & Aggregations',
+                    commands: [
+                        { description: 'Create daily aggregation table for analytics', code: 'CREATE TABLE daily_device_stats (\n  device_id text,\n  date date,\n  min_reading double,\n  max_reading double,\n  avg_reading double,\n  reading_count counter,\n  PRIMARY KEY (device_id, date)\n);' },
+                        { description: 'Add more sensor readings for analytics', code: 'INSERT INTO sensor_readings (\n  device_id, timestamp, reading_value, reading_unit, reading_type\n) VALUES (\n  \'sensor_001\', \'2025-01-15 10:10:00\', 24.2, \'celsius\', \'temperature\'\n);\n\nINSERT INTO sensor_readings (\n  device_id, timestamp, reading_value, reading_unit, reading_type\n) VALUES (\n  \'sensor_001\', \'2025-01-15 10:15:00\', 23.8, \'celsius\', \'temperature\'\n);' },
+                        { description: 'Get count of readings per device', code: 'SELECT device_id, COUNT(*) as reading_count \nFROM sensor_readings \nGROUP BY device_id;' },
+                        { description: 'Calculate average reading for a device', code: 'SELECT device_id, AVG(reading_value) as avg_reading \nFROM sensor_readings \nWHERE device_id = \'sensor_001\' \nGROUP BY device_id;' },
+                        { description: 'Get min/max readings for analytics', code: 'SELECT device_id, \n       MIN(reading_value) as min_reading,\n       MAX(reading_value) as max_reading \nFROM sensor_readings \nWHERE device_id = \'sensor_001\' \nGROUP BY device_id;' },
+                    ]
+                },
+                {
+                    category: '7️⃣ Built-in Functions & Data Manipulation',
+                    commands: [
+                        { description: 'Use now() function to generate timestamps', code: 'INSERT INTO sensor_readings (\n  device_id, timestamp, reading_value, reading_unit, reading_type\n) VALUES (\n  \'sensor_003\', now(), 1.0, \'boolean\', \'motion\'\n);' },
+                        { description: 'Extract date from timeuuid using dateOf()', code: 'SELECT alert_id, dateOf(alert_id) as alert_date, message \nFROM device_alerts;' },
+                        { description: 'Use CAST to convert data types', code: 'SELECT device_id, \n       CAST(reading_value AS int) as reading_int,\n       reading_value as reading_original \nFROM sensor_readings \nWHERE device_id = \'sensor_001\' \nLIMIT 3;' },
+                        { description: 'Create table with TTL for temporary data', code: 'CREATE TABLE temp_sensor_cache (\n  device_id text,\n  cached_at timestamp,\n  cached_value text,\n  PRIMARY KEY (device_id)\n);' },
+                        { description: 'Insert data with TTL (expires in 300 seconds)', code: 'INSERT INTO temp_sensor_cache (\n  device_id, cached_at, cached_value\n) VALUES (\n  \'sensor_001\', now(), \'cached_temperature_data\'\n) USING TTL 300;' },
+                    ]
+                },
+                {
+                    category: '8️⃣ Batch Operations & Atomic Writes',
+                    commands: [
+                        { description: 'Use batch to perform multiple related operations atomically', code: 'BEGIN BATCH\n  INSERT INTO sensor_readings (\n    device_id, timestamp, reading_value, reading_unit, reading_type\n  ) VALUES (\n    \'sensor_002\', \'2025-01-15 10:10:00\', 66.1, \'percent\', \'humidity\'\n  );\n  \n  UPDATE enhanced_devices \n  SET metadata = metadata + {\'last_reading\': \'2025-01-15 10:10:00\'} \n  WHERE device_id = \'sensor_002\';\n  \n  INSERT INTO device_alerts (\n    alert_id, severity, message, affected_devices, created_at, resolved\n  ) VALUES (\n    now(), \'low\', \'Routine data collection\', [\'sensor_002\'], now(), true\n  );\nAPPLY BATCH;' },
+                        { description: 'Batch operations for data consistency', code: 'BEGIN BATCH\n  UPDATE enhanced_devices \n  SET tags = tags + {\'batch-updated\'} \n  WHERE device_id = \'sensor_004\';\n  \n  UPDATE enhanced_devices \n  SET tags = tags + {\'batch-updated\'} \n  WHERE device_id = \'sensor_005\';\nAPPLY BATCH;' },
+                    ]
+                },
+                {
+                    category: '9️⃣ Light Weight Transactions & Conditional Operations',
+                    commands: [
+                        { description: 'Use IF NOT EXISTS for safe inserts', code: 'INSERT INTO enhanced_devices (\n  device_id, device_name, device_type, location_name, created_at\n) VALUES (\n  \'sensor_006\', \'New Pressure Sensor\', \'pressure\', \'Building D\', now()\n) IF NOT EXISTS;' },
+                        { description: 'Try to insert the same device again (should fail)', code: 'INSERT INTO enhanced_devices (\n  device_id, device_name, device_type, location_name, created_at\n) VALUES (\n  \'sensor_006\', \'Duplicate Sensor\', \'pressure\', \'Building D\', now()\n) IF NOT EXISTS;' },
+                        { description: 'Conditional update using IF clause', code: 'UPDATE enhanced_devices \nSET device_name = \'Updated Pressure Sensor\' \nWHERE device_id = \'sensor_006\' \nIF device_type = \'pressure\';' },
+                        { description: 'Update with wrong condition (should fail)', code: 'UPDATE enhanced_devices \nSET device_name = \'Wrong Update\' \nWHERE device_id = \'sensor_006\' \nIF device_type = \'temperature\';' },
+                    ]
+                },
+                {
+                    category: '🔟 Schema Evolution & Advanced Features',
+                    commands: [
+                        { description: 'Add new column to existing table', code: 'ALTER TABLE enhanced_devices \nADD installation_date timestamp;' },
+                        { description: 'Update devices with new column data', code: 'UPDATE enhanced_devices \nSET installation_date = \'2025-01-10 08:00:00\' \nWHERE device_id = \'sensor_004\';\n\nUPDATE enhanced_devices \nSET installation_date = \'2025-01-12 14:30:00\' \nWHERE device_id = \'sensor_005\';' },
+                        { description: 'Create materialized view for device type queries', code: 'CREATE MATERIALIZED VIEW devices_by_type AS\n  SELECT device_id, device_name, device_type, location_name\n  FROM enhanced_devices\n  WHERE device_type IS NOT NULL\n    AND device_id IS NOT NULL\n  PRIMARY KEY (device_type, device_id);' },
+                        { description: 'Query the materialized view', code: 'SELECT * FROM devices_by_type \nWHERE device_type = \'temperature\';' },
+                        { description: 'Drop the materialized view', code: 'DROP MATERIALIZED VIEW devices_by_type;' },
+                    ]
+                },
+                {
+                    category: '📊 Performance & Monitoring Queries',
+                    commands: [
+                        { description: 'Create index for better query performance', code: 'CREATE INDEX device_location_idx \nON enhanced_devices (location_name);' },
+                        { description: 'Query using the indexed column', code: 'SELECT device_id, device_name \nFROM enhanced_devices \nWHERE location_name = \'Building C - Server Room\';' },
+                        { description: 'List all indexes', code: 'SELECT index_name, kind, target \nFROM system.schema_columns \nWHERE keyspace_name = \'iot_platform\';' },
+                        { description: 'Get table statistics', code: 'SELECT table_name, bloom_filter_fp_chance, \n       compaction, compression \nFROM system_schema.tables \nWHERE keyspace_name = \'iot_platform\';' },
+                    ]
+                },
+                {
+                    category: '🗑️ Cleanup Operations',
+                    commands: [
+                        { description: 'Delete specific sensor reading', code: 'DELETE FROM sensor_readings \nWHERE device_id = \'sensor_003\' \n  AND timestamp = now();' },
+                        { description: 'Delete device entirely', code: 'DELETE FROM enhanced_devices \nWHERE device_id = \'sensor_006\';' },
+                        { description: 'Truncate table (remove all data)', code: 'TRUNCATE temp_sensor_cache;' },
+                        { description: 'Drop table', code: 'DROP TABLE temp_sensor_cache;' },
+                        { description: 'Drop user-defined type', code: 'DROP TYPE device_config;' },
+                    ]
+                },
+                {
+                    category: '❌ Common Error Examples',
+                    commands: [
+                        { description: 'Query without partition key (will fail)', code: 'SELECT * FROM sensor_readings \nWHERE reading_value > 20.0;' },
+                        { description: 'Invalid clustering order query', code: 'SELECT * FROM sensor_readings \nWHERE device_id = \'sensor_001\' \n  AND timestamp < \'2025-01-15\'\nORDER BY timestamp ASC;' },
+                        { description: 'Insert with missing required fields', code: 'INSERT INTO devices (device_name) \nVALUES (\'Incomplete Device\');' },
+                        { description: 'Update collection without proper syntax', code: 'UPDATE enhanced_devices \nSET tags = \'wrong_syntax\' \nWHERE device_id = \'sensor_004\';' },
                     ]
                 }
             ];
@@ -412,6 +861,164 @@
             clearConsoleBtn.addEventListener('click', () => {
                 consoleOutput.innerHTML = '<span class="prompt">></span> Console cleared.';
             });
+            
+            // Tab switching functionality
+            const tabBtns = document.querySelectorAll('.results-tab-btn');
+            const tabContents = document.querySelectorAll('.results-tab-content');
+            
+            tabBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    tabBtns.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    
+                    const targetTab = btn.getAttribute('data-tab');
+                    tabContents.forEach(content => {
+                        content.classList.add('hidden');
+                    });
+                    
+                    if (targetTab === 'console') {
+                        document.getElementById('console-output-content').classList.remove('hidden');
+                    } else if (targetTab === 'visualization') {
+                        document.getElementById('visualization-content').classList.remove('hidden');
+                        renderDatabaseVisualization();
+                    }
+                });
+            });
+            
+            function renderDatabaseVisualization() {
+                const visualContainer = document.getElementById('database-visualization');
+                if (!db.currentKeyspace) {
+                    visualContainer.innerHTML = '<div class="flex items-center justify-center h-full text-gray-400"><div class="text-center"><svg class="w-16 h-16 mx-auto mb-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7a8 4 0 0116 0zM12 3v4"></path></svg><p class="text-lg font-medium">No Keyspace Selected</p><p class="text-sm mt-2">Use a keyspace to see database structure</p></div></div>';
+                    return;
+                }
+                
+                const keyspace = db.keyspaces.get(db.currentKeyspace);
+                let html = '<div class="space-y-6">';
+                html += '<div class="flex items-center justify-between">';
+                html += '<h3 class="text-xl font-bold text-gray-200">Keyspace: <span class="text-teal-400">' + db.currentKeyspace + '</span></h3>';
+                html += '<div class="text-sm text-gray-400">' + keyspace.tables.size + ' table(s), ' + keyspace.udts.size + ' UDT(s)</div>';
+                html += '</div>';
+                
+                // Tables Section
+                html += '<div class="space-y-4">';
+                html += '<h4 class="text-lg font-semibold text-gray-300 border-b border-gray-600 pb-2">Tables (Column Families)</h4>';
+                
+                if (keyspace.tables.size === 0) {
+                    html += '<div class="text-center py-8 text-gray-500"><svg class="w-12 h-12 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg><p>No tables created yet</p></div>';
+                } else {
+                    for (const [tableName, tableData] of keyspace.tables) {
+                        const rowCount = Array.from(tableData.data.values()).reduce((total, partition) => total + partition.length, 0);
+                        const partitionCount = tableData.data.size;
+                        
+                        html += '<div class="bg-gray-800/50 rounded-lg p-4 border border-gray-700">';
+                        html += '<div class="flex items-center justify-between mb-3">';
+                        html += '<h5 class="text-lg font-medium text-sky-400">' + tableName + '</h5>';
+                        html += '<div class="text-xs text-gray-400">' + partitionCount + ' partition(s), ' + rowCount + ' row(s)</div>';
+                        html += '</div>';
+                        
+                        // Schema Information
+                        html += '<div class="grid md:grid-cols-2 gap-4 mb-4">';
+                        html += '<div><h6 class="text-sm font-medium text-gray-300 mb-2">Primary Key</h6>';
+                        html += '<div class="text-xs font-mono bg-gray-900/50 p-2 rounded">';
+                        html += '<span class="text-fuchsia-400">Partition:</span> ' + tableData.meta.primaryKey.partitionKey + '<br>';
+                        html += '<span class="text-orange-400">Clustering:</span> ' + (tableData.meta.primaryKey.clusteringKeys.join(', ') || 'None');
+                        html += '</div></div>';
+                        html += '<div><h6 class="text-sm font-medium text-gray-300 mb-2">Indexes</h6>';
+                        html += '<div class="text-xs font-mono bg-gray-900/50 p-2 rounded">';
+                        html += (tableData.meta.indexes.size > 0 ? Array.from(tableData.meta.indexes).join(', ') : 'No indexes');
+                        html += '</div></div></div>';
+                        
+                        // Columns
+                        html += '<div class="mb-4"><h6 class="text-sm font-medium text-gray-300 mb-2">Columns</h6>';
+                        html += '<div class="grid gap-2 max-h-32 overflow-y-auto custom-scrollbar">';
+                        
+                        for (const [colName, colType] of tableData.meta.columns) {
+                            const isPartitionKey = colName === tableData.meta.primaryKey.partitionKey;
+                            const isClusteringKey = tableData.meta.primaryKey.clusteringKeys.includes(colName);
+                            const hasIndex = tableData.meta.indexes.has(colName);
+                            
+                            html += '<div class="flex items-center justify-between text-xs font-mono bg-gray-900/30 p-2 rounded">';
+                            html += '<div class="flex items-center gap-2">';
+                            html += '<span class="text-gray-300">' + colName + '</span>';
+                            if (isPartitionKey) html += '<span class="text-fuchsia-400 text-[10px] bg-fuchsia-400/20 px-1 rounded">PK</span>';
+                            if (isClusteringKey) html += '<span class="text-orange-400 text-[10px] bg-orange-400/20 px-1 rounded">CK</span>';
+                            if (hasIndex) html += '<span class="text-blue-400 text-[10px] bg-blue-400/20 px-1 rounded">IDX</span>';
+                            html += '</div>';
+                            html += '<span class="text-gray-400">' + colType + '</span>';
+                            html += '</div>';
+                        }
+                        
+                        html += '</div></div>';
+                        
+                        // Sample Data
+                        html += '<div><h6 class="text-sm font-medium text-gray-300 mb-2">Sample Data</h6>';
+                        html += '<div class="bg-gray-900/50 p-2 rounded text-xs font-mono max-h-48 overflow-auto custom-scrollbar">';
+                        
+                        if (rowCount === 0) {
+                            html += '<div class="text-gray-500 text-center py-4">No data</div>';
+                        } else {
+                            // Show sample data from first few partitions
+                            let sampleCount = 0;
+                            const maxSamples = 5;
+                            
+                            for (const [partitionKey, partition] of tableData.data) {
+                                if (sampleCount >= maxSamples) break;
+                                
+                                html += '<div class="text-fuchsia-400 mb-1">Partition: ' + partitionKey + '</div>';
+                                
+                                for (const row of partition.slice(0, 3)) {
+                                    if (sampleCount >= maxSamples) break;
+                                    
+                                    const validRow = db._getValidRow(row);
+                                    if (validRow) {
+                                        const rowData = Array.from(validRow.entries())
+                                            .map(([col, data]) => col + ': ' + JSON.stringify(data.value))
+                                            .join(', ');
+                                        html += '<div class="text-gray-300 ml-4 mb-1">{' + rowData + '}</div>';
+                                        sampleCount++;
+                                    }
+                                }
+                                
+                                if (partition.length > 3) {
+                                    html += '<div class="text-gray-500 ml-4 mb-2">... and ' + (partition.length - 3) + ' more rows</div>';
+                                }
+                            }
+                            
+                            if (tableData.data.size > 1) {
+                                html += '<div class="text-gray-500 mt-2">... and ' + (tableData.data.size - 1) + ' more partitions</div>';
+                            }
+                        }
+                        
+                        html += '</div></div></div>';
+                    }
+                }
+                
+                // UDTs Section
+                html += '</div><div class="space-y-4">';
+                html += '<h4 class="text-lg font-semibold text-gray-300 border-b border-gray-600 pb-2">User Defined Types (UDTs)</h4>';
+                
+                if (keyspace.udts.size === 0) {
+                    html += '<div class="text-center py-8 text-gray-500"><svg class="w-12 h-12 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg><p>No UDTs defined</p></div>';
+                } else {
+                    for (const [udtName, udtFields] of keyspace.udts) {
+                        html += '<div class="bg-gray-800/50 rounded-lg p-4 border border-gray-700">';
+                        html += '<h5 class="text-lg font-medium text-indigo-400 mb-3">' + udtName + '</h5>';
+                        html += '<div class="grid gap-2">';
+                        
+                        for (const [fieldName, fieldType] of udtFields) {
+                            html += '<div class="flex items-center justify-between text-sm font-mono bg-gray-900/30 p-2 rounded">';
+                            html += '<span class="text-gray-300">' + fieldName + '</span>';
+                            html += '<span class="text-gray-400">' + fieldType + '</span>';
+                            html += '</div>';
+                        }
+                        
+                        html += '</div></div>';
+                    }
+                }
+                
+                html += '</div></div>';
+                visualContainer.innerHTML = html;
+            }
 
             const resizer = document.getElementById('resizer');
             const editorContainer = document.getElementById('editor-container');

@@ -34,7 +34,7 @@
 <body class="flex flex-col h-screen">
 
     <header class="bg-[#282828] text-white flex items-center justify-between px-4 py-2 flex-shrink-0 border-b border-gray-700">
-        <h1 class="text-xl font-semibold text-gray-300">In-Memory Document Database</h1>
+        <h1 class="text-xl font-semibold text-gray-300">MongoDB Command Editor</h1>
     </header>
 
     <main class="flex flex-grow overflow-hidden md:flex-row flex-col">
@@ -260,6 +260,8 @@
                 this.users = {'admin': {password: 'pass', roles: ['admin']}};
                 this.currentUser = 'admin';
                 this.schemas = {};
+                this.indexes = {};  // Store index definitions by collection
+                this.changeStreams = {};  // Store change stream watchers
                 this.inTransaction = false;
                 this.transactionState = null;
             }
@@ -288,6 +290,15 @@
                         case 'SHOW': return this.show(args); 
                         case 'DROP': return this.dropCollection(args); 
                         case 'DROPDATABASE': return this.dropDatabase(); 
+                        case 'CREATEINDEX': return this.createIndex(args);
+                        case 'DROPINDEX': return this.dropIndex(args);
+                        case 'LISTINDEXES': return this.listIndexes(args);
+                        case 'REINDEX': return this.reIndex(args);
+                        case 'WATCH': return this.watch(args);
+                        case 'BULKWRITE': return this.bulkWrite(args);
+                        case 'FINDANDMODIFY': return this.findAndModify(args);
+                        case 'DISTINCT': return this.distinct(args);
+                        case 'MAPREDUCE': return this.mapReduce(args);
                         case 'STARTTRANSACTION': return this.startTransaction();
                         case 'COMMIT': return this.commitTransaction();
                         case 'ROLLBACK': return this.rollbackTransaction();
@@ -366,14 +377,19 @@
 
             find(args) { 
                 if (args.length < 1) throw new Error("FIND requires at least a collection name."); 
-                const [collectionName, queryStr, projectionStr, sortStr] = args; 
+                const [collectionName, queryStr, projectionStr, sortStr, limitStr, skipStr] = args; 
                 const db = this.inTransaction ? this.transactionState.databases : this.databases;
                 const collection = this._getCollection(collectionName, db); 
                 const query = queryStr ? this._parseCustomTypes(queryStr) : {}; 
                 const projection = projectionStr ? JSON.parse(projectionStr) : null; 
                 const sort = sortStr ? JSON.parse(sortStr) : null; 
+                const limit = limitStr ? parseInt(limitStr) : null;
+                const skip = skipStr ? parseInt(skipStr) : null;
+                
                 let results = collection.filter(doc => this._matchDoc(doc, query)); 
                 if (sort) { results = this._applySort(results, sort); } 
+                if (skip) { results = results.slice(skip); }
+                if (limit) { results = results.slice(0, limit); }
                 if (projection) { results = this._applyProjection(results, projection); } 
                 return { status: 'ok', data: results }; 
             } 
@@ -425,9 +441,23 @@
                         case '$group': currentResults = this._applyGroup(currentResults, stageBody); break; 
                         case '$sort': currentResults = this._applySort(currentResults, stageBody); break; 
                         case '$limit': currentResults = currentResults.slice(0, stageBody); break; 
+                        case '$skip': currentResults = currentResults.slice(stageBody); break;
                         case '$project': currentResults = this._applyProjection(currentResults, stageBody); break; 
                         case '$unwind': currentResults = this._applyUnwind(currentResults, stageBody); break; 
                         case '$lookup': currentResults = this._applyLookup(currentResults, stageBody, db); break;
+                        case '$facet': currentResults = this._applyFacet(currentResults, stageBody, db); break;
+                        case '$bucket': currentResults = this._applyBucket(currentResults, stageBody); break;
+                        case '$bucketAuto': currentResults = this._applyBucketAuto(currentResults, stageBody); break;
+                        case '$sample': currentResults = this._applySample(currentResults, stageBody); break;
+                        case '$addFields': currentResults = this._applyAddFields(currentResults, stageBody); break;
+                        case '$replaceRoot': currentResults = this._applyReplaceRoot(currentResults, stageBody); break;
+                        case '$out': return this._applyOut(currentResults, stageBody, db); 
+                        case '$merge': return this._applyMerge(currentResults, stageBody, db);
+                        case '$geoNear': currentResults = this._applyGeoNear(currentResults, stageBody); break;
+                        case '$redact': currentResults = this._applyRedact(currentResults, stageBody); break;
+                        case '$graphLookup': currentResults = this._applyGraphLookup(currentResults, stageBody, db); break;
+                        case '$collStats': currentResults = this._applyCollStats(currentResults, collectionName); break;
+                        case '$indexStats': currentResults = this._applyIndexStats(currentResults, collectionName); break;
                         default: throw new Error(`Unsupported aggregation stage: ${stageName}`); 
                     } 
                 } 
@@ -550,12 +580,233 @@
                 validateRecursive(doc, schema);
             }
 
+            // Index Management methods
+            createIndex(args) {
+                if (this.currentUser !== 'admin') throw new Error("Authentication failed. Only admin can create indexes.");
+                if (args.length < 2) throw new Error("CREATEINDEX requires a collection and a field specification.");
+                const [collectionName, fieldSpec, options] = args;
+                
+                const indexKey = `${this.activeDbName}.${collectionName}`;
+                if (!this.indexes[indexKey]) this.indexes[indexKey] = {};
+                
+                let indexName = fieldSpec;
+                if (options) {
+                    const opts = this._parseCustomTypes(options);
+                    indexName = opts.name || fieldSpec;
+                }
+                
+                if (this.indexes[indexKey][indexName]) {
+                    throw new Error(`Index '${indexName}' already exists on collection '${collectionName}'.`);
+                }
+                
+                this.indexes[indexKey][indexName] = {
+                    field: fieldSpec,
+                    created: new Date(),
+                    options: options ? this._parseCustomTypes(options) : {}
+                };
+                
+                return { status: 'ok', data: `Index '${indexName}' created on collection '${collectionName}'.` };
+            }
+
+            dropIndex(args) {
+                if (this.currentUser !== 'admin') throw new Error("Authentication failed. Only admin can drop indexes.");
+                if (args.length !== 2) throw new Error("DROPINDEX requires a collection and an index name.");
+                const [collectionName, indexName] = args;
+                
+                const indexKey = `${this.activeDbName}.${collectionName}`;
+                if (!this.indexes[indexKey] || !this.indexes[indexKey][indexName]) {
+                    throw new Error(`Index '${indexName}' not found on collection '${collectionName}'.`);
+                }
+                
+                delete this.indexes[indexKey][indexName];
+                return { status: 'ok', data: `Index '${indexName}' dropped from collection '${collectionName}'.` };
+            }
+
+            listIndexes(args) {
+                if (args.length !== 1) throw new Error("LISTINDEXES requires a collection name.");
+                const [collectionName] = args;
+                
+                const indexKey = `${this.activeDbName}.${collectionName}`;
+                const indexes = this.indexes[indexKey] || {};
+                
+                const indexList = Object.keys(indexes).map(name => ({
+                    name: name,
+                    field: indexes[name].field,
+                    created: indexes[name].created,
+                    options: indexes[name].options
+                }));
+                
+                return { status: 'ok', data: indexList };
+            }
+
+            reIndex(args) {
+                if (this.currentUser !== 'admin') throw new Error("Authentication failed. Only admin can reindex.");
+                if (args.length !== 1) throw new Error("REINDEX requires a collection name.");
+                const [collectionName] = args;
+                
+                const indexKey = `${this.activeDbName}.${collectionName}`;
+                const indexes = this.indexes[indexKey] || {};
+                const indexCount = Object.keys(indexes).length;
+                
+                // Simulate rebuilding indexes
+                for (let indexName in indexes) {
+                    indexes[indexName].rebuilt = new Date();
+                }
+                
+                return { status: 'ok', data: `Rebuilt ${indexCount} indexes on collection '${collectionName}'.` };
+            }
+
+            // Advanced MongoDB Commands
+            watch(args) {
+                if (args.length !== 1) throw new Error("WATCH requires a collection name.");
+                const [collectionName] = args;
+                
+                const streamKey = `${this.activeDbName}.${collectionName}`;
+                if (!this.changeStreams[streamKey]) {
+                    this.changeStreams[streamKey] = {
+                        created: new Date(),
+                        events: []
+                    };
+                }
+                
+                return { status: 'ok', data: `Change stream started for collection '${collectionName}'.` };
+            }
+
+            bulkWrite(args) {
+                if (args.length !== 2) throw new Error("BULKWRITE requires a collection and operations array.");
+                const [collectionName, operationsStr] = args;
+                const operations = this._parseCustomTypes(operationsStr);
+                
+                const db = this.inTransaction ? this.transactionState.databases : this.databases;
+                const collection = this._getCollection(collectionName, db);
+                
+                let insertedCount = 0, modifiedCount = 0, deletedCount = 0;
+                
+                for (const op of operations) {
+                    if (op.insertOne) {
+                        const doc = op.insertOne.document;
+                        if (!doc._id) doc._id = this._generateObjectId();
+                        collection.push(doc);
+                        insertedCount++;
+                    } else if (op.updateOne) {
+                        const filter = op.updateOne.filter;
+                        const update = op.updateOne.update;
+                        const docIndex = collection.findIndex(doc => this._matchDoc(doc, filter));
+                        if (docIndex > -1) {
+                            this._applyUpdate(collection[docIndex], update);
+                            modifiedCount++;
+                        }
+                    } else if (op.deleteOne) {
+                        const filter = op.deleteOne.filter;
+                        const docIndex = collection.findIndex(doc => this._matchDoc(doc, filter));
+                        if (docIndex > -1) {
+                            collection.splice(docIndex, 1);
+                            deletedCount++;
+                        }
+                    }
+                }
+                
+                return { 
+                    status: 'ok', 
+                    data: { insertedCount, modifiedCount, deletedCount }
+                };
+            }
+
+            findAndModify(args) {
+                if (args.length < 3) throw new Error("FINDANDMODIFY requires collection, query, and update.");
+                const [collectionName, queryStr, updateStr, optionsStr] = args;
+                
+                const db = this.inTransaction ? this.transactionState.databases : this.databases;
+                const collection = this._getCollection(collectionName, db);
+                const query = this._parseCustomTypes(queryStr);
+                const update = this._parseCustomTypes(updateStr);
+                const options = optionsStr ? this._parseCustomTypes(optionsStr) : {};
+                
+                const docIndex = collection.findIndex(doc => this._matchDoc(doc, query));
+                
+                if (docIndex > -1) {
+                    const originalDoc = JSON.parse(JSON.stringify(collection[docIndex]));
+                    this._applyUpdate(collection[docIndex], update);
+                    return { 
+                        status: 'ok', 
+                        data: options.new ? collection[docIndex] : originalDoc 
+                    };
+                } else if (options.upsert) {
+                    const newDoc = { ...query, ...update.$set || {} };
+                    if (!newDoc._id) newDoc._id = this._generateObjectId();
+                    collection.push(newDoc);
+                    return { status: 'ok', data: newDoc };
+                }
+                
+                return { status: 'ok', data: null };
+            }
+
+            distinct(args) {
+                if (args.length < 2) throw new Error("DISTINCT requires collection and field name.");
+                const [collectionName, field, queryStr] = args;
+                
+                const db = this.inTransaction ? this.transactionState.databases : this.databases;
+                const collection = this._getCollection(collectionName, db);
+                const query = queryStr ? this._parseCustomTypes(queryStr) : {};
+                
+                const matchingDocs = collection.filter(doc => this._matchDoc(doc, query));
+                const values = new Set();
+                
+                matchingDocs.forEach(doc => {
+                    const fieldValue = this._getNestedValue(doc, field);
+                    if (fieldValue !== undefined) {
+                        values.add(fieldValue);
+                    }
+                });
+                
+                return { status: 'ok', data: Array.from(values) };
+            }
+
+            mapReduce(args) {
+                if (args.length < 3) throw new Error("MAPREDUCE requires collection, map function, and reduce function.");
+                const [collectionName, mapStr, reduceStr, optionsStr] = args;
+                
+                const db = this.inTransaction ? this.transactionState.databases : this.databases;
+                const collection = this._getCollection(collectionName, db);
+                const options = optionsStr ? this._parseCustomTypes(optionsStr) : {};
+                
+                // Simple map-reduce simulation
+                const mapResults = [];
+                collection.forEach(doc => {
+                    if (!options.query || this._matchDoc(doc, options.query)) {
+                        // Simulate map function execution
+                        mapResults.push({ _id: doc._id, value: doc });
+                    }
+                });
+                
+                // Simulate reduce phase - group by _id and count
+                const reduced = mapResults.reduce((acc, item) => {
+                    const key = item._id;
+                    if (!acc[key]) acc[key] = [];
+                    acc[key].push(item.value);
+                    return acc;
+                }, {});
+                
+                const results = Object.keys(reduced).map(key => ({
+                    _id: key,
+                    value: reduced[key].length
+                }));
+                
+                return { status: 'ok', data: results };
+            }
+
             // Private helper methods
             _getCollection(collectionName, db = this.databases) { 
                 if (!db[this.activeDbName][collectionName]) { 
                     db[this.activeDbName][collectionName] = []; 
                 } 
                 return db[this.activeDbName][collectionName]; 
+            }
+
+            _getNestedValue(obj, path) {
+                return path.split('.').reduce((current, key) => {
+                    return current && current[key] !== undefined ? current[key] : undefined;
+                }, obj);
             }
 
             _isPointInPolygon(point, polygon) {
@@ -792,6 +1043,14 @@
                 ],
                 "Advanced Aggregation": [
                     { desc: "Aggregate with `$group` & `$lookup`", cmd: 'INSERT products \'{"_id": "pen", "category": "writing"}\'\nINSERT products \'{"_id": "pencil", "category": "writing"}\'\nINSERT sales \'{"item": "pen", "price": 2, "quantity": 50}\'\nINSERT sales \'{"item": "pencil", "price": 1, "quantity": 100}\'\nINSERT sales \'{"item": "pen", "price": 3, "quantity": 20}\'\nAGGREGATE sales \'[{"$lookup": {"from": "products", "localField": "item", "foreignField": "_id", "as": "product_info" }},{"$unwind":"$product_info"},{"$group": {"_id":"$product_info.category","total_quantity": {"$sum":"$quantity"}}}]\'\nFIND sales' }
+                ],
+                "Index Management": [
+                    { desc: "Create an index on a field", cmd: 'CREATEINDEX users name' },
+                    { desc: "Create a named index with options", cmd: 'CREATEINDEX users email \'{"name": "email_index", "unique": true}\'' },
+                    { desc: "List all indexes on a collection", cmd: 'LISTINDEXES users' },
+                    { desc: "Drop a specific index", cmd: 'DROPINDEX users name' },
+                    { desc: "Rebuild all indexes on a collection", cmd: 'REINDEX users' },
+                    { desc: "Create compound index", cmd: 'CREATEINDEX products \'category,name\' \'{"name": "category_name_idx"}\'' }
                 ]
             };
 
