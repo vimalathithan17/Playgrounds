@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Key-Value Store (Final Version)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    
+    <!-- CodeMirror for the editor -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/theme/material-darker.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/mode/shell/shell.min.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #1a1a1a; color: #e0e0e0; overflow: hidden; }
+        .CodeMirror { font-family: 'Fira Code', monospace; font-size: 14px; line-height: 21px; height: 100%; background-color: #1e1e1e; }
+        .CodeMirror-gutters { background-color: #252526 !important; border-right: 1px solid #3a3a3a; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #2d2d2d; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #555; border-radius: 3px; }
+        .resizer { background-color: #3a3a3a; cursor: row-resize; width: 100%; height: 5px; z-index: 10; }
+        .console-output { font-family: 'Fira Code', monospace; white-space: pre-wrap; word-wrap: break-word; }
+        .console-output .ok { color: #6ee7b7; }
+        .console-output .error { color: #f472b6; }
+        .console-output .prompt { color: #6b7280; }
+        .mobile-nav-btn.active { color: #6ee7b7; border-color: #6ee7b7; }
+        .results-tab-btn.active { border-color: #6ee7b7; background-color: #2d2d2d; }
+    </style>
+</head>
+<body class="flex flex-col h-screen">
+
+    <main class="flex flex-grow overflow-hidden md:flex-row flex-col">
+        <!-- Left Panel for Info and Examples -->
+        <div id="left-panel" class="w-full md:w-2/5 h-full bg-[#1e1e1e] p-6 custom-scrollbar overflow-y-auto border-r border-gray-700 hidden md:block">
+            <div class="prose prose-invert max-w-none">
+                <h2 class="text-2xl font-bold text-gray-100">Key-Value Store (Redis-like)</h2>
+                <p class="text-sm text-gray-400">
+                    A feature-complete emulator including all major data structures, Pub/Sub, and Geospatial commands.
+                </p>
+
+                <!-- Data Model -->
+                <div class="my-6 p-4 rounded-lg bg-gray-800/50 border border-gray-700">
+                    <h3 class="text-lg font-semibold text-gray-200 mb-4 text-center">Data Model Hierarchy 🏛️</h3>
+                    <div class="flex flex-col items-center justify-around gap-2 text-center">
+                        <div class="flex flex-col items-center p-2">
+                            <svg class="w-12 h-12 mb-2 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7a8 4 0 0116 0zM12 3v4"></path></svg>
+                            <h4 class="font-semibold text-gray-200">Database</h4>
+                            <p class="text-xs text-gray-400">Numbered DBs (e.g., 0, 1, 2...)</p>
+                        </div>
+                        <div class="text-gray-500 text-2xl font-light">↓</div>
+                        <div class="flex flex-col items-center p-2">
+                            <svg class="w-12 h-12 mb-2 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 5.25a3 3 0 013 3m3 0a9 9 0 11-18 0 9 9 0 0118 0zM12.75 15.75a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                            <h4 class="font-semibold text-gray-200">Key</h4>
+                            <p class="text-xs text-gray-400">A unique string identifier</p>
+                        </div>
+                        <div class="text-gray-500 text-2xl font-light">↓</div>
+                        <div class="flex flex-col items-center p-2">
+                           <svg class="w-12 h-12 mb-2 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
+                            <h4 class="font-semibold text-gray-200">Value</h4>
+                            <p class="text-xs text-gray-400">String, List, Hash, Set, etc.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stream Simulator -->
+                <div class="bg-[#2d2d2d] rounded-md p-4 my-6">
+                    <h3 class="text-lg font-semibold mb-3 text-gray-200">Event Producer Simulator</h3>
+                    <div class="space-y-3">
+                        <div>
+                            <label for="stream-key-input" class="text-xs font-medium text-gray-400">Stream Key / Pub/Sub Channel</label>
+                            <input type="text" id="stream-key-input" value="sensor:log" class="w-full bg-[#1e1e1e] border border-gray-600 rounded-md px-2 py-1 text-sm mt-1">
+                        </div>
+                        <div>
+                            <label for="stream-config-input" class="text-xs font-medium text-gray-400">Data Schema (JSON)</label>
+                            <textarea id="stream-config-input" rows="5" class="w-full bg-[#1e1e1e] border border-gray-600 rounded-md px-2 py-1 text-xs font-mono mt-1 custom-scrollbar"></textarea>
+                        </div>
+                        <div class="flex gap-2">
+                            <button id="start-stream-btn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-3 py-1.5 rounded-md text-sm">Start</button>
+                            <button id="stop-stream-btn" class="flex-1 bg-red-600 hover:bg-red-700 text-white font-semibold px-3 py-1.5 rounded-md text-sm" disabled>Stop</button>
+                        </div>
+                        <div id="stream-status" class="text-xs text-center text-gray-500 h-4"></div>
+                    </div>
+                </div>
+
+                <div id="example-categories" class="space-y-4 mt-6">
+                    <!-- Example categories will be populated by JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel for Editor and Results -->
+        <div id="right-panel" class="flex flex-col w-full md:w-3/5 h-full bg-[#252526]">
+            <div id="editor-container" class="flex-grow flex flex-col overflow-hidden" style="height: 60%;">
+                <div id="editor-wrapper" class="flex-grow relative">
+                    <textarea id="command-editor"></textarea>
+                </div>
+                <div id="action-bar" class="flex-shrink-0 bg-[#282828] p-2 flex justify-end items-center gap-3 border-t border-gray-700">
+                    <button id="run-command-btn" class="bg-green-600 hover:bg-green-700 text-white font-semibold px-4 py-1.5 rounded-md text-sm">Run Commands (Ctrl+Enter)</button>
+                </div>
+            </div>
+
+            <div id="resizer" class="resizer hidden md:block"></div>
+
+            <div id="results-container" class="flex-grow flex flex-col overflow-hidden" style="height: 40%;">
+                <div class="flex-shrink-0 bg-[#282828] border-b border-gray-700">
+                    <div class="flex items-center justify-between p-2">
+                        <div class="flex">
+                             <button class="results-tab-btn active px-3 py-1 text-sm font-medium border-b-2 border-transparent" data-tab="console">Console</button>
+                             <button class="results-tab-btn px-3 py-1 text-sm font-medium border-b-2 border-transparent" data-tab="subscriptions">Subscriptions</button>
+                             <button class="results-tab-btn px-3 py-1 text-sm font-medium border-b-2 border-transparent" data-tab="visualization">Visualization</button>
+                        </div>
+                        <button id="clear-console-btn" class="text-xs text-gray-400 hover:text-white">Clear</button>
+                    </div>
+                </div>
+                <div id="console-output-content" class="results-tab-content flex-grow bg-[#1e1e1e] overflow-auto custom-scrollbar p-3 console-output">
+                    <span class="prompt">></span> Welcome! Check the new Visualization tab to see your data.
+                </div>
+                 <div id="subscriptions-content" class="results-tab-content hidden flex-grow bg-[#1e1e1e] overflow-auto custom-scrollbar p-3 console-output">
+                    <span class="prompt">></span> No subscriptions active. Use SUBSCRIBE command.
+                </div>
+                <div id="visualization-content" class="results-tab-content hidden flex-grow bg-[#1e1e1e] overflow-auto custom-scrollbar p-3">
+                    <!-- DB Visualization will be rendered here -->
+                </div>
+            </div>
+        </div>
+    </main>
+    
+    <!-- Mobile Navigation -->
+    <nav class="md:hidden bg-[#282828] border-t border-gray-700 w-full flex-shrink-0">
+        <button class="mobile-nav-btn active flex-1 p-3 text-sm text-center font-medium border-t-2" data-view="info">Info</button>
+        <button class="mobile-nav-btn flex-1 p-3 text-sm text-center font-medium border-t-2 border-transparent" data-view="editor">Editor</button>
+    </nav>
+
+
+    <script>
+        // --- DEDICATED KEY-VALUE STORE CLASS (Complete) ---
+        class KeyValueStore {
+            constructor() { this.databases = [new Map()]; this.expirations = [new Map()]; this.activeDbIndex = 0; this.transactionQueue = null; this.subscriptions = new Map(); this.pubSubCallback = null; }
+            setPubSubCallback(callback) { this.pubSubCallback = callback; }
+            execute(commandString, isFromTransaction = false) { try { if (!commandString || commandString.trim() === '') throw new Error("Command cannot be empty."); const parts = commandString.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g).map(p => p.replace(/^['"]|['"]$/g, '')); const command = parts[0].toUpperCase(); const args = parts.slice(1); if (this.transactionQueue !== null && !['EXEC', 'DISCARD'].includes(command) && !isFromTransaction) { this.transactionQueue.push(commandString); return { status: 'ok', data: 'QUEUED' }; } switch (command) { case 'SET': return this.set(args); case 'GET': return this.get(args); case 'INCR': return this.incrby(args, 1); case 'DECR': return this.incrby(args, -1); case 'INCRBY': return this.incrby(args, parseInt(args[1])); case 'DECRBY': return this.incrby(args, -parseInt(args[1])); case 'DEL': return this.del(args); case 'SELECT': return this.select(args); case 'EXPIRE': return this.expire(args); case 'TTL': return this.ttl(args); case 'EXISTS': return this.exists(args); case 'KEYS': return this.keys(args); case 'FLUSHDB': return this.flushdb(); case 'LPUSH': return this.lpush(args); case 'RPUSH': return this.rpush(args); case 'LPOP': return this.lpop(args); case 'RPOP': return this.rpop(args); case 'LRANGE': return this.lrange(args); case 'HSET': return this.hset(args); case 'HGET': return this.hget(args); case 'HGETALL': return this.hgetall(args); case 'HDEL': return this.hdel(args); case 'SADD': return this.sadd(args); case 'SMEMBERS': return this.smembers(args); case 'SREM': return this.srem(args); case 'SISMEMBER': return this.sismember(args); case 'SCARD': return this.scard(args); case 'ZADD': return this.zadd(args); case 'ZRANGE': return this.zrange(args); case 'ZREM': return this.zrem(args); case 'ZCARD': return this.zcard(args); case 'MULTI': return this.multi(); case 'EXEC': return this.exec(); case 'DISCARD': return this.discard(); case 'XADD': return this.xadd(args); case 'XRANGE': return this.xrange(args); case 'XREAD': return this.xread(args); case 'XGROUP': return this.xgroup(args); case 'XREADGROUP': return this.xreadgroup(args); case 'XACK': return this.xack(args); case 'SUBSCRIBE': return this.subscribe(args); case 'UNSUBSCRIBE': return this.unsubscribe(args); case 'PUBLISH': return this.publish(args); case 'GEOADD': return this.geoadd(args); case 'GEORADIUS': return this.georadius(args); default: throw new Error(`Unknown command: '${command}'`); } } catch (e) { if (isFromTransaction) throw e; return { status: 'error', message: e.message }; } }
+            _isExpired(key) { const dbExpirations = this.expirations[this.activeDbIndex]; if (dbExpirations.has(key) && dbExpirations.get(key) < Date.now()) { this.databases[this.activeDbIndex].delete(key); dbExpirations.delete(key); return true; } return false; }
+            _getKey(key, expectedType) { if (this._isExpired(key)) return undefined; const db = this.databases[this.activeDbIndex]; const value = db.get(key); if (value === undefined) return undefined; const typeError = "WRONGTYPE Operation against a key holding the wrong kind of value"; if (expectedType === 'string' && !(typeof value === 'string')) throw new Error(typeError); if (expectedType === 'list' && !Array.isArray(value)) throw new Error(typeError); if (expectedType === 'hash' && !(value instanceof Map)) throw new Error(typeError); if (expectedType === 'set' && !(value instanceof Set)) throw new Error(typeError); if (expectedType === 'zset' && (!Array.isArray(value) || (value.length > 0 && !value[0].hasOwnProperty('score')))) throw new Error(typeError); if (expectedType === 'stream' && (!value.hasOwnProperty('entries') || !value.hasOwnProperty('groups'))) throw new Error(typeError); if (expectedType === 'geo' && (!Array.isArray(value) || (value.length > 0 && !value[0].hasOwnProperty('lon')))) throw new Error(typeError); return value; }
+            set(args) { if (args.length !== 2) throw new Error("SET requires a key and a value."); const [key, value] = args; this.databases[this.activeDbIndex].set(key, value); this.expirations[this.activeDbIndex].delete(key); return { status: 'ok', data: 'OK' }; }
+            get(args) { if (args.length !== 1) throw new Error("GET requires a key."); const value = this._getKey(args[0], 'string'); return { status: 'ok', data: value !== undefined ? `"${value}"` : '(nil)' }; }
+            incrby(args, increment) { const key = args[0]; if (!key) throw new Error("Command requires a key."); if (isNaN(increment)) throw new Error("Increment must be an integer."); let value = this._getKey(key, 'string'); let num = parseInt(value); if (value === undefined) { num = 0; } if (isNaN(num)) throw new Error("ERR value is not an integer or out of range"); const newValue = num + increment; this.databases[this.activeDbIndex].set(key, newValue.toString()); return { status: 'ok', data: `(integer) ${newValue}` }; }
+            decrby(args, increment) { return this.incrby(args, -increment); }
+            del(args) { if (args.length < 1) throw new Error("DEL requires at least one key."); let deletedCount = 0; const db = this.databases[this.activeDbIndex]; const dbExpirations = this.expirations[this.activeDbIndex]; args.forEach(key => { if (db.delete(key)) { dbExpirations.delete(key); deletedCount++; } }); return { status: 'ok', data: `(integer) ${deletedCount}` }; }
+            select(args) { if (args.length !== 1) throw new Error("SELECT requires a database index."); const index = parseInt(args[0]); if (isNaN(index) || index < 0) throw new Error("Database index must be a non-negative integer."); this.activeDbIndex = index; while (this.databases.length <= index) { this.databases.push(new Map()); this.expirations.push(new Map()); } return { status: 'ok', data: 'OK' }; }
+            expire(args) { if (args.length !== 2) throw new Error("EXPIRE requires a key and seconds."); const [key, secondsStr] = args; const seconds = parseInt(secondsStr); if (isNaN(seconds)) throw new Error("Seconds must be an integer."); if (!this._getKey(key)) { return { status: 'ok', data: '(integer) 0' }; } this.expirations[this.activeDbIndex].set(key, Date.now() + (seconds * 1000)); return { status: 'ok', data: '(integer) 1' }; }
+            ttl(args) { if (args.length !== 1) throw new Error("TTL requires a key."); const key = args[0]; if (!this._getKey(key)) return { status: 'ok', data: '(integer) -2' }; if (!this.expirations[this.activeDbIndex].has(key)) return { status: 'ok', data: '(integer) -1' }; const remainingMs = this.expirations[this.activeDbIndex].get(key) - Date.now(); return { status: 'ok', data: `(integer) ${Math.ceil(remainingMs / 1000)}` }; }
+            exists(args) { if (args.length < 1) throw new Error("EXISTS requires at least one key."); let count = 0; args.forEach(key => { if (this._getKey(key) !== undefined) count++; }); return { status: 'ok', data: `(integer) ${count}` }; }
+            keys(args) { if (args.length !== 1 || args[0] !== '*') throw new Error("Only 'KEYS *' is supported."); const allKeys = Array.from(this.databases[this.activeDbIndex].keys()); const validKeys = allKeys.filter(key => !this._isExpired(key)); return { status: 'ok', data: validKeys }; }
+            flushdb() { this.databases[this.activeDbIndex].clear(); this.expirations[this.activeDbIndex].clear(); return { status: 'ok', data: 'OK' }; }
+            lpush(args) { if (args.length < 2) throw new Error("LPUSH requires a key and at least one value."); const [key, ...values] = args; const db = this.databases[this.activeDbIndex]; let list = this._getKey(key, 'list'); if (list === undefined) { list = []; db.set(key, list); } list.unshift(...values); return { status: 'ok', data: `(integer) ${list.length}` }; }
+            rpush(args) { if (args.length < 2) throw new Error("RPUSH requires a key and at least one value."); const [key, ...values] = args; const db = this.databases[this.activeDbIndex]; let list = this._getKey(key, 'list'); if (list === undefined) { list = []; db.set(key, list); } list.push(...values); return { status: 'ok', data: `(integer) ${list.length}` }; }
+            lpop(args) { if (args.length !== 1) throw new Error("LPOP requires a key."); const list = this._getKey(args[0], 'list'); if (!list || list.length === 0) return { status: 'ok', data: '(nil)' }; return { status: 'ok', data: `"${list.shift()}"` }; }
+            rpop(args) { if (args.length !== 1) throw new Error("RPOP requires a key."); const list = this._getKey(args[0], 'list'); if (!list || list.length === 0) return { status: 'ok', data: '(nil)' }; return { status: 'ok', data: `"${list.pop()}"` }; }
+            lrange(args) { if (args.length !== 3) throw new Error("LRANGE requires a key, start, and stop index."); const [key, startStr, stopStr] = args; const list = this._getKey(key, 'list') || []; const start = parseInt(startStr); const stop = parseInt(stopStr); const end = stop >= 0 ? stop + 1 : list.length + stop + 1; return { status: 'ok', data: list.slice(start, end) }; }
+            hset(args) { if (args.length !== 3) throw new Error("HSET requires a key, field, and value."); const [key, field, value] = args; const db = this.databases[this.activeDbIndex]; let hash = this._getKey(key, 'hash'); let isNewField = 1; if (hash === undefined) { hash = new Map(); db.set(key, hash); } else if (hash.has(field)) { isNewField = 0; } hash.set(field, value); return { status: 'ok', data: `(integer) ${isNewField}` }; }
+            hget(args) { if (args.length !== 2) throw new Error("HGET requires a key and a field."); const [key, field] = args; const hash = this._getKey(key, 'hash'); if (!hash) return { status: 'ok', data: '(nil)' }; const value = hash.get(field); return { status: 'ok', data: value !== undefined ? `"${value}"` : '(nil)' }; }
+            hgetall(args) { if (args.length !== 1) throw new Error("HGETALL requires a key."); const hash = this._getKey(args[0], 'hash'); if (!hash) return { status: 'ok', data: '(empty list or set)' }; const result = []; hash.forEach((value, key) => result.push(key, value)); return { status: 'ok', data: result }; }
+            hdel(args) { if (args.length < 2) throw new Error("HDEL requires a key and at least one field."); const [key, ...fields] = args; const hash = this._getKey(key, 'hash'); if (!hash) return { status: 'ok', data: '(integer) 0' }; let deletedCount = 0; fields.forEach(field => { if (hash.delete(field)) deletedCount++; }); return { status: 'ok', data: `(integer) ${deletedCount}` }; }
+            sadd(args) { if (args.length < 2) throw new Error("SADD requires a key and at least one member."); const [key, ...members] = args; const db = this.databases[this.activeDbIndex]; let set = this._getKey(key, 'set'); if (set === undefined) { set = new Set(); db.set(key, set); } let addedCount = 0; members.forEach(member => { if (!set.has(member)) { set.add(member); addedCount++; } }); return { status: 'ok', data: `(integer) ${addedCount}` }; }
+            smembers(args) { if (args.length !== 1) throw new Error("SMEMBERS requires a key."); const set = this._getKey(args[0], 'set') || new Set(); return { status: 'ok', data: Array.from(set) }; }
+            srem(args) { if (args.length < 2) throw new Error("SREM requires a key and at least one member."); const [key, ...members] = args; const set = this._getKey(key, 'set'); if (!set) return { status: 'ok', data: '(integer) 0' }; let removedCount = 0; members.forEach(member => { if (set.delete(member)) removedCount++; }); return { status: 'ok', data: `(integer) ${removedCount}` }; }
+            sismember(args) { if (args.length !== 2) throw new Error("SISMEMBER requires a key and a member."); const [key, member] = args; const set = this._getKey(key, 'set'); return { status: 'ok', data: `(integer) ${set && set.has(member) ? 1 : 0}` }; }
+            scard(args) { if (args.length !== 1) throw new Error("SCARD requires a key."); const set = this._getKey(args[0], 'set') || new Set(); return { status: 'ok', data: `(integer) ${set.size}` }; }
+            zadd(args) { if (args.length < 3 || args.length % 2 !== 1) throw new Error("ZADD requires a key and one or more score-member pairs."); const key = args[0]; const db = this.databases[this.activeDbIndex]; let zset = this._getKey(key, 'zset'); if (zset === undefined) { zset = []; db.set(key, zset); } let addedCount = 0; for (let i = 1; i < args.length; i += 2) { const score = parseFloat(args[i]); const member = args[i + 1]; if (isNaN(score)) throw new Error("Score must be a number."); const existing = zset.find(item => item.member === member); if (existing) { existing.score = score; } else { zset.push({ score, member }); addedCount++; } } zset.sort((a, b) => a.score - b.score); return { status: 'ok', data: `(integer) ${addedCount}` }; }
+            zrange(args) { if (args.length < 3) throw new Error("ZRANGE requires a key, start, and stop."); const [key, startStr, stopStr, withscores] = args; const zset = this._getKey(key, 'zset') || []; const start = parseInt(startStr); const stop = parseInt(stopStr); const end = stop >= 0 ? stop + 1 : zset.length + stop + 1; const results = zset.slice(start, end); if (withscores && withscores.toUpperCase() === 'WITHSCORES') { return { status: 'ok', data: results.flatMap(item => [item.member, item.score.toString()]) }; } return { status: 'ok', data: results.map(item => item.member) }; }
+            zrem(args) { if (args.length < 2) throw new Error("ZREM requires a key and at least one member."); const [key, ...members] = args; let zset = this._getKey(key, 'zset'); if (!zset) return { status: 'ok', data: '(integer) 0' }; let removedCount = 0; const initialSize = zset.length; zset = zset.filter(item => !members.includes(item.member)); removedCount = initialSize - zset.length; this.databases[this.activeDbIndex].set(key, zset); return { status: 'ok', data: `(integer) ${removedCount}` }; }
+            zcard(args) { if (args.length !== 1) throw new Error("ZCARD requires a key."); const zset = this._getKey(args[0], 'zset') || []; return { status: 'ok', data: `(integer) ${zset.length}` }; }
+            multi() { if (this.transactionQueue !== null) throw new Error("MULTI calls can't be nested."); this.transactionQueue = []; return { status: 'ok', data: 'OK' }; }
+            exec() { if (this.transactionQueue === null) throw new Error("EXEC without MULTI."); const results = []; for (const command of this.transactionQueue) { try { const result = this.execute(command, true); results.push(result.data); } catch (e) { this.transactionQueue = null; throw new Error(`Transaction aborted: ${e.message}`); } } this.transactionQueue = null; return { status: 'ok', data: results }; }
+            discard() { if (this.transactionQueue === null) throw new Error("DISCARD without MULTI."); this.transactionQueue = null; return { status: 'ok', data: 'OK' }; }
+            _generateStreamId(stream, providedId) { const lastId = stream.entries.length > 0 ? stream.entries[stream.entries.length - 1].id : '0-0'; const [lastMs, lastSeq] = lastId.split('-').map(Number); if (providedId === '*') { let newMs = Date.now(); if (newMs > lastMs) { return `${newMs}-0`; } else { return `${lastMs}-${lastSeq + 1}`; } } const [ms, seq] = providedId.split('-').map(Number); if (isNaN(ms) || isNaN(seq) || ms < lastMs || (ms === lastMs && seq <= lastSeq)) { throw new Error("The ID specified in XADD is equal or smaller than the target stream's last-generated ID"); } return providedId; }
+            xadd(args) { if (args.length < 4 || args.length % 2 !== 0) throw new Error("XADD requires key, ID, and at least one field-value pair."); const [key, id, ...fieldValues] = args; const db = this.databases[this.activeDbIndex]; let stream = this._getKey(key, 'stream'); if (stream === undefined) { stream = { entries: [], groups: new Map() }; db.set(key, stream); } const newId = this._generateStreamId(stream, id); stream.entries.push({ id: newId, data: fieldValues }); return { status: 'ok', data: `"${newId}"` }; }
+            xrange(args) { if (args.length !== 3) throw new Error("XRANGE requires key, start, and end."); const [key, start, end] = args; const stream = this._getKey(key, 'stream'); if (!stream) return { status: 'ok', data: '(empty list or set)' }; const startId = start === '-' ? '0-0' : start; const endId = end === '+' ? '9999999999999-999999' : end; const results = stream.entries.filter(entry => entry.id >= startId && entry.id <= endId); return { status: 'ok', data: results.map(e => [e.id, e.data]) }; }
+            xread(args) { const streamsIdx = args.findIndex(arg => arg.toUpperCase() === 'STREAMS'); if (streamsIdx === -1) throw new Error("XREAD requires a STREAMS argument."); const streamKeysAndIds = args.slice(streamsIdx + 1); const numStreams = streamKeysAndIds.length / 2; const keys = streamKeysAndIds.slice(0, numStreams); const startIds = streamKeysAndIds.slice(numStreams); const results = []; for (let i = 0; i < keys.length; i++) { const key = keys[i]; const startId = startIds[i]; const stream = this._getKey(key, 'stream'); if (!stream) continue; const streamResults = stream.entries.filter(entry => entry.id > startId); if (streamResults.length > 0) { results.push([key, streamResults.map(e => [e.id, e.data])]); } } return { status: 'ok', data: results.length > 0 ? results : '(nil)' }; }
+            xgroup(args) { const [subcommand, key, groupname, id] = args; if (subcommand.toUpperCase() !== 'CREATE') throw new Error("Only XGROUP CREATE is supported."); const stream = this._getKey(key, 'stream'); if (!stream) throw new Error("The stream does not exist."); if (stream.groups.has(groupname)) throw new Error(`Consumer group '${groupname}' already exists.`); stream.groups.set(groupname, { lastDeliveredId: id, pending: new Map() }); return { status: 'ok', data: 'OK' }; }
+            xreadgroup(args) { const [groupLiteral, groupname, consumer, streamsLiteral, key, id] = args; if (groupLiteral.toUpperCase() !== 'GROUP' || streamsLiteral.toUpperCase() !== 'STREAMS' || id !== '>') throw new Error("Invalid XREADGROUP syntax."); const stream = this._getKey(key, 'stream'); if (!stream) return { status: 'ok', data: '(nil)' }; const group = stream.groups.get(groupname); if (!group) throw new Error(`Consumer group '${groupname}' does not exist.`); const newEntries = stream.entries.filter(entry => entry.id > group.lastDeliveredId); if (newEntries.length === 0) return { status: 'ok', data: '(nil)' }; const entry = newEntries[0]; group.lastDeliveredId = entry.id; group.pending.set(entry.id, { consumer, deliveredAt: Date.now() }); return { status: 'ok', data: [[key, [[entry.id, entry.data]]]] }; }
+            xack(args) { if (args.length !== 3) throw new Error("XACK requires key, group, and ID."); const [key, groupname, id] = args; const stream = this._getKey(key, 'stream'); if (!stream) return { status: 'ok', data: '(integer) 0' }; const group = stream.groups.get(groupname); if (!group) return { status: 'ok', data: '(integer) 0' }; return { status: 'ok', data: `(integer) ${group.pending.delete(id) ? 1 : 0}` }; }
+            subscribe(args) { if (args.length < 1) throw new Error("SUBSCRIBE requires at least one channel."); args.forEach(channel => { if (!this.subscriptions.has(channel)) { this.subscriptions.set(channel, new Set()); } this.subscriptions.get(channel).add(this.pubSubCallback); }); return { status: 'ok', data: `Subscribed to ${args.length} channel(s).` }; }
+            unsubscribe(args) { if (args.length < 1) throw new Error("UNSUBSCRIBE requires at least one channel."); args.forEach(channel => { if (this.subscriptions.has(channel)) { this.subscriptions.get(channel).delete(this.pubSubCallback); } }); return { status: 'ok', data: `Unsubscribed from ${args.length} channel(s).` }; }
+            publish(args) { if (args.length !== 2) throw new Error("PUBLISH requires a channel and a message."); const [channel, message] = args; const listeners = this.subscriptions.get(channel); let count = 0; if (listeners) { listeners.forEach(cb => { cb(channel, message); count++; }); } return { status: 'ok', data: `(integer) ${count}` }; }
+            geoadd(args) { if (args.length < 4 || args.length % 3 !== 1) throw new Error("GEOADD requires key and one or more lon-lat-member triplets."); const key = args[0]; const db = this.databases[this.activeDbIndex]; let geoSet = this._getKey(key, 'geo'); if (geoSet === undefined) { geoSet = []; db.set(key, geoSet); } let addedCount = 0; for (let i = 1; i < args.length; i += 3) { const [lon, lat, member] = [parseFloat(args[i]), parseFloat(args[i+1]), args[i+2]]; if (isNaN(lon) || isNaN(lat)) throw new Error("Longitude and latitude must be numbers."); if (!geoSet.some(item => item.member === member)) { geoSet.push({ lon, lat, member }); addedCount++; } } return { status: 'ok', data: `(integer) ${addedCount}` }; }
+            georadius(args) { if (args.length < 5) throw new Error("GEORADIUS requires key, lon, lat, radius, and unit."); const [key, lon, lat, radius, unit] = args.map((a, i) => i > 0 && i < 4 ? parseFloat(a) : a); const geoSet = this._getKey(key, 'geo') || []; const results = []; geoSet.forEach(item => { const dist = this._haversineDistance([lat, lon], [item.lat, item.lon], unit.toLowerCase()); if (dist <= radius) { results.push(item.member); } }); return { status: 'ok', data: results }; }
+            _haversineDistance([lat1, lon1], [lat2, lon2], unit) { const R = unit === 'km' ? 6371 : unit === 'mi' ? 3959 : unit === 'ft' ? 20902231 : 6371000; const dLat = (lat2 - lat1) * Math.PI / 180; const dLon = (lon2 - lon1) * Math.PI / 180; const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2); const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)); return R * c; }
+        }
+
+        // --- UI LOGIC
+        document.addEventListener('DOMContentLoaded', () => {
+            const db = new KeyValueStore();
+            let streamInterval = null;
+            
+            // This array will now hold the history of console output.
+            let consoleHistory = [];
+
+            const editor = CodeMirror.fromTextArea(document.getElementById('command-editor'), { mode: 'shell', theme: 'material-darker', lineNumbers: true, autofocus: true });
+            const editorWrapper = document.getElementById('editor-wrapper');
+            const observer = new ResizeObserver(() => editor.refresh());
+            observer.observe(editorWrapper);
+
+            const runCommandBtn = document.getElementById('run-command-btn');
+            const consoleOutput = document.getElementById('console-output-content');
+            const subscriptionsOutput = document.getElementById('subscriptions-content');
+            const visualizationOutput = document.getElementById('visualization-content');
+            const clearConsoleBtn = document.getElementById('clear-console-btn');
+            const exampleCategoriesContainer = document.getElementById('example-categories');
+            
+            const streamKeyInput = document.getElementById('stream-key-input');
+            const streamConfigInput = document.getElementById('stream-config-input');
+            const startStreamBtn = document.getElementById('start-stream-btn');
+            const stopStreamBtn = document.getElementById('stop-stream-btn');
+            const streamStatus = document.getElementById('stream-status');
+
+            const defaultStreamConfig = {
+                "temp": { "type": "float", "range": [18.0, 25.0] },
+                "humidity": { "type": "integer", "range": [40, 65] },
+                "status": { "type": "string", "values": ["ok", "warning", "critical"] }
+            };
+            streamConfigInput.value = JSON.stringify(defaultStreamConfig, null, 2);
+
+            const exampleCategories = {
+                "How to Use Streams": [
+                    { desc: "1. Configure & Start Producer: Edit the JSON schema and click 'Start' to begin generating data.", cmd: '# Click the "Start" button on the left' },
+                    { desc: "2. Create a Consumer Group: This creates a 'processors' group that will read from the start of the stream.", cmd: 'XGROUP CREATE sensor:log processors 0-0' },
+                    { desc: "3. Read a Message: Act as a consumer named 'worker-1' and read one new message.", cmd: 'XREADGROUP GROUP processors worker-1 STREAMS sensor:log >' },
+                    { desc: "4. Acknowledge the Message: Copy the ID from the message you received above to mark it as processed.", cmd: '# Replace the ID below with the one you received!\nXACK sensor:log processors "1672531200000-0"' },
+                ],
+                "How to Use Pub/Sub": [
+                    { desc: "1. Subscribe to a Channel: This opens the Subscriptions tab to listen for messages.", cmd: 'SUBSCRIBE alerts news' },
+                    { desc: "2. Publish a Message: Run this command and watch the message appear instantly in the 'Subscriptions' tab.", cmd: 'PUBLISH alerts "System critical: high temperature detected!"' },
+                    { desc: "3. Unsubscribe from a Channel", cmd: 'UNSUBSCRIBE alerts' },
+                ],
+                "DB & Key Management": [
+                    { desc: "Set a key and make it expire in 10 seconds", cmd: 'SET mykey "some value"\nEXPIRE mykey 10' },
+                    { desc: "Check the remaining time to live", cmd: 'TTL mykey' },
+                    { desc: "Check if one or more keys exist", cmd: 'EXISTS mykey anotherkey' },
+                    { desc: "Switch to DB 2 and set a key", cmd: 'SELECT 2\nSET key_in_db2 "hello"' },
+                    { desc: "Clear all keys from the current DB", cmd: 'FLUSHDB' },
+                ],
+                "String & Counter Commands": [
+                    { desc: "Set a simple key-value pair", cmd: 'SET user:name "Alice"' },
+                    { desc: "Get the value", cmd: 'GET user:name' },
+                    { desc: "Increment a counter", cmd: 'INCR page:views' },
+                    { desc: "Increment by a specific amount", cmd: 'INCRBY page:views 10' },
+                ],
+                "List Commands": [
+                    { desc: "Push items to the left (stack behavior)", cmd: 'LPUSH tasks "task3" "task2" "task1"' },
+                    { desc: "Push an item to the right (queue behavior)", cmd: 'RPUSH tasks "task4"' },
+                    { desc: "View all items in the list", cmd: 'LRANGE tasks 0 -1' },
+                    { desc: "Pop an item from the left", cmd: 'LPOP tasks' },
+                ],
+                "Hash Commands": [
+                    { desc: "Set multiple fields for a user object", cmd: 'HSET user:1 name "Bob" email "bob@example.com"' },
+                    { desc: "Get a single field", cmd: 'HGET user:1 email' },
+                    { desc: "Get all fields and values", cmd: 'HGETALL user:1' },
+                    { desc: "Delete a field", cmd: 'HDEL user:1 email' },
+                ],
+                "Set Commands": [
+                    { desc: "Add unique members to a set", cmd: 'SADD user:1:friends "alice" "bob" "charlie" "alice"' },
+                    { desc: "Get all members", cmd: 'SMEMBERS user:1:friends' },
+                    { desc: "Check if a member exists", cmd: 'SISMEMBER user:1:friends "bob"' },
+                    { desc: "Remove a member", cmd: 'SREM user:1:friends "charlie"' },
+                ],
+                "Sorted Set Commands": [
+                    { desc: "Add players to a leaderboard with scores", cmd: 'ZADD leaderboard 1500 "Alice" 2200 "Bob" 980 "Charlie"' },
+                    { desc: "Get the number of players", cmd: 'ZCARD leaderboard' },
+                    { desc: "Get top 2 players with their scores", cmd: 'ZRANGE leaderboard 0 1 WITHSCORES' },
+                    { desc: "Remove a player", cmd: 'ZREM leaderboard "Charlie"' },
+                ],
+                "Geospatial Commands": [
+                    { desc: "Add city coordinates to a geo set", cmd: 'GEOADD cities 13.36 38.11 "Palermo" 15.08 37.50 "Catania"' },
+                    { desc: "Add more locations", cmd: 'GEOADD cities 8.54 47.37 "Zurich" 2.35 48.85 "Paris"' },
+                    { desc: "Find cities within 200km of a point", cmd: 'GEORADIUS cities 14 37.5 200 km' },
+                ],
+                "Transaction Commands": [
+                    { desc: "A successful atomic operation", cmd: 'MULTI\nINCR user:1:logins\nLPUSH user:1:history "login"\nEXEC' },
+                ],
+            };
+
+            function populateExamples() {
+                let html = '';
+                for (const category in exampleCategories) {
+                    html += `<h3 class="text-lg font-semibold text-gray-200">${category}</h3><div class="space-y-2">`;
+                    exampleCategories[category].forEach(({ desc, cmd }) => {
+                        html += `<button data-command="${cmd.replace(/"/g, '&quot;')}" class="w-full text-left bg-gray-800/50 hover:bg-gray-700/70 text-gray-300 rounded-md overflow-hidden p-3">
+                                    <p class="text-xs font-semibold text-gray-300">${desc}</p>
+                                    <pre class="text-gray-400 font-mono text-xs overflow-x-auto custom-scrollbar pt-1"><code>${cmd}</code></pre>
+                                </button>`;
+                    });
+                    html += `</div>`;
+                }
+                exampleCategoriesContainer.innerHTML = html;
+
+                exampleCategoriesContainer.querySelectorAll('button').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const commandText = btn.dataset.command;
+                        editor.setValue(commandText);
+                        editor.focus();
+                        if (window.innerWidth <= 768) {
+                            showMobileView('editor');
+                        }
+                    });
+                });
+            }
+            
+            // This function now stores output in an array and re-renders the DOM.
+            function logToConsole(output, isError = false, command = null) {
+                // Store the command and output in the history array
+                consoleHistory.push({ command: command, output: output, isError: isError });
+                
+                // Then, re-render the entire console from the history
+                renderConsole();
+            }
+
+            // This new function handles rendering the history to the DOM
+            function renderConsole() {
+                // Clear the console DOM first
+                consoleOutput.innerHTML = '';
+                
+                // Add an initial welcome message if there is no history
+                if (consoleHistory.length === 0) {
+                    const welcomeEntry = document.createElement('div');
+                    welcomeEntry.innerHTML = `<span class="prompt">></span> Welcome! Check the new Visualization tab to see your data.`;
+                    welcomeEntry.classList.add('py-1', 'border-b', 'border-gray-700/50');
+                    consoleOutput.appendChild(welcomeEntry);
+                }
+
+                // Iterate over the history and append each entry
+                consoleHistory.forEach(entry => {
+                    const entryDiv = document.createElement('div');
+                    const prompt = entry.command ? `<div class="prompt text-gray-500 text-xs truncate">${entry.command}</div>` : '';
+                    let formattedOutput;
+                    if (entry.isError) {
+                        formattedOutput = `<span class="error">(error) ${entry.output}</span>`;
+                    } else {
+                        const dataStr = typeof entry.output === 'object' ? JSON.stringify(entry.output, null, 2) : entry.output;
+                        formattedOutput = `<span class="ok">${dataStr}</span>`;
+                    }
+                    entryDiv.innerHTML = prompt + formattedOutput;
+                    entryDiv.classList.add('py-1', 'border-b', 'border-gray-700/50');
+                    consoleOutput.appendChild(entryDiv);
+                });
+                consoleOutput.scrollTop = consoleOutput.scrollHeight;
+            }
+
+
+            function logToSubscription(channel, message) { const entry = document.createElement('div'); entry.innerHTML = `<span class="prompt">[${channel}] </span><span class="ok">"${message}"</span>`; entry.classList.add('py-1', 'border-b', 'border-gray-700/50'); subscriptionsOutput.appendChild(entry); subscriptionsOutput.scrollTop = subscriptionsOutput.scrollHeight; }
+            
+            db.setPubSubCallback(logToSubscription);
+
+            function execute(commandBlock) { 
+                const commands = commandBlock.split('\n').filter(cmd => cmd.trim() !== '' && !cmd.trim().startsWith('#')); 
+                if (commands.length === 0) return; 
+                commands.forEach(command => { 
+                    const result = db.execute(command); 
+                    if (result.status === 'ok') { 
+                        logToConsole(result.data, false, command); 
+                    } else { 
+                        logToConsole(result.message, true, command); 
+                    } 
+                });
+                renderVisualization();
+            }
+
+            runCommandBtn.addEventListener('click', () => { execute(editor.getValue()); });
+            editor.setOption("extraKeys", { "Ctrl-Enter": () => { execute(editor.getValue()); }});
+            
+            // The clear button now clears the history array and re-renders
+            clearConsoleBtn.addEventListener('click', () => { 
+                consoleHistory = [];
+                renderConsole();
+                subscriptionsOutput.innerHTML = '<span class="prompt">></span> Subscriptions cleared.';
+                db.databases.forEach(dbMap => dbMap.clear());
+                renderVisualization();
+            });
+
+            function generateRandomData(schema) { const payload = []; for (const field in schema) { const conf = schema[field]; payload.push(field); if (conf.type === 'integer' && conf.range) { payload.push(Math.floor(Math.random() * (conf.range[1] - conf.range[0] + 1) + conf.range[0])); } else if (conf.type === 'float' && conf.range) { payload.push((Math.random() * (conf.range[1] - conf.range[0]) + conf.range[0]).toFixed(2)); } else if (conf.type === 'string' && conf.values) { payload.push(conf.values[Math.floor(Math.random() * conf.values.length)]); } else { payload.push('null'); } } return payload.join(' '); }
+
+            startStreamBtn.addEventListener('click', () => {
+                const streamKey = streamKeyInput.value.trim();
+                if (!streamKey || streamInterval) return;
+                let schema;
+                try {
+                    schema = JSON.parse(streamConfigInput.value);
+                } catch (e) {
+                    streamStatus.textContent = 'Invalid JSON in schema!';
+                    return;
+                }
+
+                startStreamBtn.disabled = true;
+                stopStreamBtn.disabled = false;
+                streamStatus.textContent = 'Event producer running...';
+
+                streamInterval = setInterval(() => {
+                    const payload = generateRandomData(schema);
+                    const xaddCommand = `XADD ${streamKey} * ${payload}`;
+                    const publishCommand = `PUBLISH ${streamKey} "${payload}"`;
+                    execute(xaddCommand);
+                    execute(publishCommand);
+                }, 1500);
+            });
+
+            stopStreamBtn.addEventListener('click', () => { if (!streamInterval) return; clearInterval(streamInterval); streamInterval = null; startStreamBtn.disabled = false; stopStreamBtn.disabled = true; streamStatus.textContent = 'Producer stopped.'; });
+
+            const resizer = document.getElementById('resizer');
+            const editorContainer = document.getElementById('editor-container');
+            const resultsContainer = document.getElementById('results-container');
+            const leftPanel = document.getElementById('left-panel');
+            const rightPanel = document.getElementById('right-panel');
+            const mobileNavButtons = document.querySelectorAll('.mobile-nav-btn');
+            resizer.addEventListener('mousedown', () => { document.addEventListener('mousemove', handleMouseMove); document.addEventListener('mouseup', () => { document.removeEventListener('mousemove', handleMouseMove); }); });
+            function handleMouseMove(e) { const rightPanelHeight = rightPanel.offsetHeight; const newEditorHeight = e.clientY - editorContainer.getBoundingClientRect().top; if (newEditorHeight > 100 && newEditorHeight < rightPanelHeight - 80) { editorContainer.style.height = `${(newEditorHeight / rightPanelHeight) * 100}%`; resultsContainer.style.height = `${100 - ((newEditorHeight / rightPanelHeight) * 100)}%`; editor.refresh(); } }
+            
+            function showMobileView(view) {
+                mobileNavButtons.forEach(btn => btn.classList.remove('active'));
+                
+                if (view === 'info') {
+                    leftPanel.classList.remove('hidden');
+                    rightPanel.classList.add('hidden');
+                    document.querySelector('.mobile-nav-btn[data-view="info"]').classList.add('active');
+                } else if (view === 'editor') {
+                    rightPanel.classList.remove('hidden');
+                    leftPanel.classList.add('hidden');
+                    document.querySelector('.mobile-nav-btn[data-view="editor"]').classList.add('active');
+                }
+            }
+
+            mobileNavButtons.forEach(btn => { 
+                btn.addEventListener('click', () => {
+                    showMobileView(btn.dataset.view);
+                });
+            });
+
+            function handleResize() {
+                if (window.innerWidth > 768) {
+                    leftPanel.classList.remove('hidden');
+                    rightPanel.classList.remove('hidden');
+                } else {
+                    showMobileView('info');
+                }
+            }
+
+            const resultsTabs = document.querySelectorAll('.results-tab-btn');
+            const resultsTabContents = document.querySelectorAll('.results-tab-content');
+            
+            resultsTabs.forEach(tab => {
+                tab.addEventListener('click', () => {
+                    resultsTabs.forEach(t => t.classList.remove('active'));
+                    tab.classList.add('active');
+                    
+                    resultsTabContents.forEach(content => {
+                        if (content.id === `${tab.dataset.tab}-content`) {
+                            content.classList.remove('hidden');
+                        } else {
+                            content.classList.add('hidden');
+                        }
+                    });
+
+                    if (tab.dataset.tab === 'visualization') {
+                        renderVisualization();
+                    } else if (tab.dataset.tab === 'console') {
+                        // Crucial Fix: Re-render the console history when the tab is clicked.
+                        renderConsole();
+                    }
+                });
+            });
+            
+            function renderVisualization() {
+                visualizationOutput.innerHTML = '';
+                const allDbs = db.databases;
+                const activeDb = db.activeDbIndex;
+
+                allDbs.forEach((dbMap, index) => {
+                    if (dbMap.size === 0) return;
+
+                    const details = document.createElement('details');
+                    details.open = index === activeDb;
+
+                    const summary = document.createElement('summary');
+                    summary.className = 'text-lg font-semibold text-gray-200 cursor-pointer';
+                    summary.textContent = `Database ${index}`;
+                    details.appendChild(summary);
+                    
+                    const table = document.createElement('table');
+                    table.className = 'w-full text-sm text-left text-gray-400 mt-2';
+                    table.innerHTML = `<thead class="text-xs text-gray-300 uppercase bg-gray-700/50"><tr>
+                        <th class="px-4 py-2">Key</th><th class="px-4 py-2">Type</th><th class="px-4 py-2">Value</th>
+                    </tr></thead><tbody></tbody>`;
+                    const tbody = table.querySelector('tbody');
+
+                    dbMap.forEach((value, key) => {
+                        const row = tbody.insertRow();
+                        row.className = 'border-b border-gray-700';
+                        const keyCell = row.insertCell();
+                        const typeCell = row.insertCell();
+                        const valueCell = row.insertCell();
+                        
+                        keyCell.className = 'px-4 py-2 font-mono text-sky-400';
+                        keyCell.textContent = key;
+                        typeCell.className = 'px-4 py-2 font-mono text-xs text-yellow-400';
+                        valueCell.className = 'px-4 py-2 font-mono text-xs';
+                        
+                        let type = 'string';
+                        let displayValue = JSON.stringify(value);
+
+                        if (Array.isArray(value)) {
+                            if (value.length > 0 && value[0].hasOwnProperty('score')) type = 'zset';
+                            else if (value.length > 0 && value[0].hasOwnProperty('lon')) type = 'geo';
+                            else type = 'list';
+                        } else if (value instanceof Map) {
+                            type = 'hash';
+                            displayValue = JSON.stringify(Object.fromEntries(value));
+                        } else if (value instanceof Set) {
+                            type = 'set';
+                            displayValue = JSON.stringify(Array.from(value));
+                        } else if (value.hasOwnProperty('entries')) {
+                            type = 'stream';
+                            displayValue = `[${value.entries.length} entries, ${value.groups.size} groups]`;
+                        }
+                        
+                        typeCell.textContent = type;
+                        valueCell.textContent = displayValue;
+                    });
+                    
+                    details.appendChild(table);
+                    visualizationOutput.appendChild(details);
+                });
+                 if (visualizationOutput.innerHTML === '') {
+                    visualizationOutput.innerHTML = '<span class="prompt">></span> No data to visualize.';
+                }
+            }
+
+            window.addEventListener('resize', handleResize);
+            populateExamples();
+            handleResize();
+            renderVisualization();
+            renderConsole(); // Initial render of the console
+        });
+    </script>
+</body>
+</html>
