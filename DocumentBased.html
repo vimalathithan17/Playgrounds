@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Store Emulator (Advanced)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    
+    <!-- CodeMirror for the editor -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/theme/material-darker.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/mode/javascript/javascript.min.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #1a1a1a; color: #e0e0e0; overflow: hidden; }
+        .CodeMirror { font-family: 'Fira Code', monospace; font-size: 14px; line-height: 21px; height: 100%; background-color: #1e1e1e; }
+        .CodeMirror-gutters { background-color: #252526 !important; border-right: 1px solid #3a3a3a; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #2d2d2d; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #555; border-radius: 3px; }
+        .resizer { background-color: #3a3a3a; cursor: row-resize; width: 100%; height: 5px; z-index: 10; }
+        .console-output { font-family: 'Fira Code', monospace; white-space: pre-wrap; word-wrap: break-word; }
+        .console-output .ok { color: #6ee7b7; }
+        .console-output .error { color: #f472b6; }
+        .console-output .prompt { color: #6b7280; }
+        .mobile-nav-btn.active { color: #6ee7b7; border-color: #6ee7b7; }
+        .tab-btn.active { background-color: #1e1e1e; border-bottom: 2px solid #6ee7b7; color: #e0e0e0; }
+        .db-tree-item { cursor: pointer; transition: background-color 0.2s; }
+        .db-tree-item:hover { background-color: #2d2d2d; }
+    </style>
+</head>
+<body class="flex flex-col h-screen">
+
+    <header class="bg-[#282828] text-white flex items-center justify-between px-4 py-2 flex-shrink-0 border-b border-gray-700">
+        <h1 class="text-xl font-semibold text-gray-300">In-Memory Document Database</h1>
+    </header>
+
+    <main class="flex flex-grow overflow-hidden md:flex-row flex-col">
+        <!-- Left Panel for Info and Examples -->
+        <div id="left-panel" class="w-full md:w-2/5 h-full bg-[#1e1e1e] p-6 custom-scrollbar overflow-y-auto border-r border-gray-700">
+            <div class="prose prose-invert max-w-none">
+                <h2 class="text-2xl font-bold text-gray-100">Document Store Emulator</h2>
+                <p class="text-sm text-gray-400">
+                    An advanced in-memory simulation of a MongoDB-like database. Each command must be on a new line.
+                </p>
+
+                <!-- Visually Appealing Data Model Explanation -->
+                <div class="my-6 p-4 rounded-lg bg-gray-800/50 border border-gray-700">
+                    <h3 class="text-lg font-semibold text-gray-200 mb-4 text-center">Data Model Hierarchy 🏛️</h3>
+                    <div class="flex flex-col md:flex-row items-center justify-around gap-4 text-center">
+                        <div class="flex flex-col items-center p-2">
+                            <svg class="w-12 h-12 mb-2 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7a8 4 0 0116 0M12 3v4"></path></svg>
+                            <h4 class="font-semibold text-gray-200">Database</h4>
+                            <p class="text-xs text-gray-400">Top-level container</p>
+                        </div>
+                        <div class="text-gray-500 text-2xl font-light transform rotate-90 md:rotate-0">→</div>
+                        <div class="flex flex-col items-center p-2">
+                            <svg class="w-12 h-12 mb-2 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>
+                            <h4 class="font-semibold text-gray-200">Collection</h4>
+                            <p class="text-xs text-gray-400">Group of documents</p>
+                        </div>
+                        <div class="text-gray-500 text-2xl font-light transform rotate-90 md:rotate-0">→</div>
+                        <div class="flex flex-col items-center p-2">
+                            <svg class="w-12 h-12 mb-2 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                            <h4 class="font-semibold text-gray-200">Document</h4>
+                            <p class="text-xs text-gray-400">A single record (JSON)</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Data Model Example -->
+                <div class="my-6 p-4 rounded-lg bg-gray-800/50 border border-gray-700">
+                    <h3 class="text-lg font-semibold text-gray-200 mb-2">Data Model Example</h3>
+                    <p class="text-sm text-gray-400">
+                        A document store database is structured as a nested JSON object. A database holds multiple collections, and each collection is an array of documents.
+                    </p>
+                    <pre class="bg-gray-900/50 text-gray-300 rounded-md p-2 mt-2 text-xs overflow-x-auto"><code>{
+  // A single Database
+  "my_app_db": {
+    // A Collection of user documents
+    "users": [
+      // A single Document
+      {
+        "_id": "60c72b2f9b1e8e5d4c7b8c9d",
+        "name": "Alice Johnson",
+        "age": 30
+      },
+      // A second Document in the 'users' collection
+      {
+        "_id": "60c72c1a4d5f6e7c8b9a0d1e",
+        "name": "Bob Smith",
+        "age": 45
+      }
+    ],
+    // A second Collection for products
+    "products": [
+      // A Document in the 'products' collection
+      {
+        "_id": "60c72d9b8c7a6b5d4e3f2g1h",
+        "name": "Laptop",
+        "price": 1200
+      },
+      // A second Document in the 'products' collection
+      {
+        "_id": "60c72e2d1f3e5c4a7b9d8c7b",
+        "name": "Mouse",
+        "price": 25
+      }
+    ]
+  }
+}</code></pre>
+                </div>
+                
+                <!-- New Primer Section -->
+                <div class="my-6 p-4 rounded-lg bg-gray-800/50 border border-gray-700">
+                    <h3 class="text-lg font-semibold text-gray-200 mb-2">Syntax Primer & Key Concepts 📝</h3>
+                    <p class="text-sm text-gray-400 mb-4">
+                        Document databases use a simple, command-based syntax. Think of it like talking to the database in plain English.
+                    </p>
+                    <div class="space-y-4">
+                        <div>
+                            <h4 class="font-semibold text-gray-300">1. Data is JSON</h4>
+                            <p class="text-sm text-gray-400 mt-1">
+                                All data is stored as a JSON object (a document). This makes the data model flexible and easy to read.
+                            </p>
+                        </div>
+                        <div>
+                            <h4 class="font-semibold text-gray-300">2. Key Commands</h4>
+                            <ul class="text-sm text-gray-400 mt-1 list-disc list-inside space-y-1">
+                                <li><code>USE &lt;db_name&gt;</code>: Selects or creates a database.</li>
+                                <li><code>INSERT &lt;collection&gt; '&lt;doc_str&gt;'</code>: Adds a new document.</li>
+                                <li><code>FIND &lt;collection&gt; '&lt;query_str&gt;'</code>: Retrieves documents.</li>
+                                <li><code>UPDATE &lt;collection&gt; '&lt;query_str&gt;' '&lt;update_ops&gt;'</code>: Modifies documents.</li>
+                                <li><code>DELETE &lt;collection&gt; '&lt;query_str&gt;'</code>: Removes documents.</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <h4 class="font-semibold text-gray-300">3. Queries & Operators</h4>
+                            <p class="text-sm text-gray-400 mt-1">
+                                Queries are also JSON objects. You can use special operators (like <code>$gt</code> for "greater than") to build complex searches.
+                                <br>Example: <code>'{"age": {"$gt": 25}}'</code> finds documents where the "age" field is greater than 25.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Updated Section for JSON vs Document vs File -->
+                <div class="my-6 p-4 rounded-lg bg-gray-800/50 border border-gray-700">
+                    <h3 class="text-lg font-semibold text-gray-200 mb-2">Document vs. JSON vs. File 🧐</h3>
+                    <div class="text-sm text-gray-400 space-y-3">
+                        <p>
+                            While a database "document" uses JSON syntax, it's much more than a simple text file. Here's how they differ:
+                        </p>
+                        <div>
+                            <h4 class="font-semibold text-gray-300">JSON (JavaScript Object Notation)</h4>
+                            <p class="mt-1 text-xs text-gray-500">
+                                This is a **data format**—a string of text that represents structured data. It's great for passing data between systems, but on its own, it's just static information. You can't query or partially update a JSON string.
+                            </p>
+                        </div>
+                        <div>
+                            <h4 class="font-semibold text-gray-300">A Document in a Database</h4>
+                            <p class="mt-1 text-xs text-gray-500">
+                                This is a **live, manageable object**. It's the primary unit of storage in a document database. The database engine gives it a unique ID and manages it in a collection. You can query it using a powerful language, add indexes to it for faster retrieval, and perform atomic updates to specific fields without affecting the rest of the document.
+                            </p>
+                        </div>
+                        <div>
+                            <h4 class="font-semibold text-gray-300">A JSON File</h4>
+                            <p class="mt-1 text-xs text-gray-500">
+                                This is a **file on a file system**. It's a container that holds JSON data. If you want to modify one object inside a large JSON file, you have to read the entire file into memory, find the object, make the change, and then save the entire file back to disk. This is very inefficient for large datasets and a single user. A database handles this much more effectively.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- New "When to Use" Section -->
+                <div class="my-6 p-4 rounded-lg bg-gray-800/50 border border-gray-700">
+                    <h3 class="text-lg font-semibold text-gray-200 mb-2">When to Use This Type of Database 🚀</h3>
+                    <p class="text-sm text-gray-400 mb-4">
+                        Document databases truly shine in a few key scenarios:
+                    </p>
+                    <ul class="text-sm text-gray-400 list-disc list-inside space-y-2">
+                        <li>
+                            <h4 class="font-semibold text-gray-300">Flexible & Evolving Data Models</h4>
+                            <p class="mt-1 text-xs text-gray-500">
+                                Perfect for products, user profiles, or content that may have different attributes for each item. You don't need to define a rigid schema up front.
+                            </p>
+                        </li>
+                        <li>
+                            <h4 class="font-semibold text-gray-300">Rapid Prototyping & Development</h4>
+                            <p class="mt-1 text-xs text-gray-500">
+                                Developers can iterate quickly without needing to perform time-consuming database migrations every time the data structure changes.
+                            </p>
+                        </li>
+                        <li>
+                            <h4 class="font-semibold text-gray-300">Web & Mobile Applications</h4>
+                            <p class="mt-1 text-xs text-gray-500">
+                                Data is often nested and complex (e.g., a user document with nested addresses, order history, and preferences). Document stores handle this naturally with JSON.
+                            </p>
+                        </li>
+                    </ul>
+                </div>
+                
+                <div id="example-categories" class="space-y-4 mt-6">
+                    <!-- Example categories will be populated by JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel for Editor and Results -->
+        <div id="right-panel" class="flex flex-col w-full md:w-3/5 h-full bg-[#252526]">
+            <!-- Top section: Editor & Actions -->
+            <div id="editor-container" class="flex-grow flex flex-col overflow-hidden" style="height: 60%;">
+                <div id="editor-wrapper" class="flex-grow relative">
+                    <textarea id="command-editor"></textarea>
+                </div>
+                <div id="action-bar" class="flex-shrink-0 bg-[#282828] p-2 flex justify-end items-center gap-3 border-t border-gray-700">
+                    <button id="run-command-btn" class="bg-green-600 hover:bg-green-700 text-white font-semibold px-4 py-1.5 rounded-md text-sm">Run Commands (Ctrl+Enter)</button>
+                </div>
+            </div>
+
+            <div id="resizer" class="resizer hidden md:block"></div>
+            
+            <!-- Bottom section: Tabs for Console & Visualization -->
+            <div id="bottom-panel" class="flex-grow flex flex-col overflow-hidden" style="height: 40%;">
+                <div class="flex-shrink-0 bg-[#2d2d2d] flex border-t border-b border-gray-700">
+                    <button id="console-tab-btn" class="tab-btn active px-4 py-2 text-sm font-medium border-t-2 border-transparent">Console Output</button>
+                    <button id="visualization-tab-btn" class="tab-btn px-4 py-2 text-sm font-medium text-gray-400 hover:bg-gray-700/50">Visualization</button>
+                    <div class="flex-grow"></div>
+                    <button id="clear-console-btn" class="text-xs text-gray-400 hover:text-white px-2">Clear</button>
+                </div>
+
+                <!-- Console Output Panel -->
+                <div id="console-output-content" class="flex-grow bg-[#1e1e1e] overflow-auto custom-scrollbar p-3 console-output">
+                    <span class="prompt">></span> Welcome! The Advanced Document Store emulator is ready.
+                </div>
+
+                <!-- Visualization Panel (Hidden by default) -->
+                <div id="visualization-panel" class="hidden flex-grow bg-[#1e1e1e] overflow-auto custom-scrollbar p-3">
+                    <div id="db-tree" class="space-y-4"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+    
+    <!-- Mobile Navigation -->
+    <nav class="md:hidden bg-[#282828] border-t border-gray-700 w-full flex-shrink-0">
+        <button class="mobile-nav-btn active flex-1 p-3 text-sm text-center font-medium border-t-2" data-view="info">Info</button>
+        <button class="mobile-nav-btn flex-1 p-3 text-sm text-center font-medium border-t-2 border-transparent" data-view="editor">Editor</button>
+    </nav>
+
+
+    <script>
+        // --- DEDICATED DOCUMENT STORE CLASS (Advanced) ---
+        class DocumentStore {
+            constructor() { 
+                this.databases = { 'default': {} }; 
+                this.activeDbName = 'default';
+                this.users = {'admin': {password: 'pass', roles: ['admin']}};
+                this.currentUser = 'admin';
+                this.schemas = {};
+                this.inTransaction = false;
+                this.transactionState = null;
+            }
+
+            execute(commandString) { 
+                try { 
+                    if (!commandString || commandString.trim() === '') { 
+                        throw new Error("Command cannot be empty."); 
+                    } 
+                    const parts = commandString.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g).map(p => p.replace(/^['"]|['"]$/g, '')); 
+                    const command = parts[0].toUpperCase(); 
+                    const args = parts.slice(1); 
+                    
+                    if (this.inTransaction && !['COMMIT', 'ROLLBACK', 'SHOW'].includes(command)) {
+                        this.transactionState.commands.push({command, args});
+                        return { status: 'ok', data: `Command '${command}' added to transaction.` };
+                    }
+
+                    switch (command) { 
+                        case 'USE': return this.use(args); 
+                        case 'INSERT': return this.insert(args); 
+                        case 'FIND': return this.find(args); 
+                        case 'UPDATE': return this.update(args); 
+                        case 'DELETE': return this.delete(args); 
+                        case 'AGGREGATE': return this.aggregate(args); 
+                        case 'SHOW': return this.show(args); 
+                        case 'DROP': return this.dropCollection(args); 
+                        case 'DROPDATABASE': return this.dropDatabase(); 
+                        case 'STARTTRANSACTION': return this.startTransaction();
+                        case 'COMMIT': return this.commitTransaction();
+                        case 'ROLLBACK': return this.rollbackTransaction();
+                        case 'CREATEUSER': return this.createUser(args);
+                        case 'LOGIN': return this.login(args);
+                        case 'SCHEMAVALIDATE': return this.schemaValidate(args);
+                        default: throw new Error(`Unknown command: ${command}`); 
+                    } 
+                } catch (e) { 
+                    return { status: 'error', message: e.message }; 
+                } 
+            }
+            
+            // New Transaction methods
+            startTransaction() {
+                if (this.inTransaction) throw new Error("A transaction is already in progress.");
+                this.inTransaction = true;
+                this.transactionState = {
+                    databases: JSON.parse(JSON.stringify(this.databases)),
+                    activeDbName: this.activeDbName,
+                    commands: []
+                };
+                return { status: 'ok', data: "Transaction started." };
+            }
+
+            commitTransaction() {
+                if (!this.inTransaction) throw new Error("No transaction to commit.");
+                this.databases = this.transactionState.databases;
+                this.activeDbName = this.transactionState.activeDbName;
+                this.inTransaction = false;
+                this.transactionState = null;
+                return { status: 'ok', data: "Transaction committed." };
+            }
+
+            rollbackTransaction() {
+                if (!this.inTransaction) throw new Error("No transaction to rollback.");
+                this.inTransaction = false;
+                this.transactionState = null;
+                return { status: 'ok', data: "Transaction rolled back." };
+            }
+
+            // Core Command implementations
+            use(args) { 
+                if (args.length !== 1) throw new Error("USE requires exactly one argument: the database name."); 
+                const dbName = args[0]; 
+                this.activeDbName = dbName; 
+                if (!this.databases[dbName]) { 
+                    this.databases[dbName] = {}; 
+                } 
+                return { status: 'ok', data: `Switched to db '${dbName}'` }; 
+            }
+
+            insert(args) { 
+                if (args.length !== 2) throw new Error("INSERT requires a collection name and a JSON document string."); 
+                const [collectionName, docStr] = args; 
+                const db = this.inTransaction ? this.transactionState.databases : this.databases;
+                const collection = this._getCollection(collectionName, db); 
+                const doc = this._parseCustomTypes(docStr); 
+                
+                this._validateDocument(doc, collectionName);
+                if (!doc._id) {
+                    doc._id = this._generateObjectId(); 
+                    collection.push(doc); 
+                    return { status: 'ok', data: { insertedId: doc._id } }; 
+                } else {
+                    const existingDocIndex = collection.findIndex(d => d._id === doc._id);
+                    if (existingDocIndex > -1) {
+                        collection[existingDocIndex] = doc;
+                        return { status: 'ok', data: { updatedId: doc._id } };
+                    } else {
+                        collection.push(doc);
+                        return { status: 'ok', data: { insertedId: doc._id } };
+                    }
+                }
+            } 
+
+            find(args) { 
+                if (args.length < 1) throw new Error("FIND requires at least a collection name."); 
+                const [collectionName, queryStr, projectionStr, sortStr] = args; 
+                const db = this.inTransaction ? this.transactionState.databases : this.databases;
+                const collection = this._getCollection(collectionName, db); 
+                const query = queryStr ? this._parseCustomTypes(queryStr) : {}; 
+                const projection = projectionStr ? JSON.parse(projectionStr) : null; 
+                const sort = sortStr ? JSON.parse(sortStr) : null; 
+                let results = collection.filter(doc => this._matchDoc(doc, query)); 
+                if (sort) { results = this._applySort(results, sort); } 
+                if (projection) { results = this._applyProjection(results, projection); } 
+                return { status: 'ok', data: results }; 
+            } 
+
+            update(args) { 
+                if (args.length !== 3) throw new Error("UPDATE requires a collection, a query, and an update operation."); 
+                const [collectionName, queryStr, updateOpStr] = args; 
+                const db = this.inTransaction ? this.transactionState.databases : this.databases;
+                const collection = this._getCollection(collectionName, db); 
+                const query = this._parseCustomTypes(queryStr); 
+                const updateOp = this._parseCustomTypes(updateOpStr); 
+                let modifiedCount = 0; 
+                collection.forEach(doc => { 
+                    if (this._matchDoc(doc, query)) { 
+                        this._applyUpdate(doc, updateOp); 
+                        this._validateDocument(doc, collectionName);
+                        modifiedCount++; 
+                    } 
+                }); 
+                return { status: 'ok', data: { modifiedCount } }; 
+            } 
+
+            delete(args) { 
+                if (args.length !== 2) throw new Error("DELETE requires a collection and a query."); 
+                const [collectionName, queryStr] = args; 
+                const db = this.inTransaction ? this.transactionState.databases : this.databases;
+                const collection = this._getCollection(collectionName, db); 
+                const query = this._parseCustomTypes(queryStr); 
+                const originalLength = collection.length; 
+                db[this.activeDbName][collectionName] = collection.filter(doc => !this._matchDoc(doc, query)); 
+                const deletedCount = originalLength - db[this.activeDbName][collectionName].length; 
+                return { status: 'ok', data: { deletedCount } }; 
+            } 
+            
+            aggregate(args) { 
+                if (args.length !== 2) throw new Error("AGGREGATE requires a collection and a pipeline array string."); 
+                const [collectionName, pipelineStr] = args; 
+                const db = this.inTransaction ? this.transactionState.databases : this.databases;
+                const collection = this._getCollection(collectionName, db); 
+                const pipeline = this._parseCustomTypes(pipelineStr); 
+                let currentResults = [...collection]; 
+                
+                for (const stage of pipeline) { 
+                    const stageName = Object.keys(stage)[0]; 
+                    const stageBody = stage[stageName]; 
+                    
+                    switch(stageName) { 
+                        case '$match': currentResults = currentResults.filter(doc => this._matchDoc(doc, stageBody)); break; 
+                        case '$group': currentResults = this._applyGroup(currentResults, stageBody); break; 
+                        case '$sort': currentResults = this._applySort(currentResults, stageBody); break; 
+                        case '$limit': currentResults = currentResults.slice(0, stageBody); break; 
+                        case '$project': currentResults = this._applyProjection(currentResults, stageBody); break; 
+                        case '$unwind': currentResults = this._applyUnwind(currentResults, stageBody); break; 
+                        case '$lookup': currentResults = this._applyLookup(currentResults, stageBody, db); break;
+                        default: throw new Error(`Unsupported aggregation stage: ${stageName}`); 
+                    } 
+                } 
+                return { status: 'ok', data: currentResults }; 
+            }
+
+            show(args) { 
+                if (args.length !== 1) throw new Error("SHOW requires an argument, e.g., 'dbs' or 'collections'."); 
+                const target = args[0].toUpperCase(); 
+                const db = this.inTransaction ? this.transactionState.databases : this.databases;
+                if (target === 'DBS') { 
+                    return { status: 'ok', data: Object.keys(db) }; 
+                } else if (target === 'COLLECTIONS') { 
+                    return { status: 'ok', data: Object.keys(db[this.activeDbName]) }; 
+                } 
+                throw new Error("Invalid SHOW command. Use 'SHOW dbs' or 'SHOW collections'."); 
+            } 
+            
+            dropCollection(args) { 
+                if (this.currentUser !== 'admin') throw new Error("Authentication failed. Only admin can drop collections.");
+                if (args.length !== 1) throw new Error("DROP requires a collection name."); 
+                const collectionName = args[0]; 
+                const db = this.databases[this.activeDbName]; 
+                if (db.hasOwnProperty(collectionName)) { 
+                    delete db[collectionName]; 
+                    return { status: 'ok', data: `Collection '${collectionName}' dropped.` }; 
+                } 
+                return { status: 'ok', data: `Collection '${collectionName}' not found.` }; 
+            } 
+
+            dropDatabase() { 
+                if (this.currentUser !== 'admin') throw new Error("Authentication failed. Only admin can drop databases.");
+                if (this.activeDbName === 'default') { 
+                    throw new Error("Cannot drop the 'default' database."); 
+                } 
+                const dbNameToDrop = this.activeDbName; 
+                delete this.databases[dbNameToDrop]; 
+                this.activeDbName = 'default'; 
+                return { status: 'ok', data: `Database '${dbNameToDrop}' dropped. Switched to 'default' db.` }; 
+            } 
+
+            // New User/Auth methods
+            createUser(args) {
+                if (this.currentUser !== 'admin') throw new Error("Authentication failed. Only admin can create users.");
+                if (args.length !== 2) throw new Error("CREATEUSER requires a username and a password.");
+                const [username, password] = args;
+                if (this.users[username]) throw new Error(`User '${username}' already exists.`);
+                this.users[username] = {password, roles: []};
+                return {status: 'ok', data: `User '${username}' created.`};
+            }
+
+            login(args) {
+                if (args.length !== 2) throw new Error("LOGIN requires a username and a password.");
+                const [username, password] = args;
+                const user = this.users[username];
+                if (!user || user.password !== password) throw new Error("Invalid username or password.");
+                this.currentUser = username;
+                return {status: 'ok', data: `Logged in as '${username}'.`};
+            }
+            
+            // New Schema Validation method
+            schemaValidate(args) {
+                if (this.currentUser !== 'admin') throw new Error("Authentication failed. Only admin can set schemas.");
+                if (args.length !== 2) throw new Error("SCHEMAVALIDATE requires a collection and a schema object.");
+                const [collectionName, schemaStr] = args;
+                this.schemas[collectionName] = this._parseCustomTypes(schemaStr);
+                return {status: 'ok', data: `Schema for '${collectionName}' updated.`};
+            }
+
+            _validateDocument(doc, collectionName) {
+                const schema = this.schemas[collectionName];
+                if (!schema) return;
+
+                const validateRecursive = (data, schema) => {
+                    for (const key in schema) {
+                        if (!data.hasOwnProperty(key)) {
+                            if (schema[key].$exists === false) {
+                                continue;
+                            }
+                            throw new Error(`Schema validation failed: Missing required field '${key}'.`);
+                        }
+                        
+                        const rule = schema[key];
+                        const value = data[key];
+
+                        for (const op in rule) {
+                            const opValue = rule[op];
+                            
+                            switch (op) {
+                                case '$type':
+                                    let typeMatch = false;
+                                    if (opValue === 'array') { if (Array.isArray(value)) typeMatch = true; }
+                                    else if (opValue === 'object') { if (typeof value === 'object' && !Array.isArray(value) && value !== null) typeMatch = true; }
+                                    else if (opValue === 'date') { if (value instanceof Date) typeMatch = true; }
+                                    else if (opValue === 'decimal') { if (value && value.hasOwnProperty('$decimal128')) typeMatch = true; }
+                                    else if (typeof value === opValue) { typeMatch = true; }
+
+                                    if (!typeMatch) {
+                                        throw new Error(`Schema validation failed for field '${key}'. Expected type '${opValue}' but got '${typeof value}'.`);
+                                    }
+                                    break;
+                                case '$exists':
+                                    // Already handled at the start
+                                    break;
+                                case '$and':
+                                    if (!opValue.every(subRule => this._deepMatch(value, subRule))) {
+                                        throw new Error(`Schema validation failed for field '${key}'. Sub-rule failed for '$and' operator.`);
+                                    }
+                                    break;
+                                default:
+                                    throw new Error(`Unsupported schema validation rule: ${op}`);
+                            }
+                        }
+                        
+                        if (typeof value === 'object' && value !== null && !Array.isArray(value) && Object.keys(rule).length > 0) {
+                            validateRecursive(value, rule);
+                        }
+                    }
+                };
+                validateRecursive(doc, schema);
+            }
+
+            // Private helper methods
+            _getCollection(collectionName, db = this.databases) { 
+                if (!db[this.activeDbName][collectionName]) { 
+                    db[this.activeDbName][collectionName] = []; 
+                } 
+                return db[this.activeDbName][collectionName]; 
+            }
+
+            _isPointInPolygon(point, polygon) {
+                let x = point[0], y = point[1];
+                let inside = false;
+                for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                    let xi = polygon[i][0], yi = polygon[i][1];
+                    let xj = polygon[j][0], yj = polygon[j][1];
+                    let intersect = ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+                    if (intersect) inside = !inside;
+                }
+                return inside;
+            }
+
+            _deepEquals(a, b) {
+                // If they are strictly equal, they are equal
+                if (a === b) return true;
+                // If one is null or not an object and the other is, they are not equal
+                if (a === null || typeof a !== 'object' || b === null || typeof b !== 'object') {
+                    return false;
+                }
+                // Check if they are both arrays
+                if (Array.isArray(a) && Array.isArray(b)) {
+                    if (a.length !== b.length) return false;
+                    for (let i = 0; i < a.length; i++) {
+                        if (!this._deepEquals(a[i], b[i])) return false;
+                    }
+                    return true;
+                }
+                // If one is an array and the other is not, they are not equal
+                if (Array.isArray(a) !== Array.isArray(b)) return false;
+                // Check if they are both objects
+                const keysA = Object.keys(a);
+                const keysB = Object.keys(b);
+                if (keysA.length !== keysB.length) return false;
+                for (const key of keysA) {
+                    if (!keysB.includes(key) || !this._deepEquals(a[key], b[key])) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            _matchDoc(doc, query) { 
+                for (const key in query) { 
+                    if (key === '$or') { return query[key].some(q => this._matchDoc(doc, q)); } 
+                    if (key === '$and') { return query[key].every(q => this._matchDoc(doc, q)); } 
+                    if (key === '$not') { return !this._matchDoc(doc, query[key]); } 
+                    const queryVal = query[key]; 
+                    const docVal = doc[key]; 
+                    
+                    if (docVal && docVal.hasOwnProperty('$decimal128') && queryVal && queryVal.hasOwnProperty('$decimal128')) {
+                        if (parseFloat(docVal['$decimal128']) !== parseFloat(queryVal['$decimal128'])) return false;
+                        continue;
+                    }
+                    if (docVal instanceof Date && queryVal instanceof Date) { 
+                        if (docVal.getTime() !== queryVal.getTime()) return false; continue; 
+                    } 
+                    if (typeof queryVal === 'object' && queryVal !== null && !Array.isArray(queryVal)) { 
+                        let match = true; 
+                        for (const op in queryVal) { 
+                            const opVal = queryVal[op]; 
+                            const docData = docVal && docVal.hasOwnProperty('$decimal128') ? parseFloat(docVal['$decimal128']) : docVal instanceof Date ? docVal.getTime() : docVal;
+                            const opData = opVal && opVal.hasOwnProperty('$decimal128') ? parseFloat(opVal['$decimal128']) : opVal instanceof Date ? opVal.getTime() : opVal;
+
+                            switch (op) { 
+                                case '$gt': if (!(docData > opData)) match = false; break; 
+                                case '$gte': if (!(docData >= opData)) match = false; break; 
+                                case '$lt': if (!(docData < opData)) match = false; break; 
+                                case '$lte': if (!(docData <= opData)) match = false; break; 
+                                case '$ne': if (this._deepEquals(docVal, opVal)) match = false; break; 
+                                case '$in': if (!opVal.includes(docVal)) match = false; break; 
+                                case '$exists': if ((opVal && !doc.hasOwnProperty(key)) || (!opVal && doc.hasOwnProperty(key))) match = false; break; 
+                                case '$type': if (Array.isArray(docVal) && opVal !== 'array') match = false; else if (typeof docVal !== opVal && !(docVal instanceof Date && opVal === 'date')) match = false; break; 
+                                case '$size': if (!Array.isArray(docVal) || docVal.length !== opVal) match = false; break; 
+                                case '$all': if (!Array.isArray(docVal) || !opVal.every(v => docVal.includes(v))) match = false; break; 
+                                case '$elemMatch': if (!Array.isArray(docVal) || !docVal.some(elem => this._matchDoc(elem, opVal))) match = false; break; 
+                                case '$geoWithin': if (!docVal || !this._isPointInPolygon(docVal['$point'], opVal['$polygon'])) match = false; break;
+                                default: match = false; 
+                            } 
+                        } 
+                        if (!match) return false; 
+                    } else { 
+                        if (!this._deepEquals(docVal, queryVal)) { 
+                            return false; 
+                        } 
+                    } 
+                } 
+                return true; 
+            } 
+
+            _applyUpdate(doc, updateOp) { 
+                for (const op in updateOp) { 
+                    const opBody = updateOp[op]; 
+                    if (op === '$set') { Object.assign(doc, opBody); } 
+                    else if (op === '$inc') { for (const field in opBody) { if (typeof doc[field] === 'number') { doc[field] += opBody[field]; } } } 
+                    else if (op === '$unset') { for (const field in opBody) { delete doc[field]; } } 
+                    else if (op === '$rename') { for (const oldName in opBody) { if (doc.hasOwnProperty(oldName)) { doc[opBody[oldName]] = doc[oldName]; delete doc[oldName]; } } } 
+                    else if (op === '$push') { for (const field in opBody) { if (!doc[field]) doc[field] = []; if (Array.isArray(doc[field])) { if (opBody[field].hasOwnProperty('$each')) { doc[field].push(...opBody[field]['$each']); } else { doc[field].push(opBody[field]); } } } } 
+                    else if (op === '$pull') { // FIX: This was a critical bug. It now correctly handles sub-documents.
+                        for (const field in opBody) {
+                            if (Array.isArray(doc[field])) {
+                                if (typeof opBody[field] === 'object' && opBody[field] !== null) {
+                                    // If the $pull value is a query, filter out matching sub-documents.
+                                    doc[field] = doc[field].filter(item => !this._matchDoc(item, opBody[field]));
+                                } else {
+                                    // If it's a simple value, filter it out directly.
+                                    doc[field] = doc[field].filter(item => !this._deepEquals(item, opBody[field]));
+                                }
+                            }
+                        }
+                    } 
+                } 
+            } 
+            
+            _applySort(docs, sort) { const sortKeys = Object.keys(sort); if (sortKeys.length === 0) return docs; return [...docs].sort((a, b) => { for (const key of sortKeys) { const direction = sort[key]; if (a[key] < b[key]) return -direction; if (a[key] > b[key]) return direction; } return 0; }); } 
+            
+            _applyProjection(docs, projection) { const projectionKeys = Object.keys(projection); if (projectionKeys.length === 0) return docs; const isInclusion = projectionKeys.some(k => projection[k] === 1); if (isInclusion && projection._id !== 0) { projection._id = 1; } return docs.map(doc => { const newDoc = {}; if (isInclusion) { for (const key of Object.keys(projection)) { if (projection[key] === 1 && doc.hasOwnProperty(key)) { newDoc[key] = doc[key]; } } } else { const excludedKeys = new Set(projectionKeys.filter(k => projection[k] === 0)); for (const key in doc) { if (!excludedKeys.has(key)) { newDoc[key] = doc[key]; } } } return newDoc; }); } 
+            
+            _applyGroup(docs, groupBody) { const { _id, ...accumulators } = groupBody; const groups = new Map(); docs.forEach(doc => { const key = typeof _id === 'string' && _id.startsWith('$') ? doc[_id.substring(1)] : _id; const keyStr = JSON.stringify(key); if (!groups.has(keyStr)) { groups.set(keyStr, { _id: key, docs: [] }); } groups.get(keyStr).docs.push(doc); }); const finalResults = []; for (const group of groups.values()) { const resultDoc = { _id: group._id }; for (const fieldName in accumulators) { const accumulatorOp = accumulators[fieldName]; const opName = Object.keys(accumulatorOp)[0]; const opValue = accumulatorOp[opName]; if (opName === '$sum') { resultDoc[fieldName] = group.docs.reduce((sum, doc) => sum + (typeof opValue === 'string' && opValue.startsWith('$') ? doc[opValue.substring(1)] : opValue), 0); } else if (opName === '$avg') { const sum = group.docs.reduce((sum, doc) => sum + doc[opValue.substring(1)], 0); resultDoc[fieldName] = sum / group.docs.length; } else if (opName === '$count') { resultDoc[fieldName] = group.docs.length; } } finalResults.push(resultDoc); } return finalResults; } 
+
+            _applyUnwind(docs, fieldPath) { const field = fieldPath.startsWith('$') ? fieldPath.substring(1) : fieldPath; const unwound = []; docs.forEach(doc => { const array = doc[field]; if (Array.isArray(array)) { array.forEach(item => { const newDoc = { ...doc }; newDoc[field] = item; unwound.push(newDoc); }); } }); return unwound; } 
+            
+            _applyLookup(docs, lookupBody, db) {
+                const { from, localField, foreignField, as } = lookupBody;
+                const foreignCollection = db[this.activeDbName][from] || [];
+                const foreignIndex = foreignCollection.reduce((acc, doc) => {
+                    const key = doc[foreignField];
+                    if (!acc[key]) acc[key] = [];
+                    acc[key].push(doc);
+                    return acc;
+                }, {});
+
+                return docs.map(doc => {
+                    const lookupValue = doc[localField];
+                    const newDoc = { ...doc };
+                    newDoc[as] = foreignIndex[lookupValue] || [];
+                    return newDoc;
+                });
+            }
+
+            _generateObjectId() { const timestamp = (new Date().getTime() / 1000 | 0).toString(16); return timestamp + 'xxxxxxxxxxxxxxxx'.replace(/[x]/g, () => (Math.random() * 16 | 0).toString(16)).toLowerCase(); }
+            
+            _parseCustomTypes(jsonString) { 
+                return JSON.parse(jsonString, (key, value) => { 
+                    if (value && typeof value === 'object' && value.hasOwnProperty('$date')) { 
+                        return new Date(value['$date']); 
+                    }
+                    if (value && typeof value === 'object' && value.hasOwnProperty('$decimal128')) {
+                        return value;
+                    }
+                    if (value && typeof value === 'object' && value.hasOwnProperty('$point')) {
+                        return value;
+                    }
+                    return value; 
+                }); 
+            }
+        }
+
+        // --- UI LOGIC ---
+        document.addEventListener('DOMContentLoaded', () => {
+            const db = new DocumentStore();
+            const editorWrapper = document.getElementById('editor-wrapper');
+            const runCommandBtn = document.getElementById('run-command-btn');
+            const consoleOutput = document.getElementById('console-output-content');
+            const clearConsoleBtn = document.getElementById('clear-console-btn');
+            const exampleCategoriesContainer = document.getElementById('example-categories');
+            const editor = CodeMirror.fromTextArea(document.getElementById('command-editor'), { mode: { name: "javascript", json: true }, theme: 'material-darker', lineNumbers: true, autofocus: true });
+            const observer = new ResizeObserver(() => editor.refresh());
+            observer.observe(editorWrapper);
+
+            // New visualization elements
+            const visualizationTabBtn = document.getElementById('visualization-tab-btn');
+            const consoleTabBtn = document.getElementById('console-tab-btn');
+            const visualizationPanel = document.getElementById('visualization-panel');
+            const dbTree = document.getElementById('db-tree');
+            const bottomPanel = document.getElementById('bottom-panel');
+
+            const exampleCategories = {
+                "Authentication & Security": [
+                    { desc: "Create a new user (admin only)", cmd: 'CREATEUSER guest pass123' },
+                    { desc: "Login as a different user", cmd: 'LOGIN guest pass123' },
+                    { desc: "Try a restricted command (will fail)", cmd: 'DROP users' },
+                    { desc: "Login as admin", cmd: 'LOGIN admin pass' }
+                ],
+                "DB & Collection Management": [
+                    { desc: "Create a new database", cmd: 'USE my_app' },
+                    { desc: "List all databases", cmd: 'SHOW DBS' },
+                    { desc: "Add a document to create a collection", cmd: 'USE my_app\nINSERT users \'{"name": "temp"}\''},
+                    { desc: "See collections in the current DB", cmd: 'SHOW COLLECTIONS' },
+                    { desc: "Drop a specific collection", cmd: 'DROP users' },
+                    { desc: "Drop the current database", cmd: 'DROPDATABASE' },
+                ],
+                "CRUD: Create & Read": [
+                    { desc: "Insert a single document", cmd: 'INSERT users \'{"name": "Alice", "age": 30, "city": "New York"}\'' },
+                    { desc: "Insert multiple documents", cmd: 'INSERT users \'{"name": "Bob", "age": 45, "city": "London", "tags": ["dev", "lead"]}\'\nINSERT users \'{"name": "Charlie", "age": 25, "city": "New York", "tags": ["dev", "qa"]}\'' },
+                    { desc: "Find all documents", cmd: 'FIND users' },
+                    { desc: "Find documents matching a query", cmd: 'FIND users \'{"city": "New York"}\'' },
+                ],
+                "Advanced Queries (Logical & Element)": [
+                    { desc: "Find users in NY OR older than 40 ($or)", cmd: 'FIND users \'{"$or": [{"city": "New York"}, {"age": {"$gt": 40}}]}\'' },
+                    { desc: "Find users in London AND are a dev lead ($and)", cmd: 'FIND users \'{"$and": [{"city": "London"}, {"tags": "lead"}]}\'' },
+                    { desc: "Find users who do NOT live in London ($not)", cmd: 'FIND users \'{"$not": {"city": "London"}}\''},
+                    { desc: "Find users who have a 'tags' field ($exists)", cmd: 'FIND users \'{"tags": {"$exists": true}}\'' },
+                    { desc: "Find users where 'age' is a number ($type)", cmd: 'FIND users \'{"age": {"$type": "number"}}\'' },
+                ],
+                "Advanced Queries (Arrays)": [
+                    { desc: "Setup: Insert user with more tags", cmd: 'INSERT users \'{"name": "Diana", "age": 35, "tags": ["dev", "qa", "ux"]}\'' },
+                    { desc: "Find users with 'dev' AND 'ux' tags ($all)", cmd: 'FIND users \'{"tags": {"$all": ["dev", "ux"]}}\'' },
+                    { desc: "Find users with exactly 2 tags ($size)", cmd: 'FIND users \'{"tags": {"$size": 2}}\'' },
+                    { desc: "Setup: Insert user with item scores", cmd: 'INSERT users \'{"name": "Eve", "scores": [{"item": "A", "score": 10}, {"item": "B", "score": 4}]}\'' },
+                    { desc: "Find users with an item 'A' with score > 5 ($elemMatch)", cmd: 'FIND users \'{"scores": {"$elemMatch": {"item": "A", "score": {"$gt": 5}}}}\'' },
+                ],
+                "Upserting & Updating": [
+                    { desc: "Update existing documents (Find Bob and change his city)", cmd: 'UPDATE users \'{"name": "Bob"}\' \'{"$set": {"city": "Paris"}}\'' },
+                    { desc: "Add a new item or update its quantity", cmd: 'INSERT items \'{"name": "notebook", "quantity": 10}\'\nUPDATE items \'{"name": "notebook"}\' \'{"$inc": {"quantity": 5}}\'\nFIND items' },
+                    { desc: "Remove the 'age' field from Alice ($unset)", cmd: 'UPDATE users \'{"name": "Alice"}\' \'{"$unset": {"age": 1}}\'' },
+                    { desc: "Rename 'city' to 'location' for Bob ($rename)", cmd: 'UPDATE users \'{"name": "Bob"}\' \'{"$rename": {"city": "location"}}\'' },
+                    { desc: "Add a new tag for Charlie ($push)", cmd: 'UPDATE users \'{"name": "Charlie"}\' \'{"$push": {"tags": "ux"}}\'' },
+                    { desc: "Add multiple tags at once ($push with $each)", cmd: 'UPDATE users \'{"name": "Alice"}\' \'{"$push": {"tags": {"$each": ["admin", "manager"]}}}\'' },
+                    { desc: "Remove the 'qa' tag from Charlie ($pull)", cmd: 'UPDATE users \'{"name": "Charlie"}\' \'{"$pull": "qa"}\'' },
+                    { desc: "Insert a doc with custom _id, then update it (upsert)", cmd: 'INSERT products \'{"_id": "laptop", "name": "Laptop", "price": 1200}\'\nINSERT products \'{"_id": "laptop", "name": "Laptop", "price": 1100, "brand": "XYZ"}\'\nFIND products \'{"_id": "laptop"}\'' }
+                ],
+                "Data Types & Geospatial": [
+                    { desc: "Insert a document with a Decimal128", cmd: 'INSERT products \'{"name": "Widget", "price": {"$decimal128": "99.99"}}\'' },
+                    { desc: "Find products with a price greater than 50", cmd: 'FIND products \'{"price": {"$gt": {"$decimal128": "50.00"}}}\'' },
+                    { desc: "Insert a doc with a location (point)", cmd: 'INSERT restaurants \'{"name": "Cafe", "location": {"$point": [40.71, -74.00]}}\'' },
+                    { desc: "Find restaurants inside a specific polygon ($geoWithin)", cmd: 'FIND restaurants \'{"location": {"$geoWithin": {"$polygon": [[39.0, -75.0], [42.0, -75.0], [42.0, -73.0], [39.0, -73.0]]}}}\'' }
+                ],
+                "Transactions & Atomic Operations": [
+                    { desc: "Start a new transaction", cmd: 'STARTTRANSACTION' },
+                    { desc: "Perform multiple operations in a transaction", cmd: 'STARTTRANSACTION\nINSERT logs \'{"event": "start"}\'\nUPDATE users \'{"name": "Alice"}\' \'{"$set": {"status": "active"}}\'\nCOMMIT' },
+                    { desc: "Rollback a transaction (no changes saved)", cmd: 'STARTTRANSACTION\nINSERT logs \'{"event": "fail"}\'\nROLLBACK' }
+                ],
+                "Advanced Aggregation": [
+                    { desc: "Aggregate with `$group` & `$lookup`", cmd: 'INSERT products \'{"_id": "pen", "category": "writing"}\'\nINSERT products \'{"_id": "pencil", "category": "writing"}\'\nINSERT sales \'{"item": "pen", "price": 2, "quantity": 50}\'\nINSERT sales \'{"item": "pencil", "price": 1, "quantity": 100}\'\nINSERT sales \'{"item": "pen", "price": 3, "quantity": 20}\'\nAGGREGATE sales \'[{"$lookup": {"from": "products", "localField": "item", "foreignField": "_id", "as": "product_info" }},{"$unwind":"$product_info"},{"$group": {"_id":"$product_info.category","total_quantity": {"$sum":"$quantity"}}}]\'\nFIND sales' }
+                ]
+            };
+
+            function populateExamples() { let html = ''; for (const category in exampleCategories) { html += `<h3 class="text-lg font-semibold text-gray-200 mt-4">${category}</h3><div class="space-y-2 mt-2">`; exampleCategories[category].forEach(({ desc, cmd }) => { html += `<button data-command="${cmd.replace(/"/g, '&quot;')}" class="w-full text-left bg-gray-800/50 hover:bg-gray-700/70 text-gray-300 rounded-md overflow-hidden p-3 transition-colors duration-200"> <p class="text-sm font-semibold text-gray-300">${desc}</p> <pre class="text-gray-400 font-mono text-xs overflow-x-auto custom-scrollbar pt-1"><code>${cmd}</code></pre> </button>`; }); html += `</div>`; } exampleCategoriesContainer.innerHTML = html; exampleCategoriesContainer.querySelectorAll('button').forEach(btn => { btn.addEventListener('click', () => { const commandText = btn.dataset.command; editor.setValue(commandText); editor.focus(); if (window.innerWidth <= 768) { showMobileView('editor'); } }); }); }
+            function logToConsole(output, isError = false, command = null) { const entry = document.createElement('div'); const prompt = command ? `<div class="prompt text-gray-500 text-xs truncate" title="${command}">${command}</div>` : `<span class="prompt">> </span>`; let formattedOutput; if (isError) { formattedOutput = `<span class="error">(error) ${output}</span>`; } else { const dataStr = typeof output === 'object' ? JSON.stringify(output, null, 2) : output; formattedOutput = `<span class="ok">OK</span> ${dataStr}`; } entry.innerHTML = prompt + formattedOutput; entry.classList.add('py-1.5', 'border-b', 'border-gray-700/50'); consoleOutput.appendChild(entry); consoleOutput.scrollTop = consoleOutput.scrollHeight; }
+            function execute() { const commandBlock = editor.getValue(); const commands = commandBlock.split('\n').filter(cmd => cmd.trim() !== '' && !cmd.trim().startsWith('#')); if (commands.length === 0) return; commands.forEach(command => { const result = db.execute(command); if (result.status === 'ok') { logToConsole(result.data, false, command); } else { logToConsole(result.message, true, command); } }); updateVisualization(); }
+            
+            function updateVisualization() {
+                const databases = db.databases;
+                let html = '';
+                for (const dbName in databases) {
+                    html += `
+                        <div class="db-tree-item rounded-lg p-2" data-name="${dbName}" data-type="db">
+                            <span class="font-bold text-lg text-teal-400">📁 ${dbName}</span>
+                            <div class="collections-container pl-4 mt-2 hidden">
+                    `;
+                    const collections = databases[dbName];
+                    for (const colName in collections) {
+                        html += `
+                            <div class="db-tree-item rounded-lg p-2" data-name="${colName}" data-type="collection">
+                                <span class="font-semibold text-sky-400">🗂️ ${colName} (${collections[colName].length})</span>
+                                <div class="documents-container pl-4 mt-2 hidden">
+                        `;
+                        collections[colName].forEach(doc => {
+                            html += `
+                                <div class="db-tree-item p-2">
+                                    <pre class="bg-gray-800 text-gray-300 rounded-md p-2 text-xs overflow-x-auto custom-scrollbar"><code>${JSON.stringify(doc, null, 2)}</code></pre>
+                                </div>
+                            `;
+                        });
+                        html += `
+                                </div>
+                            </div>
+                        `;
+                    }
+                    html += `
+                            </div>
+                        </div>
+                    `;
+                }
+                dbTree.innerHTML = html;
+
+                dbTree.querySelectorAll('.db-tree-item').forEach(item => {
+                    item.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const type = item.dataset.type;
+                        if (type === 'db' || type === 'collection') {
+                            const container = item.querySelector(type === 'db' ? '.collections-container' : '.documents-container');
+                            if (container) {
+                                container.classList.toggle('hidden');
+                            }
+                        }
+                    });
+                });
+            }
+
+            // Tab switching logic
+            function showPanel(panel) {
+                if (panel === 'console') {
+                    consoleOutput.classList.remove('hidden');
+                    visualizationPanel.classList.add('hidden');
+                    consoleTabBtn.classList.add('active');
+                    visualizationTabBtn.classList.remove('active');
+                    clearConsoleBtn.classList.remove('hidden');
+                } else if (panel === 'visualization') {
+                    consoleOutput.classList.add('hidden');
+                    visualizationPanel.classList.remove('hidden');
+                    visualizationTabBtn.classList.add('active');
+                    consoleTabBtn.classList.remove('active');
+                    clearConsoleBtn.classList.add('hidden');
+                    updateVisualization(); // Ensure visualization is up to date
+                }
+            }
+
+            runCommandBtn.addEventListener('click', execute);
+            editor.setOption("extraKeys", { "Ctrl-Enter": execute, "Cmd-Enter": execute });
+            clearConsoleBtn.addEventListener('click', () => { consoleOutput.innerHTML = '<span class="prompt">></span> Console cleared.'; });
+            consoleTabBtn.addEventListener('click', () => showPanel('console'));
+            visualizationTabBtn.addEventListener('click', () => showPanel('visualization'));
+
+            const resizer = document.getElementById('resizer');
+            const editorContainer = document.getElementById('editor-container');
+            const resultsContainer = document.getElementById('bottom-panel');
+            const leftPanel = document.getElementById('left-panel');
+            const rightPanel = document.getElementById('right-panel');
+            const mobileNavButtons = document.querySelectorAll('.mobile-nav-btn');
+            resizer.addEventListener('mousedown', () => { document.addEventListener('mousemove', handleMouseMove); document.addEventListener('mouseup', () => { document.removeEventListener('mousemove', handleMouseMove); }, { once: true }); });
+            function handleMouseMove(e) { const rightPanelHeight = rightPanel.offsetHeight; const newEditorHeight = e.clientY - editorContainer.getBoundingClientRect().top; if (newEditorHeight > 100 && newEditorHeight < rightPanelHeight - 80) { editorContainer.style.height = `${(newEditorHeight / rightPanelHeight) * 100}%`; resultsContainer.style.height = `${100 - ((newEditorHeight / rightPanelHeight) * 100)}%`; editor.refresh(); } }
+            function showMobileView(view) { if (window.innerWidth <= 768) { leftPanel.classList.toggle('hidden', view === 'editor'); rightPanel.classList.toggle('hidden', view === 'info'); setTimeout(() => editor.refresh(), 1); mobileNavButtons.forEach(btn => { btn.classList.toggle('active', btn.dataset.view === view); }); } }
+            mobileNavButtons.forEach(btn => { btn.addEventListener('click', () => { const view = btn.dataset.view; showMobileView(view); if(view === 'editor') showPanel('console'); }); });
+            function handleResize() { if (window.innerWidth > 768) { leftPanel.classList.remove('hidden'); rightPanel.classList.remove('hidden'); } else { showMobileView(document.querySelector('.mobile-nav-btn.active').dataset.view || 'info'); } }
+
+            window.addEventListener('resize', handleResize);
+            populateExamples();
+            db.execute("use default");
+            handleResize();
+            updateVisualization();
+        });
+    </script>
+</body>
+</html>
