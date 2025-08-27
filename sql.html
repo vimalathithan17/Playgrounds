@@ -1,0 +1,3325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL Playground</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    
+    <!-- CodeMirror for the SQL editor -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/theme/material-darker.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/mode/sql/sql.min.js"></script>
+    
+    <!-- Syntax Highlighter for examples page -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+    <style>
+        body { 
+            font-family: 'Inter', sans-serif; 
+            background-color: #1a1a1a; 
+            color: #e0e0e0; 
+            overflow: hidden; 
+        }
+        .CodeMirror { 
+            font-family: 'Fira Code', monospace; 
+            font-size: 14px; 
+            line-height: 21px; 
+            height: 100%; 
+            background-color: #1e1e1e; 
+        }
+        .CodeMirror-gutters { 
+            background-color: #1e1e1e !important; 
+            border-right: 1px solid #3a3a3a; 
+        }
+        .custom-scrollbar::-webkit-scrollbar { 
+            width: 8px; 
+            height: 8px; 
+        }
+        .custom-scrollbar::-webkit-scrollbar-track { 
+            background: #2d2d2d; 
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb { 
+            background-color: #555; 
+            border-radius: 4px; 
+        }
+        .resizer { 
+            background-color: #3a3a3a; 
+            cursor: col-resize; 
+            width: 5px; 
+            height: 100%; 
+            z-index: 10; 
+        }
+        .mobile-nav-btn.active, .header-tab.active {
+            color: #22c55e;
+            border-bottom-color: #22c55e;
+        }
+        .mobile-nav-btn.active {
+            border-top-color: #22c55e;
+        }
+
+        /* Responsive Layout Adjustments */
+        @media (max-width: 768px) {
+            #playground-view { flex-direction: column; }
+            #left-panel, #right-panel { width: 100%; height: 100%; }
+            .resizer { display: none; }
+            #mobile-nav { display: flex; }
+            
+            #examples-view .max-w-4xl { max-width: 100%; }
+            #examples-view pre {
+                overflow-x: auto;
+                white-space: pre;
+            }
+            #examples-view h1 { font-size: 1.5rem; }
+            #examples-view h2 { font-size: 1.25rem; }
+            #examples-view h3 { font-size: 1.1rem; }
+            #examples-view p { font-size: 0.9rem; }
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen">
+
+    <header class="bg-[#282828] text-white flex items-center justify-between px-4 flex-shrink-0 border-b border-gray-700">
+        <div class="flex items-center gap-6">
+            <h1 class="text-xl font-semibold text-gray-300 py-2">SQL Playground</h1>
+            <div class="hidden sm:flex items-center gap-4">
+                 <button class="header-tab text-sm font-medium py-3 border-b-2" data-view="playground">Playground</button>
+                 <button class="header-tab text-sm font-medium py-3 border-b-2 border-transparent text-gray-400" data-view="examples">Examples</button>
+            </div>
+        </div>
+        <div id="db-status" class="text-sm flex items-center gap-2">
+            <div id="status-indicator" class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div>
+            <span id="status-text">Initializing DB...</span>
+        </div>
+    </header>
+
+    <div id="playground-view" class="flex flex-grow overflow-hidden">
+        <!-- Panels here -->
+        <div id="left-panel" class="flex flex-col w-1/2 h-full bg-[#1e1e1e]">
+            <div class="flex-shrink-0 bg-[#282828] p-2 flex justify-between items-center border-b border-gray-700">
+                <h2 class="font-semibold text-gray-200">SQL Editor</h2>
+                <button id="run-query-btn" class="bg-green-600 hover:bg-green-700 text-white font-semibold px-4 py-1.5 rounded-md text-sm flex items-center gap-2 disabled:bg-gray-500 disabled:cursor-not-allowed">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M10.804 8 5 4.633v6.734L10.804 8zm.792-.696a.802.802 0 0 1 0 1.392l-6.363 3.692C4.713 12.69 4 12.345 4 11.692V4.308c0-.653.713-.998 1.233-.696l6.363 3.692z"/></svg>
+                    Run
+                </button>
+            </div>
+            <div class="flex-grow overflow-hidden"><textarea id="sql-editor"></textarea></div>
+        </div>
+        <div id="resizer" class="resizer"></div>
+        <div id="right-panel" class="flex flex-col w-1/2 h-full bg-[#252526]">
+            <div class="flex-shrink-0 bg-[#282828] p-2 border-b border-gray-700">
+                <div class="flex gap-2">
+                    <button id="schema-tab" class="schema-tab active text-sm px-3 py-1 rounded border-b-2 border-blue-500 text-blue-400">Schema</button>
+                    <button id="visualization-tab" class="schema-tab text-sm px-3 py-1 rounded border-b-2 border-transparent text-gray-400 hover:text-gray-200">Visualization</button>
+                </div>
+            </div>
+            <div id="schema-content" class="flex-grow p-4 overflow-y-auto custom-scrollbar">
+                <div id="schema-viewer"></div>
+            </div>
+            <div id="visualization-content" class="hidden flex-grow p-4 overflow-y-auto custom-scrollbar">
+                <div id="database-visualization">
+                    <div class="mb-4">
+                        <h3 class="text-lg font-semibold text-gray-200 mb-2">Database Schema Visualization</h3>
+                        <p class="text-gray-400 text-sm">Visual representation of table relationships and structure.</p>
+                    </div>
+                    <div id="schema-diagram" class="bg-gray-800 rounded-lg p-4 min-h-[400px]"></div>
+                </div>
+            </div>
+            <div class="flex-grow h-2/3 flex flex-col border-t border-gray-700">
+                 <div class="flex-shrink-0 bg-[#282828] p-2 border-b border-gray-700"><h2 class="font-semibold text-gray-200">Results</h2></div>
+                <div id="results-container" class="flex-grow p-4 overflow-auto custom-scrollbar"></div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="examples-view" class="hidden flex-grow overflow-y-auto custom-scrollbar p-6 sm:p-8">
+        <div class="max-w-6xl mx-auto pb-16">
+            <h1 class="text-3xl font-bold mb-6 text-gray-100">DuckDB SQL Playground</h1>
+            
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-blue-300">Getting Started</h2>
+                <p class="text-gray-400 mb-4">Welcome to your interactive SQL playground powered by DuckDB WebAssembly! This environment runs entirely in your browser with no server required. Start experimenting with the sample data below or create your own tables.</p>
+                <div class="bg-blue-900/30 border border-blue-700 rounded-lg p-4 mb-4">
+                    <h3 class="text-blue-300 font-semibold mb-2">💡 Quick Start Tips</h3>
+                    <ul class="text-blue-200 text-sm space-y-1">
+                        <li>• Click any example to copy it to the editor</li>
+                        <li>• Use Ctrl+Enter (Cmd+Enter on Mac) to run queries</li>
+                        <li>• Watch the Schema Viewer update as you create tables</li>
+                        <li>• Try the progressive examples below to learn SQL concepts</li>
+                    </ul>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-purple-300">Understanding Relational Databases</h2>
+                <p class="text-gray-400 mb-4">SQL databases organize data in <strong>tables</strong> with rows and columns. Tables can be related through <strong>foreign keys</strong>, enabling complex data relationships while maintaining consistency.</p>
+                <div class="grid md:grid-cols-2 gap-6 mb-6">
+                    <div class="bg-gray-800 p-4 rounded-lg">
+                        <h3 class="text-purple-300 font-semibold mb-2">Key Concepts</h3>
+                        <ul class="text-gray-300 text-sm space-y-1">
+                            <li><strong>Table:</strong> Collection of related data in rows and columns</li>
+                            <li><strong>Primary Key:</strong> Uniquely identifies each row</li>
+                            <li><strong>Foreign Key:</strong> Links to primary key in another table</li>
+                            <li><strong>Schema:</strong> Structure defining table relationships</li>
+                            <li><strong>ACID:</strong> Atomicity, Consistency, Isolation, Durability</li>
+                        </ul>
+                    </div>
+                    <div class="bg-gray-800 p-4 rounded-lg">
+                        <h3 class="text-purple-300 font-semibold mb-2">DuckDB Advantages</h3>
+                        <ul class="text-gray-300 text-sm space-y-1">
+                            <li><strong>In-Process:</strong> No separate server needed</li>
+                            <li><strong>Analytics-First:</strong> Optimized for analytical queries</li>
+                            <li><strong>SQL Standard:</strong> Full SQL support with extensions</li>
+                            <li><strong>Zero-Copy:</strong> Efficient data processing</li>
+                            <li><strong>Embeddable:</strong> Works in browsers and applications</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-cyan-300">Database & Schema Management (DDL)</h2>
+                <p class="text-gray-400 mb-4">Data Definition Language (DDL) commands for creating, modifying, and managing database structures.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Database operations in DuckDB
+-- DuckDB works with files, so database operations are file-based
+
+-- Create a new database (connects to a file)
+-- In browser, this creates an in-memory database
+PRAGMA database_list;
+
+-- Show current database information
+SELECT current_database();
+
+-- Attach additional database files
+ATTACH 'sales_database.db' AS sales_db;
+ATTACH 'analytics_database.db' AS analytics_db;
+
+-- List all attached databases
+PRAGMA database_list;
+
+-- Use specific database (switch context)
+USE sales_db;
+
+-- Detach databases when done
+DETACH sales_db;
+DETACH analytics_db;
+
+-- Show memory usage
+PRAGMA database_size;">
+                            <h3 class="text-lg font-semibold text-cyan-400 mb-2">1. Database Operations</h3>
+                            <p class="text-gray-400 text-sm mb-3">Create, attach, and manage multiple databases</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                ATTACH 'database.db' AS db_alias; USE database;
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Schema operations
+-- Create schemas for organizing tables
+CREATE SCHEMA IF NOT EXISTS sales;
+CREATE SCHEMA IF NOT EXISTS inventory;
+CREATE SCHEMA IF NOT EXISTS analytics;
+
+-- List all schemas
+SELECT schema_name FROM information_schema.schemata;
+
+-- Create table in specific schema
+CREATE TABLE sales.customers (
+    customer_id SERIAL PRIMARY KEY,
+    first_name VARCHAR(50) NOT NULL,
+    last_name VARCHAR(50) NOT NULL,
+    email VARCHAR(100) UNIQUE
+);
+
+CREATE TABLE inventory.products (
+    product_id SERIAL PRIMARY KEY,
+    product_name VARCHAR(200) NOT NULL,
+    category VARCHAR(50)
+);
+
+-- Set default schema
+SET search_path = sales;
+
+-- Query from specific schema
+SELECT * FROM sales.customers;
+SELECT * FROM inventory.products;
+
+-- Drop schema (must be empty)
+DROP SCHEMA IF EXISTS analytics CASCADE;">
+                            <h3 class="text-lg font-semibold text-cyan-400 mb-2">2. Schema Management</h3>
+                            <p class="text-gray-400 text-sm mb-3">Organize tables into schemas for better structure</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                CREATE SCHEMA schema_name; DROP SCHEMA schema_name;
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Table information and metadata
+-- Show all tables
+SHOW TABLES;
+
+-- Show tables from all schemas
+SELECT table_schema, table_name, table_type 
+FROM information_schema.tables 
+WHERE table_schema NOT IN ('information_schema', 'pg_catalog');
+
+-- Describe table structure
+DESCRIBE customers;
+PRAGMA table_info('customers');
+
+-- Show create statement for table
+SELECT sql FROM sqlite_master WHERE type='table' AND name='customers';
+
+-- Get table sizes and row counts
+SELECT 
+    table_name,
+    (SELECT COUNT(*) FROM customers) as row_count
+FROM information_schema.tables 
+WHERE table_name = 'customers';
+
+-- Show column information
+SELECT 
+    column_name,
+    data_type,
+    is_nullable,
+    column_default
+FROM information_schema.columns 
+WHERE table_name = 'customers'
+ORDER BY ordinal_position;">
+                            <h3 class="text-lg font-semibold text-cyan-400 mb-2">3. Table Information</h3>
+                            <p class="text-gray-400 text-sm mb-3">Inspect table structure and metadata</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                DESCRIBE table_name; SHOW TABLES; PRAGMA table_info();
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-emerald-300">Complete Table Definition & Constraints</h2>
+                <p class="text-gray-400 mb-4">Comprehensive guide to creating tables with all types of constraints - column-level, table-level, and advanced options.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Column-level constraints
+CREATE TABLE employees (
+    -- Primary key constraint
+    employee_id SERIAL PRIMARY KEY,
+    
+    -- NOT NULL constraint
+    first_name VARCHAR(50) NOT NULL,
+    last_name VARCHAR(50) NOT NULL,
+    
+    -- UNIQUE constraint
+    email VARCHAR(100) NOT NULL UNIQUE,
+    social_security_number CHAR(11) UNIQUE,
+    
+    -- CHECK constraint
+    age INTEGER CHECK (age >= 18 AND age <= 120),
+    salary DECIMAL(10,2) CHECK (salary > 0),
+    
+    -- DEFAULT constraint
+    hire_date DATE DEFAULT CURRENT_DATE,
+    status VARCHAR(20) DEFAULT 'active',
+    is_manager BOOLEAN DEFAULT false,
+    
+    -- Foreign key constraint
+    department_id INTEGER REFERENCES departments(department_id),
+    
+    -- Multiple constraints on same column
+    phone VARCHAR(15) NOT NULL CHECK (LENGTH(phone) >= 10)
+);
+
+-- Show the table structure
+DESCRIBE employees;">
+                            <h3 class="text-lg font-semibold text-emerald-400 mb-2">1. Column-Level Constraints</h3>
+                            <p class="text-gray-400 text-sm mb-3">Apply constraints directly to individual columns during CREATE TABLE</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                column_name data_type PRIMARY KEY | UNIQUE | NOT NULL | CHECK | DEFAULT
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Table-level constraints with named constraints
+CREATE TABLE orders (
+    order_id SERIAL,
+    customer_id INTEGER NOT NULL,
+    order_date DATE NOT NULL,
+    ship_date DATE,
+    total_amount DECIMAL(10,2) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    discount_percent DECIMAL(5,2),
+    
+    -- Table-level PRIMARY KEY
+    CONSTRAINT pk_orders PRIMARY KEY (order_id),
+    
+    -- Table-level FOREIGN KEY with actions
+    CONSTRAINT fk_orders_customer 
+        FOREIGN KEY (customer_id) 
+        REFERENCES customers(customer_id)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+    
+    -- Table-level CHECK constraints
+    CONSTRAINT chk_order_amount CHECK (total_amount >= 0),
+    CONSTRAINT chk_order_status CHECK (status IN ('pending', 'processing', 'shipped', 'delivered', 'cancelled')),
+    CONSTRAINT chk_order_dates CHECK (ship_date IS NULL OR ship_date >= order_date),
+    CONSTRAINT chk_discount CHECK (discount_percent IS NULL OR (discount_percent >= 0 AND discount_percent <= 100)),
+    
+    -- Table-level UNIQUE constraint
+    CONSTRAINT uk_orders_customer_date UNIQUE (customer_id, order_date)
+);
+
+-- Composite primary key example
+CREATE TABLE order_items (
+    order_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    unit_price DECIMAL(10,2) NOT NULL CHECK (unit_price >= 0),
+    
+    -- Composite primary key
+    CONSTRAINT pk_order_items PRIMARY KEY (order_id, product_id),
+    
+    -- Multiple foreign keys
+    CONSTRAINT fk_order_items_order FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE,
+    CONSTRAINT fk_order_items_product FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE RESTRICT
+);">
+                            <h3 class="text-lg font-semibold text-emerald-400 mb-2">2. Table-Level Constraints</h3>
+                            <p class="text-gray-400 text-sm mb-3">Named constraints applied at table level with referential actions</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                CONSTRAINT name PRIMARY KEY | FOREIGN KEY | CHECK | UNIQUE
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Advanced constraint examples
+CREATE TABLE products (
+    product_id SERIAL PRIMARY KEY,
+    sku VARCHAR(20) NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    category_id INTEGER,
+    price DECIMAL(10,2) NOT NULL,
+    cost DECIMAL(10,2) NOT NULL,
+    weight DECIMAL(8,3),
+    dimensions_length DECIMAL(8,2),
+    dimensions_width DECIMAL(8,2),
+    dimensions_height DECIMAL(8,2),
+    stock_quantity INTEGER DEFAULT 0,
+    reorder_level INTEGER DEFAULT 10,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    
+    -- Complex CHECK constraints
+    CONSTRAINT chk_product_price CHECK (price > cost),
+    CONSTRAINT chk_product_dimensions CHECK (
+        (dimensions_length IS NULL AND dimensions_width IS NULL AND dimensions_height IS NULL) OR
+        (dimensions_length > 0 AND dimensions_width > 0 AND dimensions_height > 0)
+    ),
+    CONSTRAINT chk_stock_levels CHECK (stock_quantity >= 0 AND reorder_level >= 0),
+    CONSTRAINT chk_weight CHECK (weight IS NULL OR weight > 0),
+    
+    -- UNIQUE constraints
+    CONSTRAINT uk_product_sku UNIQUE (sku),
+    
+    -- Foreign key with specific actions
+    CONSTRAINT fk_product_category 
+        FOREIGN KEY (category_id) 
+        REFERENCES categories(category_id) 
+        ON DELETE SET NULL 
+        ON UPDATE CASCADE
+);
+
+-- Self-referencing foreign key
+CREATE TABLE categories (
+    category_id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    parent_category_id INTEGER,
+    sort_order INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT true,
+    
+    -- Self-referencing foreign key
+    CONSTRAINT fk_category_parent 
+        FOREIGN KEY (parent_category_id) 
+        REFERENCES categories(category_id) 
+        ON DELETE SET NULL,
+    
+    -- Prevent self-reference
+    CONSTRAINT chk_not_self_parent CHECK (category_id != parent_category_id),
+    
+    CONSTRAINT uk_category_name UNIQUE (name)
+);">
+                            <h3 class="text-lg font-semibold text-emerald-400 mb-2">3. Advanced Constraints</h3>
+                            <p class="text-gray-400 text-sm mb-3">Complex CHECK constraints, self-referencing FKs, and conditional logic</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                Complex CHECK conditions, self-referencing FOREIGN KEY
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- All data types showcase
+CREATE TABLE data_types_demo (
+    -- Numeric types
+    small_int SMALLINT,
+    regular_int INTEGER,
+    big_int BIGINT,
+    decimal_fixed DECIMAL(10,2),
+    numeric_type NUMERIC(15,4),
+    real_number REAL,
+    double_precision DOUBLE PRECISION,
+    serial_id SERIAL,
+    
+    -- String types
+    char_fixed CHAR(10),
+    varchar_variable VARCHAR(255),
+    text_unlimited TEXT,
+    
+    -- Date and time types
+    date_only DATE,
+    time_only TIME,
+    timestamp_with_zone TIMESTAMPTZ,
+    timestamp_without_zone TIMESTAMP,
+    interval_type INTERVAL,
+    
+    -- Boolean type
+    boolean_flag BOOLEAN,
+    
+    -- Binary data
+    blob_data BLOB,
+    
+    -- Array types (DuckDB specific)
+    integer_array INTEGER[],
+    text_array TEXT[],
+    
+    -- JSON type (DuckDB specific)
+    json_data JSON,
+    
+    -- UUID type
+    uuid_field UUID,
+    
+    -- Enum type example
+    status_enum VARCHAR(20) CHECK (status_enum IN ('active', 'inactive', 'pending', 'suspended')),
+    
+    PRIMARY KEY (serial_id),
+    
+    -- Constraints on different data types
+    CONSTRAINT chk_positive_numbers CHECK (
+        small_int IS NULL OR small_int > 0
+    ),
+    CONSTRAINT chk_date_range CHECK (
+        date_only IS NULL OR date_only >= '2000-01-01'
+    ),
+    CONSTRAINT chk_text_length CHECK (
+        LENGTH(text_unlimited) <= 1000
+    )
+);">
+                            <h3 class="text-lg font-semibold text-emerald-400 mb-2">4. Complete Data Types</h3>
+                            <p class="text-gray-400 text-sm mb-3">All available data types in DuckDB with examples</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                INTEGER, VARCHAR, DATE, TIMESTAMP, BOOLEAN, ARRAY[], JSON, UUID
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-orange-300">ALTER TABLE Operations</h2>
+                <p class="text-gray-400 mb-4">Modify existing table structures - add, drop, modify columns and constraints.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Add columns to existing table
+ALTER TABLE customers ADD COLUMN phone VARCHAR(15);
+ALTER TABLE customers ADD COLUMN date_of_birth DATE;
+ALTER TABLE customers ADD COLUMN loyalty_points INTEGER DEFAULT 0;
+ALTER TABLE customers ADD COLUMN created_at TIMESTAMP DEFAULT NOW();
+
+-- Add column with constraints
+ALTER TABLE customers ADD COLUMN credit_limit DECIMAL(10,2) CHECK (credit_limit >= 0);
+
+-- Add multiple columns at once (if supported)
+ALTER TABLE customers 
+ADD COLUMN address_line1 VARCHAR(255),
+ADD COLUMN address_line2 VARCHAR(255),
+ADD COLUMN city VARCHAR(100),
+ADD COLUMN state VARCHAR(50),
+ADD COLUMN postal_code VARCHAR(20),
+ADD COLUMN country VARCHAR(50) DEFAULT 'USA';
+
+-- Verify changes
+DESCRIBE customers;">
+                            <h3 class="text-lg font-semibold text-orange-400 mb-2">1. Adding Columns</h3>
+                            <p class="text-gray-400 text-sm mb-3">Add new columns with or without constraints</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                ALTER TABLE table_name ADD COLUMN column_name data_type constraints;
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Drop columns from table
+ALTER TABLE customers DROP COLUMN phone;
+ALTER TABLE customers DROP COLUMN date_of_birth;
+
+-- Drop multiple columns (if supported)
+ALTER TABLE customers 
+DROP COLUMN address_line2,
+DROP COLUMN loyalty_points;
+
+-- Drop column with CASCADE to remove dependent objects
+ALTER TABLE customers DROP COLUMN created_at CASCADE;
+
+-- Rename columns
+ALTER TABLE customers RENAME COLUMN first_name TO fname;
+ALTER TABLE customers RENAME COLUMN last_name TO lname;
+
+-- Rename table
+ALTER TABLE customers RENAME TO client_list;
+ALTER TABLE client_list RENAME TO customers;
+
+-- Verify changes
+DESCRIBE customers;">
+                            <h3 class="text-lg font-semibold text-orange-400 mb-2">2. Dropping & Renaming</h3>
+                            <p class="text-gray-400 text-sm mb-3">Remove columns and rename table elements</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                ALTER TABLE table_name DROP COLUMN | RENAME COLUMN | RENAME TO
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Modify column data types and constraints
+-- Change column data type
+ALTER TABLE customers ALTER COLUMN email TYPE VARCHAR(150);
+ALTER TABLE customers ALTER COLUMN credit_limit TYPE DECIMAL(12,2);
+
+-- Set default values
+ALTER TABLE customers ALTER COLUMN country SET DEFAULT 'United States';
+ALTER TABLE customers ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+
+-- Drop default values
+ALTER TABLE customers ALTER COLUMN loyalty_points DROP DEFAULT;
+
+-- Add NOT NULL constraint
+ALTER TABLE customers ALTER COLUMN fname SET NOT NULL;
+ALTER TABLE customers ALTER COLUMN lname SET NOT NULL;
+
+-- Drop NOT NULL constraint
+ALTER TABLE customers ALTER COLUMN phone DROP NOT NULL;
+
+-- Note: In some databases, you might need to recreate the column
+-- to change certain constraints or data types
+DESCRIBE customers;">
+                            <h3 class="text-lg font-semibold text-orange-400 mb-2">3. Modifying Columns</h3>
+                            <p class="text-gray-400 text-sm mb-3">Change data types, defaults, and NULL constraints</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                ALTER COLUMN column_name TYPE | SET DEFAULT | DROP DEFAULT | SET NOT NULL
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Add table-level constraints after table creation
+-- Add primary key constraint
+ALTER TABLE customers ADD CONSTRAINT pk_customers PRIMARY KEY (customer_id);
+
+-- Add foreign key constraints
+ALTER TABLE orders ADD CONSTRAINT fk_orders_customer 
+    FOREIGN KEY (customer_id) REFERENCES customers(customer_id)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- Add unique constraints
+ALTER TABLE customers ADD CONSTRAINT uk_customers_email UNIQUE (email);
+ALTER TABLE products ADD CONSTRAINT uk_products_sku UNIQUE (sku);
+
+-- Add check constraints
+ALTER TABLE orders ADD CONSTRAINT chk_orders_total 
+    CHECK (total_amount >= 0);
+ALTER TABLE products ADD CONSTRAINT chk_products_price 
+    CHECK (price > 0 AND price > cost);
+
+-- Drop constraints
+ALTER TABLE customers DROP CONSTRAINT uk_customers_email;
+ALTER TABLE orders DROP CONSTRAINT chk_orders_total;
+ALTER TABLE orders DROP CONSTRAINT fk_orders_customer;
+
+-- Show constraint information
+SELECT 
+    constraint_name, 
+    constraint_type, 
+    table_name 
+FROM information_schema.table_constraints 
+WHERE table_name = 'customers';">
+                            <h3 class="text-lg font-semibold text-orange-400 mb-2">4. Managing Constraints</h3>
+                            <p class="text-gray-400 text-sm mb-3">Add and drop table constraints after creation</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                ADD CONSTRAINT | DROP CONSTRAINT with CASCADE options
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-red-300">DROP Operations & Cleanup</h2>
+                <p class="text-gray-400 mb-4">Remove database objects safely with proper CASCADE handling.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Drop tables with different options
+-- Drop single table
+DROP TABLE IF EXISTS temp_table;
+
+-- Drop table with CASCADE (removes dependent objects)
+DROP TABLE IF EXISTS old_customers CASCADE;
+
+-- Drop multiple tables
+DROP TABLE IF EXISTS 
+    temp_orders, 
+    temp_products, 
+    temp_categories;
+
+-- Drop table only if no dependencies exist
+DROP TABLE old_inventory; -- Will fail if foreign keys reference it
+
+-- Check what objects depend on a table before dropping
+SELECT 
+    constraint_name,
+    table_name as dependent_table,
+    referenced_table_name
+FROM information_schema.referential_constraints
+WHERE referenced_table_name = 'customers';
+
+-- Create and drop temporary table
+CREATE TEMPORARY TABLE session_data (
+    session_id VARCHAR(50),
+    user_id INTEGER,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+DROP TABLE session_data;">
+                            <h3 class="text-lg font-semibold text-red-400 mb-2">1. Dropping Tables</h3>
+                            <p class="text-gray-400 text-sm mb-3">Remove tables with CASCADE and dependency checking</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                DROP TABLE [IF EXISTS] table_name [CASCADE | RESTRICT];
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Drop other database objects
+-- Drop schemas
+DROP SCHEMA IF EXISTS temp_schema CASCADE;
+DROP SCHEMA IF EXISTS old_analytics RESTRICT;
+
+-- Drop views
+DROP VIEW IF EXISTS customer_summary;
+DROP VIEW IF EXISTS product_catalog CASCADE;
+
+-- Drop indexes
+DROP INDEX IF EXISTS idx_customers_email;
+DROP INDEX IF EXISTS idx_products_category;
+
+-- Drop sequences (auto-increment)
+DROP SEQUENCE IF EXISTS custom_id_seq;
+
+-- Create and drop a view example
+CREATE VIEW active_customers AS
+SELECT customer_id, fname, lname, email
+FROM customers
+WHERE created_at >= CURRENT_DATE - INTERVAL 30 DAY;
+
+-- Show view
+SELECT * FROM active_customers LIMIT 5;
+
+-- Drop the view
+DROP VIEW active_customers;
+
+-- Drop database (disconnect from file)
+-- In DuckDB, this is equivalent to closing the connection
+DETACH DATABASE main; -- If you had attached it">
+                            <h3 class="text-lg font-semibold text-red-400 mb-2">2. Dropping Other Objects</h3>
+                            <p class="text-gray-400 text-sm mb-3">Remove views, indexes, schemas, and sequences</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                DROP VIEW | INDEX | SEQUENCE | SCHEMA [CASCADE | RESTRICT]
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-violet-300">Transaction Control Language (TCL)</h2>
+                <p class="text-gray-400 mb-4">Manage database transactions for data consistency and integrity with ACID properties.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Basic transaction control
+-- Start a transaction
+BEGIN TRANSACTION;
+-- Alternative: BEGIN; or START TRANSACTION;
+
+-- Perform multiple operations
+INSERT INTO customers (first_name, last_name, email) 
+VALUES ('John', 'Smith', 'john.smith@example.com');
+
+INSERT INTO orders (customer_id, order_date, total_amount) 
+VALUES (1, CURRENT_DATE, 299.99);
+
+INSERT INTO order_items (order_id, product_id, quantity, unit_price)
+VALUES (1, 1, 2, 149.99);
+
+-- Check the changes (still in transaction)
+SELECT * FROM customers WHERE email = 'john.smith@example.com';
+
+-- Commit the transaction to make changes permanent
+COMMIT;
+
+-- Verify the committed data
+SELECT c.first_name, c.last_name, o.total_amount, o.order_date
+FROM customers c
+JOIN orders o ON c.customer_id = o.customer_id
+WHERE c.email = 'john.smith@example.com';">
+                            <h3 class="text-lg font-semibold text-violet-400 mb-2">1. Basic Transactions</h3>
+                            <p class="text-gray-400 text-sm mb-3">BEGIN, COMMIT for successful transaction completion</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                BEGIN TRANSACTION; ... COMMIT;
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Transaction rollback scenarios
+-- Start transaction
+BEGIN TRANSACTION;
+
+-- Insert test data
+INSERT INTO customers (first_name, last_name, email) 
+VALUES ('Jane', 'Doe', 'jane.doe@example.com');
+
+-- Check the inserted data (visible within transaction)
+SELECT * FROM customers WHERE email = 'jane.doe@example.com';
+
+-- Simulate an error condition or change of mind
+-- ROLLBACK to undo all changes in this transaction
+ROLLBACK;
+
+-- Verify the data was not saved
+SELECT * FROM customers WHERE email = 'jane.doe@example.com';
+-- This should return no results
+
+-- Example of conditional rollback with error handling
+BEGIN TRANSACTION;
+
+-- Create a temporary table for demonstration
+CREATE TEMPORARY TABLE temp_test (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(50) UNIQUE
+);
+
+-- Insert some data
+INSERT INTO temp_test (name) VALUES ('Test1');
+INSERT INTO temp_test (name) VALUES ('Test2');
+
+-- Try to insert duplicate (will cause error)
+-- INSERT INTO temp_test (name) VALUES ('Test1'); -- This would fail
+
+-- In case of error, rollback the entire transaction
+ROLLBACK;
+
+-- Clean up
+DROP TABLE IF EXISTS temp_test;">
+                            <h3 class="text-lg font-semibold text-violet-400 mb-2">2. ROLLBACK & Error Handling</h3>
+                            <p class="text-gray-400 text-sm mb-3">Undo transactions and handle errors properly</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                ROLLBACK; Error handling patterns
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Advanced transaction patterns
+-- Pattern 1: Safe inventory update with verification
+BEGIN TRANSACTION;
+
+-- Check current stock before update
+SELECT product_id, name, stock_quantity 
+FROM products 
+WHERE product_id = 1;
+
+-- Update inventory only if sufficient stock
+UPDATE products 
+SET stock_quantity = stock_quantity - 5,
+    updated_at = CURRENT_TIMESTAMP
+WHERE product_id = 1 AND stock_quantity >= 5;
+
+-- Verify the update succeeded (check if any rows were affected)
+-- In a real application, you'd check the return value
+SELECT product_id, name, stock_quantity 
+FROM products 
+WHERE product_id = 1;
+
+-- If stock was sufficient, commit; otherwise rollback
+COMMIT;
+
+-- Pattern 2: Order processing with multiple table updates
+BEGIN TRANSACTION;
+
+-- Create new order
+INSERT INTO orders (customer_id, order_date, status, total_amount)
+VALUES (1, CURRENT_DATE, 'processing', 0);
+
+-- Get the order ID (simulate LAST_INSERT_ROWID())
+-- In real application: SET @order_id = LAST_INSERT_ROWID();
+
+-- Add order items
+INSERT INTO order_items (order_id, product_id, quantity, unit_price)
+VALUES (1, 1, 2, 149.99);
+
+INSERT INTO order_items (order_id, product_id, quantity, unit_price)
+VALUES (1, 2, 1, 299.99);
+
+-- Update order total
+UPDATE orders 
+SET total_amount = (
+    SELECT SUM(quantity * unit_price) 
+    FROM order_items 
+    WHERE order_id = 1
+)
+WHERE order_id = 1;
+
+-- Update product inventory
+UPDATE products 
+SET stock_quantity = stock_quantity - 2
+WHERE product_id = 1;
+
+UPDATE products 
+SET stock_quantity = stock_quantity - 1
+WHERE product_id = 2;
+
+-- Commit all changes
+COMMIT;
+
+-- Verify the final state
+SELECT o.order_id, o.total_amount, o.status,
+       oi.product_id, oi.quantity, oi.unit_price
+FROM orders o
+JOIN order_items oi ON o.order_id = oi.order_id
+WHERE o.order_id = 1;">
+                            <h3 class="text-lg font-semibold text-violet-400 mb-2">3. Real-World Transaction Patterns</h3>
+                            <p class="text-gray-400 text-sm mb-3">Inventory updates, order processing, and business logic</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                Multi-step business operations with verification
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-amber-300">Indexes & Performance Optimization</h2>
+                <p class="text-gray-400 mb-4">Create and manage indexes for query optimization and performance tuning.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Basic index creation
+-- Simple index on single column
+CREATE INDEX idx_customers_email ON customers(email);
+CREATE INDEX idx_customers_lastname ON customers(last_name);
+CREATE INDEX idx_orders_date ON orders(order_date);
+CREATE INDEX idx_products_name ON products(name);
+
+-- Unique indexes (enforces uniqueness and improves performance)
+CREATE UNIQUE INDEX idx_customers_email_unique ON customers(email);
+CREATE UNIQUE INDEX idx_products_sku_unique ON products(sku);
+
+-- Composite indexes (multiple columns) - order matters!
+CREATE INDEX idx_customers_name ON customers(last_name, first_name);
+CREATE INDEX idx_orders_customer_date ON orders(customer_id, order_date);
+CREATE INDEX idx_order_items_lookup ON order_items(order_id, product_id);
+
+-- Functional indexes for case-insensitive searches
+CREATE INDEX idx_customers_email_lower ON customers(LOWER(email));
+CREATE INDEX idx_products_name_lower ON products(LOWER(name));
+
+-- Show all indexes on a table
+PRAGMA index_list('customers');
+
+-- Show detailed index information
+PRAGMA index_info('idx_customers_email');">
+                            <h3 class="text-lg font-semibold text-amber-400 mb-2">1. Creating Indexes</h3>
+                            <p class="text-gray-400 text-sm mb-3">Single column, composite, unique, and functional indexes</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                CREATE [UNIQUE] INDEX name ON table(columns);
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Query performance analysis and optimization
+-- Explain query execution plan (before optimization)
+EXPLAIN QUERY PLAN 
+SELECT * FROM customers WHERE email = 'john.smith@example.com';
+
+-- Create index to optimize the query
+CREATE INDEX idx_customers_email_perf ON customers(email);
+
+-- Explain again (should show index usage)
+EXPLAIN QUERY PLAN 
+SELECT * FROM customers WHERE email = 'john.smith@example.com';
+
+-- Complex query optimization
+EXPLAIN QUERY PLAN
+SELECT 
+    c.first_name,
+    c.last_name,
+    COUNT(o.order_id) as order_count,
+    SUM(o.total_amount) as total_spent
+FROM customers c
+LEFT JOIN orders o ON c.customer_id = o.customer_id
+WHERE c.registration_date >= '2024-01-01'
+GROUP BY c.customer_id, c.first_name, c.last_name
+HAVING COUNT(o.order_id) > 0
+ORDER BY total_spent DESC;
+
+-- Create indexes to optimize the complex query
+CREATE INDEX idx_customers_registration ON customers(registration_date);
+CREATE INDEX idx_orders_customer_amount ON orders(customer_id, total_amount);
+
+-- Explain the optimized query
+EXPLAIN QUERY PLAN
+SELECT 
+    c.first_name,
+    c.last_name,
+    COUNT(o.order_id) as order_count,
+    SUM(o.total_amount) as total_spent
+FROM customers c
+LEFT JOIN orders o ON c.customer_id = o.customer_id
+WHERE c.registration_date >= '2024-01-01'
+GROUP BY c.customer_id, c.first_name, c.last_name
+HAVING COUNT(o.order_id) > 0
+ORDER BY total_spent DESC;
+
+-- Performance comparison queries
+-- Test without index
+SELECT COUNT(*) FROM orders WHERE order_date BETWEEN '2024-01-01' AND '2024-01-31';
+
+-- Create index for date range queries
+CREATE INDEX idx_orders_date_range ON orders(order_date);
+
+-- Test with index (should be faster)
+SELECT COUNT(*) FROM orders WHERE order_date BETWEEN '2024-01-01' AND '2024-01-31';">
+                            <h3 class="text-lg font-semibold text-amber-400 mb-2">2. Performance Analysis & Optimization</h3>
+                            <p class="text-gray-400 text-sm mb-3">EXPLAIN plans, query optimization, and performance testing</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                EXPLAIN QUERY PLAN; Performance before/after indexing
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Index maintenance and advanced operations
+-- Drop indexes when no longer needed
+DROP INDEX IF EXISTS idx_customers_email_perf;
+DROP INDEX IF EXISTS idx_orders_customer_date;
+
+-- Recreate with better definition
+CREATE INDEX idx_customers_search ON customers(last_name, first_name, email);
+
+-- Expression indexes for computed values
+CREATE INDEX idx_customers_full_name ON customers(first_name || ' ' || last_name);
+CREATE INDEX idx_orders_year ON orders(strftime('%Y', order_date));
+CREATE INDEX idx_orders_month_year ON orders(strftime('%Y-%m', order_date));
+
+-- Test expression indexes
+SELECT * FROM customers 
+WHERE first_name || ' ' || last_name = 'John Smith';
+
+SELECT COUNT(*), strftime('%Y', order_date) as year
+FROM orders 
+GROUP BY strftime('%Y', order_date);
+
+-- Index for JSON data (if using JSON columns)
+-- CREATE INDEX idx_customer_metadata ON customers((metadata->>'city'));
+
+-- Covering indexes (include additional columns)
+-- Note: DuckDB syntax may vary
+CREATE INDEX idx_orders_covering ON orders(customer_id, order_date, total_amount);
+
+-- Show all indexes in the database
+SELECT name, sql FROM sqlite_master 
+WHERE type = 'index' 
+AND name NOT LIKE 'sqlite_%'
+ORDER BY name;
+
+-- Analyze tables to update statistics
+ANALYZE customers;
+ANALYZE orders;
+ANALYZE products;
+
+-- Database size and storage information
+PRAGMA database_size;
+PRAGMA page_size;">
+                            <h3 class="text-lg font-semibold text-amber-400 mb-2">3. Advanced Index Management</h3>
+                            <p class="text-gray-400 text-sm mb-3">Expression indexes, covering indexes, and maintenance</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                Expression indexes, ANALYZE, database statistics
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-rose-300">Views & Virtual Tables</h2>
+                <p class="text-gray-400 mb-4">Create reusable queries and virtual tables for simplified data access and security.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Create comprehensive business views
+-- Customer summary view with calculated fields
+CREATE VIEW customer_summary AS
+SELECT 
+    c.customer_id,
+    c.first_name || ' ' || c.last_name AS full_name,
+    c.email,
+    c.registration_date,
+    c.city,
+    c.country,
+    COUNT(o.order_id) AS total_orders,
+    COALESCE(SUM(o.total_amount), 0) AS total_spent,
+    COALESCE(AVG(o.total_amount), 0) AS avg_order_value,
+    MAX(o.order_date) AS last_order_date,
+    MIN(o.order_date) AS first_order_date,
+    CASE 
+        WHEN COUNT(o.order_id) = 0 THEN 'Never Purchased'
+        WHEN MAX(o.order_date) >= CURRENT_DATE - INTERVAL 30 DAY THEN 'Active'
+        WHEN MAX(o.order_date) >= CURRENT_DATE - INTERVAL 90 DAY THEN 'At Risk'
+        ELSE 'Churned'
+    END AS customer_status
+FROM customers c
+LEFT JOIN orders o ON c.customer_id = o.customer_id
+GROUP BY c.customer_id, c.first_name, c.last_name, c.email, 
+         c.registration_date, c.city, c.country;
+
+-- Use the customer summary view
+SELECT * FROM customer_summary 
+WHERE customer_status = 'Active' 
+ORDER BY total_spent DESC 
+LIMIT 10;
+
+-- Product performance view
+CREATE VIEW product_performance AS
+SELECT 
+    p.product_id,
+    p.name,
+    p.sku,
+    c.name AS category_name,
+    p.price,
+    p.stock_quantity,
+    COUNT(oi.order_item_id) AS times_ordered,
+    COALESCE(SUM(oi.quantity), 0) AS total_quantity_sold,
+    COALESCE(SUM(oi.quantity * oi.unit_price), 0) AS total_revenue,
+    COALESCE(AVG(oi.unit_price), p.price) AS avg_selling_price,
+    CASE 
+        WHEN COUNT(oi.order_item_id) = 0 THEN 'Never Sold'
+        WHEN COUNT(oi.order_item_id) >= 10 THEN 'Best Seller'
+        WHEN COUNT(oi.order_item_id) >= 5 THEN 'Popular'
+        ELSE 'Slow Mover'
+    END AS performance_category
+FROM products p
+LEFT JOIN categories c ON p.category_id = c.category_id
+LEFT JOIN order_items oi ON p.product_id = oi.product_id
+GROUP BY p.product_id, p.name, p.sku, c.name, p.price, p.stock_quantity;
+
+SELECT * FROM product_performance 
+WHERE performance_category != 'Never Sold'
+ORDER BY total_revenue DESC;"</span>
+                            <h3 class="text-lg font-semibold text-rose-400 mb-2">1. Business Intelligence Views</h3>
+                            <p class="text-gray-400 text-sm mb-3">Customer analytics and product performance views</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                CREATE VIEW with business logic and calculations
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Security and access control views
+-- Create view that hides sensitive customer information
+CREATE VIEW customer_public AS
+SELECT 
+    customer_id,
+    first_name,
+    LEFT(last_name, 1) || '***' AS last_name_masked,
+    LEFT(email, 3) || '***@' || SUBSTR(email, INSTR(email, '@') + 1) AS email_masked,
+    city,
+    country,
+    registration_date
+FROM customers;
+
+-- Use the masked view
+SELECT * FROM customer_public LIMIT 5;
+
+-- Create view for specific user roles (conceptual)
+CREATE VIEW sales_dashboard AS
+SELECT 
+    DATE_TRUNC('month', o.order_date) AS month,
+    COUNT(*) AS total_orders,
+    SUM(o.total_amount) AS total_revenue,
+    AVG(o.total_amount) AS avg_order_value,
+    COUNT(DISTINCT o.customer_id) AS unique_customers,
+    SUM(o.total_amount) / COUNT(DISTINCT o.customer_id) AS revenue_per_customer
+FROM orders o
+WHERE o.order_date >= CURRENT_DATE - INTERVAL 12 MONTH
+GROUP BY DATE_TRUNC('month', o.order_date);
+
+-- Manager view with additional details
+CREATE VIEW manager_dashboard AS
+SELECT 
+    sd.*,
+    (SELECT COUNT(*) FROM customers WHERE registration_date >= sd.month) AS new_customers_in_month,
+    (SELECT COUNT(*) FROM products WHERE created_date >= sd.month) AS new_products_in_month
+FROM sales_dashboard sd;
+
+-- Simple updatable view (single table, no aggregations)
+CREATE VIEW active_products AS
+SELECT product_id, name, sku, price, stock_quantity, is_active
+FROM products
+WHERE is_active = true;
+
+-- Update through view (works for simple views)
+UPDATE active_products 
+SET price = price * 1.05 
+WHERE stock_quantity > 100;"</span>
+                            <h3 class="text-lg font-semibold text-rose-400 mb-2">2. Security & Access Control Views</h3>
+                            <p class="text-gray-400 text-sm mb-3">Data masking, role-based views, and updatable views</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                Views for data security and role-based access
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Advanced view operations and management
+-- Show view definitions
+SELECT name, sql FROM sqlite_master 
+WHERE type = 'view' 
+ORDER BY name;
+
+-- Create view with complex joins and subqueries
+CREATE VIEW order_analysis AS
+SELECT 
+    o.order_id,
+    o.order_date,
+    c.first_name || ' ' || c.last_name AS customer_name,
+    c.email,
+    o.total_amount,
+    o.status,
+    COUNT(oi.order_item_id) AS item_count,
+    STRING_AGG(p.name, ', ') AS products_ordered,
+    CASE 
+        WHEN o.total_amount > 1000 THEN 'High Value'
+        WHEN o.total_amount > 300 THEN 'Medium Value'
+        ELSE 'Low Value'
+    END AS order_value_category,
+    ROW_NUMBER() OVER (PARTITION BY c.customer_id ORDER BY o.order_date) AS customer_order_number
+FROM orders o
+JOIN customers c ON o.customer_id = c.customer_id
+JOIN order_items oi ON o.order_id = oi.order_id
+JOIN products p ON oi.product_id = p.product_id
+GROUP BY o.order_id, o.order_date, c.first_name, c.last_name, 
+         c.email, o.total_amount, o.status, c.customer_id;
+
+-- Use the complex view
+SELECT * FROM order_analysis 
+WHERE order_value_category = 'High Value'
+ORDER BY order_date DESC 
+LIMIT 10;
+
+-- Create materialized view simulation (table from view)
+CREATE TABLE monthly_sales_snapshot AS
+SELECT * FROM sales_dashboard;
+
+-- Refresh the snapshot (manual process in DuckDB)
+DELETE FROM monthly_sales_snapshot;
+INSERT INTO monthly_sales_snapshot SELECT * FROM sales_dashboard;
+
+-- Drop views
+DROP VIEW IF EXISTS customer_public;
+DROP VIEW IF EXISTS active_products;
+DROP VIEW IF EXISTS order_analysis;
+
+-- Drop materialized view simulation
+DROP TABLE IF EXISTS monthly_sales_snapshot;
+
+-- List all remaining views
+SELECT name FROM sqlite_master WHERE type = 'view';"</span>
+                            <h3 class="text-lg font-semibold text-rose-400 mb-2">3. Advanced View Management</h3>
+                            <p class="text-gray-400 text-sm mb-3">Complex views, materialized view simulation, and maintenance</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                Complex JOINs in views, materialized view patterns
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-green-300">Sample Dataset Setup</h2>
+                <div class="bg-green-900/20 border border-green-700 rounded-lg p-4 mb-4">
+                    <h3 class="text-green-300 font-semibold mb-2">🏪 E-Commerce Database Schema</h3>
+                    <p class="text-green-200 text-sm">We'll create tables for customers, products, categories, and orders with proper relationships.</p>
+                </div>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Create complete e-commerce database schema
+DROP TABLE IF EXISTS order_items;
+DROP TABLE IF EXISTS orders;
+DROP TABLE IF EXISTS products;
+DROP TABLE IF EXISTS categories;
+DROP TABLE IF EXISTS customers;
+
+-- Categories table
+CREATE TABLE categories (
+    category_id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    description TEXT
+);
+
+-- Customers table
+CREATE TABLE customers (
+    customer_id SERIAL PRIMARY KEY,
+    first_name VARCHAR(50) NOT NULL,
+    last_name VARCHAR(50) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    phone VARCHAR(20),
+    registration_date DATE DEFAULT CURRENT_DATE,
+    city VARCHAR(50),
+    country VARCHAR(50) DEFAULT 'USA'
+);
+
+-- Products table
+CREATE TABLE products (
+    product_id SERIAL PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    price DECIMAL(10,2) NOT NULL CHECK (price > 0),
+    stock_quantity INTEGER DEFAULT 0 CHECK (stock_quantity >= 0),
+    category_id INTEGER,
+    created_date DATE DEFAULT CURRENT_DATE,
+    is_active BOOLEAN DEFAULT true,
+    FOREIGN KEY (category_id) REFERENCES categories(category_id)
+);
+
+-- Orders table
+CREATE TABLE orders (
+    order_id SERIAL PRIMARY KEY,
+    customer_id INTEGER NOT NULL,
+    order_date TIMESTAMP DEFAULT NOW(),
+    status VARCHAR(20) DEFAULT 'pending',
+    total_amount DECIMAL(10,2) DEFAULT 0,
+    shipping_address TEXT,
+    FOREIGN KEY (customer_id) REFERENCES customers(customer_id)
+);
+
+-- Order items junction table
+CREATE TABLE order_items (
+    order_item_id SERIAL PRIMARY KEY,
+    order_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    unit_price DECIMAL(10,2) NOT NULL,
+    FOREIGN KEY (order_id) REFERENCES orders(order_id),
+    FOREIGN KEY (product_id) REFERENCES products(product_id)
+);
+
+SELECT 'Database schema created successfully!' as result;">
+                            <h3 class="text-lg font-semibold text-green-400 mb-2">1. Create Database Schema</h3>
+                            <p class="text-gray-400 text-sm mb-3">Set up the complete table structure with relationships and constraints</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                CREATE TABLE categories, customers, products, orders, order_items...
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Insert sample data for our e-commerce database
+
+-- Insert categories
+INSERT INTO categories (name, description) VALUES
+('Electronics', 'Electronic devices and gadgets'),
+('Clothing', 'Apparel and fashion items'),
+('Books', 'Physical and digital books'),
+('Home & Garden', 'Home improvement and gardening supplies'),
+('Sports', 'Sports equipment and fitness gear');
+
+-- Insert customers
+INSERT INTO customers (first_name, last_name, email, phone, city, country) VALUES
+('John', 'Doe', 'john.doe@email.com', '555-0101', 'New York', 'USA'),
+('Jane', 'Smith', 'jane.smith@email.com', '555-0102', 'Los Angeles', 'USA'),
+('Bob', 'Johnson', 'bob.johnson@email.com', '555-0103', 'Chicago', 'USA'),
+('Alice', 'Williams', 'alice.williams@email.com', '555-0104', 'Houston', 'USA'),
+('Charlie', 'Brown', 'charlie.brown@email.com', '555-0105', 'Phoenix', 'USA'),
+('Diana', 'Davis', 'diana.davis@email.com', '555-0106', 'Philadelphia', 'USA'),
+('Eva', 'Miller', 'eva.miller@email.com', '555-0107', 'San Antonio', 'USA'),
+('Frank', 'Wilson', 'frank.wilson@email.com', '555-0108', 'San Diego', 'USA');
+
+-- Insert products
+INSERT INTO products (name, description, price, stock_quantity, category_id) VALUES
+('Smartphone Pro', 'Latest smartphone with advanced features', 899.99, 50, 1),
+('Laptop Ultra', 'High-performance laptop for professionals', 1299.99, 25, 1),
+('Wireless Headphones', 'Premium noise-canceling headphones', 199.99, 100, 1),
+('Smart Watch', 'Fitness tracking smartwatch', 299.99, 75, 1),
+('Denim Jeans', 'Classic blue denim jeans', 79.99, 200, 2),
+('Cotton T-Shirt', 'Comfortable cotton t-shirt', 24.99, 300, 2),
+('Winter Jacket', 'Warm winter jacket', 149.99, 80, 2),
+('SQL Mastery Book', 'Complete guide to SQL databases', 49.99, 150, 3),
+('Programming Fundamentals', 'Learn programming basics', 39.99, 120, 3),
+('Garden Tools Set', 'Complete gardening tool kit', 89.99, 60, 4),
+('Indoor Plant Pot', 'Decorative pot for indoor plants', 19.99, 180, 4),
+('Tennis Racket', 'Professional tennis racket', 129.99, 40, 5),
+('Running Shoes', 'Comfortable running shoes', 99.99, 150, 5);
+
+-- Insert orders
+INSERT INTO orders (customer_id, order_date, status, shipping_address) VALUES
+(1, '2024-01-15 10:30:00', 'completed', '123 Main St, New York, NY'),
+(2, '2024-01-16 14:20:00', 'completed', '456 Oak Ave, Los Angeles, CA'),
+(3, '2024-01-17 09:15:00', 'shipped', '789 Pine St, Chicago, IL'),
+(4, '2024-01-18 16:45:00', 'pending', '321 Elm St, Houston, TX'),
+(1, '2024-01-19 11:20:00', 'completed', '123 Main St, New York, NY'),
+(5, '2024-01-20 13:30:00', 'shipped', '654 Maple Dr, Phoenix, AZ');
+
+-- Insert order items
+INSERT INTO order_items (order_id, product_id, quantity, unit_price) VALUES
+(1, 1, 1, 899.99),
+(1, 3, 1, 199.99),
+(2, 2, 1, 1299.99),
+(2, 5, 2, 79.99),
+(3, 4, 1, 299.99),
+(3, 6, 3, 24.99),
+(4, 8, 2, 49.99),
+(4, 9, 1, 39.99),
+(5, 7, 1, 149.99),
+(5, 11, 2, 19.99),
+(6, 12, 1, 129.99),
+(6, 13, 1, 99.99);
+
+-- Update order totals
+UPDATE orders SET total_amount = (
+    SELECT SUM(quantity * unit_price)
+    FROM order_items
+    WHERE order_items.order_id = orders.order_id
+);
+
+SELECT 'Sample data inserted successfully!' as result;">
+                            <h3 class="text-lg font-semibold text-green-400 mb-2">2. Insert Sample Data</h3>
+                            <p class="text-gray-400 text-sm mb-3">Populate tables with realistic e-commerce data for testing</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                INSERT INTO categories, customers, products, orders...
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-yellow-300">Basic Queries & Data Exploration</h2>
+                <p class="text-gray-400 mb-4">Start with fundamental SQL operations to explore your data. These queries form the foundation of data analysis.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Basic SELECT operations
+SELECT * FROM customers LIMIT 5;
+
+-- Select specific columns
+SELECT first_name, last_name, email, city FROM customers;
+
+-- Count total records
+SELECT COUNT(*) as total_customers FROM customers;
+
+-- View table structure
+DESCRIBE customers;">
+                            <h3 class="text-lg font-semibold text-yellow-400 mb-2">1. Basic SELECT Operations</h3>
+                            <p class="text-gray-400 text-sm mb-3">Retrieve data from tables and explore table structure</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                SELECT * FROM customers; -- Get all customer data
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Filtering with WHERE clause
+SELECT * FROM products WHERE price > 100;
+
+-- Multiple conditions
+SELECT name, price FROM products 
+WHERE price BETWEEN 50 AND 200 AND stock_quantity > 50;
+
+-- Text pattern matching
+SELECT * FROM customers WHERE email LIKE '%gmail%';
+
+-- Working with NULL values
+SELECT * FROM products WHERE description IS NOT NULL;
+
+-- Filtering dates
+SELECT * FROM orders WHERE order_date >= '2024-01-18';">
+                            <h3 class="text-lg font-semibold text-yellow-400 mb-2">2. Filtering Data</h3>
+                            <p class="text-gray-400 text-sm mb-3">Use WHERE clauses to filter rows based on conditions</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                WHERE price > 100 AND stock_quantity > 50
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Sorting results
+SELECT name, price FROM products ORDER BY price DESC;
+
+-- Multiple sort columns
+SELECT first_name, last_name, city FROM customers 
+ORDER BY city, last_name;
+
+-- Limiting results
+SELECT name, price FROM products 
+ORDER BY price DESC 
+LIMIT 5;
+
+-- Pagination with OFFSET
+SELECT name, price FROM products 
+ORDER BY price DESC 
+LIMIT 5 OFFSET 5;">
+                            <h3 class="text-lg font-semibold text-yellow-400 mb-2">3. Sorting and Limiting</h3>
+                            <p class="text-gray-400 text-sm mb-3">Order results and control the number of rows returned</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                ORDER BY price DESC LIMIT 5
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Remove duplicates
+SELECT DISTINCT city FROM customers;
+
+-- Distinct with multiple columns
+SELECT DISTINCT category_id, is_active FROM products;
+
+-- Unique email domains
+SELECT DISTINCT 
+    substring(email FROM position('@' in email) + 1) as email_domain
+FROM customers
+ORDER BY email_domain;">
+                            <h3 class="text-lg font-semibold text-yellow-400 mb-2">4. Working with Unique Values</h3>
+                            <p class="text-gray-400 text-sm mb-3">Find distinct values and eliminate duplicates</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                SELECT DISTINCT city FROM customers
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-orange-300">Aggregation & Grouping</h2>
+                <p class="text-gray-400 mb-4">Summarize data using aggregate functions and GROUP BY to gain insights from your dataset.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Basic aggregate functions
+SELECT 
+    COUNT(*) as total_products,
+    AVG(price) as average_price,
+    MIN(price) as cheapest_price,
+    MAX(price) as most_expensive,
+    SUM(stock_quantity) as total_inventory
+FROM products;
+
+-- String aggregation
+SELECT string_agg(name, ', ') as product_list
+FROM products
+WHERE category_id = 1;">
+                            <h3 class="text-lg font-semibold text-orange-400 mb-2">1. Aggregate Functions</h3>
+                            <p class="text-gray-400 text-sm mb-3">Calculate summary statistics across your data</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                COUNT(*), AVG(price), MIN(price), MAX(price)
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Group by single column
+SELECT 
+    category_id,
+    COUNT(*) as product_count,
+    AVG(price) as avg_price,
+    SUM(stock_quantity) as total_stock
+FROM products
+GROUP BY category_id
+ORDER BY product_count DESC;
+
+-- Group by multiple columns
+SELECT 
+    city,
+    country,
+    COUNT(*) as customer_count
+FROM customers
+GROUP BY city, country
+ORDER BY customer_count DESC;">
+                            <h3 class="text-lg font-semibold text-orange-400 mb-2">2. GROUP BY Basics</h3>
+                            <p class="text-gray-400 text-sm mb-3">Group rows by common values for aggregate calculations</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                GROUP BY category_id
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Filter groups with HAVING
+SELECT 
+    category_id,
+    COUNT(*) as product_count,
+    AVG(price) as avg_price
+FROM products
+GROUP BY category_id
+HAVING COUNT(*) > 2 AND AVG(price) > 50
+ORDER BY avg_price DESC;
+
+-- HAVING vs WHERE
+SELECT 
+    status,
+    COUNT(*) as order_count,
+    AVG(total_amount) as avg_order_value
+FROM orders
+WHERE order_date >= '2024-01-16'  -- Filter rows before grouping
+GROUP BY status
+HAVING COUNT(*) > 1;              -- Filter groups after aggregation">
+                            <h3 class="text-lg font-semibold text-orange-400 mb-2">3. HAVING Clause</h3>
+                            <p class="text-gray-400 text-sm mb-3">Filter groups after aggregation (WHERE filters before grouping)</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                HAVING COUNT(*) > 2 AND AVG(price) > 50
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Advanced grouping with ROLLUP
+SELECT 
+    city,
+    country,
+    COUNT(*) as customer_count
+FROM customers
+GROUP BY ROLLUP(country, city)
+ORDER BY country, city;
+
+-- Group by date parts
+SELECT 
+    DATE_TRUNC('month', order_date) as order_month,
+    COUNT(*) as order_count,
+    SUM(total_amount) as monthly_revenue
+FROM orders
+GROUP BY DATE_TRUNC('month', order_date)
+ORDER BY order_month;">
+                            <h3 class="text-lg font-semibold text-orange-400 mb-2">4. Advanced Grouping</h3>
+                            <p class="text-gray-400 text-sm mb-3">Use ROLLUP and date functions for hierarchical analysis</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                GROUP BY ROLLUP(country, city)
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-cyan-300">Table Relationships & Joins</h2>
+                <p class="text-gray-400 mb-4">Combine data from multiple tables using JOIN operations. This is where relational databases shine!</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- INNER JOIN - only matching records
+SELECT 
+    p.name as product_name,
+    c.name as category_name,
+    p.price,
+    p.stock_quantity
+FROM products p
+INNER JOIN categories c ON p.category_id = c.category_id
+ORDER BY c.name, p.name;
+
+-- Multiple table INNER JOIN
+SELECT 
+    o.order_id,
+    CONCAT(cu.first_name, ' ', cu.last_name) as customer_name,
+    o.order_date,
+    o.total_amount
+FROM orders o
+INNER JOIN customers cu ON o.customer_id = cu.customer_id
+WHERE o.status = 'completed'
+ORDER BY o.order_date DESC;">
+                            <h3 class="text-lg font-semibold text-cyan-400 mb-2">1. INNER JOIN</h3>
+                            <p class="text-gray-400 text-sm mb-3">Return only rows that have matching values in both tables</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                INNER JOIN categories c ON p.category_id = c.category_id
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- LEFT JOIN - all records from left table
+SELECT 
+    c.name as category_name,
+    COUNT(p.product_id) as product_count,
+    COALESCE(AVG(p.price), 0) as avg_price
+FROM categories c
+LEFT JOIN products p ON c.category_id = p.category_id
+GROUP BY c.category_id, c.name
+ORDER BY product_count DESC;
+
+-- Find customers with no orders
+SELECT 
+    cu.customer_id,
+    CONCAT(cu.first_name, ' ', cu.last_name) as customer_name,
+    cu.email,
+    cu.registration_date
+FROM customers cu
+LEFT JOIN orders o ON cu.customer_id = o.customer_id
+WHERE o.customer_id IS NULL;">
+                            <h3 class="text-lg font-semibold text-cyan-400 mb-2">2. LEFT JOIN</h3>
+                            <p class="text-gray-400 text-sm mb-3">Return all rows from left table, with NULLs for non-matching right table rows</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                LEFT JOIN products p ON c.category_id = p.category_id
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Complex JOIN with order details
+SELECT 
+    o.order_id,
+    CONCAT(cu.first_name, ' ', cu.last_name) as customer_name,
+    o.order_date,
+    p.name as product_name,
+    c.name as category_name,
+    oi.quantity,
+    oi.unit_price,
+    (oi.quantity * oi.unit_price) as line_total
+FROM orders o
+INNER JOIN customers cu ON o.customer_id = cu.customer_id
+INNER JOIN order_items oi ON o.order_id = oi.order_id
+INNER JOIN products p ON oi.product_id = p.product_id
+INNER JOIN categories c ON p.category_id = c.category_id
+WHERE o.status IN ('completed', 'shipped')
+ORDER BY o.order_date DESC, o.order_id;
+
+-- Self-join example (if we had manager relationships)
+-- Find products in same category
+SELECT 
+    p1.name as product1,
+    p2.name as product2,
+    c.name as category
+FROM products p1
+INNER JOIN products p2 ON p1.category_id = p2.category_id AND p1.product_id < p2.product_id
+INNER JOIN categories c ON p1.category_id = c.category_id
+ORDER BY c.name;">
+                            <h3 class="text-lg font-semibold text-cyan-400 mb-2">3. Multi-Table Joins</h3>
+                            <p class="text-gray-400 text-sm mb-3">Join multiple tables to create comprehensive result sets</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                FROM orders o JOIN customers cu ON... JOIN order_items oi ON...
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- RIGHT JOIN (less common)
+SELECT 
+    cu.first_name,
+    cu.last_name,
+    o.order_id,
+    o.total_amount
+FROM orders o
+RIGHT JOIN customers cu ON o.customer_id = cu.customer_id
+ORDER BY cu.last_name;
+
+-- FULL OUTER JOIN
+SELECT 
+    cu.customer_id,
+    cu.first_name,
+    cu.last_name,
+    o.order_id,
+    o.total_amount
+FROM customers cu
+FULL OUTER JOIN orders o ON cu.customer_id = o.customer_id
+ORDER BY cu.customer_id;
+
+-- CROSS JOIN (Cartesian product)
+SELECT 
+    c.name as category_name,
+    COUNT(p.product_id) as product_count
+FROM categories c
+CROSS JOIN (SELECT COUNT(*) as total FROM products) totals
+LEFT JOIN products p ON c.category_id = p.category_id
+GROUP BY c.category_id, c.name, totals.total;">
+                            <h3 class="text-lg font-semibold text-cyan-400 mb-2">4. Other Join Types</h3>
+                            <p class="text-gray-400 text-sm mb-3">RIGHT JOIN, FULL OUTER JOIN, and CROSS JOIN for special cases</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                RIGHT JOIN, FULL OUTER JOIN, CROSS JOIN
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-indigo-300">Subqueries & Advanced Filtering</h2>
+                <p class="text-gray-400 mb-4">Use subqueries to create complex filters and calculations based on other query results.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Subquery in WHERE clause
+SELECT name, price FROM products
+WHERE price > (SELECT AVG(price) FROM products);
+
+-- Find products in Electronics category using subquery
+SELECT name, price, stock_quantity
+FROM products
+WHERE category_id = (
+    SELECT category_id FROM categories WHERE name = 'Electronics'
+);
+
+-- Multiple value subquery with IN
+SELECT first_name, last_name, email
+FROM customers
+WHERE customer_id IN (
+    SELECT DISTINCT customer_id FROM orders WHERE total_amount > 500
+);">
+                            <h3 class="text-lg font-semibold text-indigo-400 mb-2">1. WHERE Subqueries</h3>
+                            <p class="text-gray-400 text-sm mb-3">Filter rows based on results from other queries</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                WHERE price > (SELECT AVG(price) FROM products)
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Subquery in SELECT clause
+SELECT 
+    name,
+    price,
+    (SELECT AVG(price) FROM products) as avg_price,
+    price - (SELECT AVG(price) FROM products) as price_diff
+FROM products
+ORDER BY price_diff DESC;
+
+-- Correlated subquery
+SELECT 
+    c.name as category_name,
+    (SELECT COUNT(*) FROM products p WHERE p.category_id = c.category_id) as product_count,
+    (SELECT AVG(price) FROM products p WHERE p.category_id = c.category_id) as avg_price
+FROM categories c;">
+                            <h3 class="text-lg font-semibold text-indigo-400 mb-2">2. SELECT Subqueries</h3>
+                            <p class="text-gray-400 text-sm mb-3">Calculate values using subqueries in the SELECT clause</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                (SELECT AVG(price) FROM products) as avg_price
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- EXISTS subquery
+SELECT first_name, last_name, email
+FROM customers c
+WHERE EXISTS (
+    SELECT 1 FROM orders o WHERE o.customer_id = c.customer_id
+);
+
+-- NOT EXISTS for customers without orders
+SELECT first_name, last_name, email, registration_date
+FROM customers c
+WHERE NOT EXISTS (
+    SELECT 1 FROM orders o WHERE o.customer_id = c.customer_id
+);
+
+-- ANY/ALL operators
+SELECT name, price FROM products
+WHERE price > ALL (
+    SELECT price FROM products WHERE category_id = 3  -- Books category
+);">
+                            <h3 class="text-lg font-semibold text-indigo-400 mb-2">3. EXISTS and Comparison Operators</h3>
+                            <p class="text-gray-400 text-sm mb-3">Test for existence and compare against multiple values</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                WHERE EXISTS (SELECT 1 FROM orders...)
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Common Table Expressions (CTE)
+WITH high_value_orders AS (
+    SELECT customer_id, COUNT(*) as order_count, SUM(total_amount) as total_spent
+    FROM orders
+    WHERE total_amount > 300
+    GROUP BY customer_id
+),
+customer_summary AS (
+    SELECT 
+        c.first_name,
+        c.last_name,
+        c.email,
+        hvo.order_count,
+        hvo.total_spent
+    FROM customers c
+    INNER JOIN high_value_orders hvo ON c.customer_id = hvo.customer_id
+)
+SELECT * FROM customer_summary
+ORDER BY total_spent DESC;
+
+-- Recursive CTE example (category hierarchy)
+WITH RECURSIVE category_tree AS (
+    SELECT category_id, name, 0 as level
+    FROM categories
+    WHERE category_id <= 3  -- Base case
+    
+    UNION ALL
+    
+    SELECT c.category_id, c.name, ct.level + 1
+    FROM categories c
+    INNER JOIN category_tree ct ON c.category_id = ct.category_id + 1
+    WHERE ct.level < 2
+)
+SELECT * FROM category_tree;">
+                            <h3 class="text-lg font-semibold text-indigo-400 mb-2">4. Common Table Expressions (CTE)</h3>
+                            <p class="text-gray-400 text-sm mb-3">Create temporary named result sets for complex queries</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                WITH high_value_orders AS (SELECT...)
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-pink-300">Window Functions & Analytics</h2>
+                <p class="text-gray-400 mb-4">Perform advanced analytics with window functions for ranking, running totals, and comparisons.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- ROW_NUMBER for unique ranking
+SELECT 
+    name,
+    price,
+    ROW_NUMBER() OVER (ORDER BY price DESC) as price_rank
+FROM products
+ORDER BY price_rank;
+
+-- Ranking within partitions
+SELECT 
+    c.name as category,
+    p.name as product,
+    p.price,
+    ROW_NUMBER() OVER (PARTITION BY c.name ORDER BY p.price DESC) as rank_in_category
+FROM products p
+INNER JOIN categories c ON p.category_id = c.category_id
+ORDER BY c.name, rank_in_category;">
+                            <h3 class="text-lg font-semibold text-pink-400 mb-2">1. ROW_NUMBER</h3>
+                            <p class="text-gray-400 text-sm mb-3">Assign unique sequential numbers to rows</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC)
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- RANK and DENSE_RANK for handling ties
+SELECT 
+    name,
+    price,
+    RANK() OVER (ORDER BY price DESC) as rank_with_gaps,
+    DENSE_RANK() OVER (ORDER BY price DESC) as dense_rank
+FROM products
+ORDER BY price DESC;
+
+-- Percentile rankings
+SELECT 
+    name,
+    price,
+    PERCENT_RANK() OVER (ORDER BY price) as price_percentile,
+    NTILE(4) OVER (ORDER BY price) as price_quartile
+FROM products
+ORDER BY price;">
+                            <h3 class="text-lg font-semibold text-pink-400 mb-2">2. RANK Functions</h3>
+                            <p class="text-gray-400 text-sm mb-3">Handle ties in rankings and create percentile groups</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                RANK() vs DENSE_RANK() vs NTILE(4)
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- LAG and LEAD for accessing other rows
+SELECT 
+    order_date,
+    total_amount,
+    LAG(total_amount, 1) OVER (ORDER BY order_date) as previous_order_amount,
+    LEAD(total_amount, 1) OVER (ORDER BY order_date) as next_order_amount,
+    total_amount - LAG(total_amount, 1) OVER (ORDER BY order_date) as amount_change
+FROM orders
+ORDER BY order_date;
+
+-- Compare with same customer's previous order
+SELECT 
+    customer_id,
+    order_date,
+    total_amount,
+    LAG(total_amount, 1) OVER (PARTITION BY customer_id ORDER BY order_date) as prev_order,
+    total_amount - LAG(total_amount, 1) OVER (PARTITION BY customer_id ORDER BY order_date) as growth
+FROM orders
+ORDER BY customer_id, order_date;">
+                            <h3 class="text-lg font-semibold text-pink-400 mb-2">3. LAG and LEAD</h3>
+                            <p class="text-gray-400 text-sm mb-3">Access values from previous or next rows for comparisons</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                LAG(total_amount, 1) OVER (ORDER BY order_date)
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Running totals and moving averages
+SELECT 
+    order_date,
+    total_amount,
+    SUM(total_amount) OVER (ORDER BY order_date) as running_total,
+    AVG(total_amount) OVER (ORDER BY order_date ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) as moving_avg_3
+FROM orders
+ORDER BY order_date;
+
+-- Cumulative statistics
+SELECT 
+    name,
+    price,
+    SUM(price) OVER (ORDER BY price) as cumulative_price,
+    COUNT(*) OVER (ORDER BY price) as products_up_to_price,
+    AVG(price) OVER (ORDER BY price) as avg_price_up_to_here
+FROM products
+ORDER BY price;">
+                            <h3 class="text-lg font-semibold text-pink-400 mb-2">4. Aggregate Window Functions</h3>
+                            <p class="text-gray-400 text-sm mb-3">Calculate running totals, moving averages, and cumulative statistics</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                SUM(total_amount) OVER (ORDER BY order_date)
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-red-300">Data Modification & Transactions</h2>
+                <p class="text-gray-400 mb-4">Insert, update, and delete data while maintaining database integrity with transactions.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Basic INSERT operations
+INSERT INTO customers (first_name, last_name, email, city, country)
+VALUES ('Sarah', 'Connor', 'sarah.connor@email.com', 'Los Angeles', 'USA');
+
+-- Insert multiple rows
+INSERT INTO products (name, description, price, stock_quantity, category_id) VALUES
+('Gaming Mouse', 'High-precision gaming mouse', 79.99, 50, 1),
+('Mechanical Keyboard', 'RGB mechanical keyboard', 149.99, 30, 1),
+('USB-C Cable', 'High-speed USB-C cable', 19.99, 200, 1);
+
+-- Insert from SELECT (data migration)
+CREATE TABLE high_value_customers AS
+SELECT customer_id, first_name, last_name, email
+FROM customers
+WHERE customer_id IN (
+    SELECT customer_id FROM orders GROUP BY customer_id HAVING SUM(total_amount) > 500
+);">
+                            <h3 class="text-lg font-semibold text-red-400 mb-2">1. INSERT Operations</h3>
+                            <p class="text-gray-400 text-sm mb-3">Add new data to tables with various INSERT techniques</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                INSERT INTO customers (first_name, last_name...)
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Basic UPDATE operations
+UPDATE products 
+SET price = price * 1.10 
+WHERE category_id = 1;  -- 10% price increase for Electronics
+
+-- Conditional UPDATE with CASE
+UPDATE products
+SET stock_quantity = CASE
+    WHEN stock_quantity < 20 THEN stock_quantity + 50
+    WHEN stock_quantity < 50 THEN stock_quantity + 25
+    ELSE stock_quantity + 10
+END;
+
+-- UPDATE with JOIN (update based on related data)
+UPDATE products
+SET price = price * 0.95  -- 5% discount
+WHERE product_id IN (
+    SELECT DISTINCT oi.product_id
+    FROM order_items oi
+    INNER JOIN orders o ON oi.order_id = o.order_id
+    WHERE o.order_date >= '2024-01-18'
+);">
+                            <h3 class="text-lg font-semibold text-red-400 mb-2">2. UPDATE Operations</h3>
+                            <p class="text-gray-400 text-sm mb-3">Modify existing data with conditional logic and joins</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                UPDATE products SET price = price * 1.10 WHERE...
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Basic DELETE operations
+DELETE FROM order_items 
+WHERE order_id IN (SELECT order_id FROM orders WHERE status = 'cancelled');
+
+-- Cascade delete (delete related records)
+DELETE FROM orders WHERE customer_id = 999;  -- This would fail due to foreign keys
+
+-- Safe delete with verification
+SELECT COUNT(*) as orders_to_delete
+FROM orders 
+WHERE customer_id IN (
+    SELECT customer_id FROM customers WHERE email LIKE '%@tempmail.%'
+);
+
+-- DELETE using EXISTS
+DELETE FROM products p
+WHERE NOT EXISTS (
+    SELECT 1 FROM order_items oi WHERE oi.product_id = p.product_id
+) AND p.stock_quantity = 0;">
+                            <h3 class="text-lg font-semibold text-red-400 mb-2">3. DELETE Operations</h3>
+                            <p class="text-gray-400 text-sm mb-3">Remove data safely with proper checks and relationships</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                DELETE FROM orders WHERE status = 'cancelled'
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Transaction example
+BEGIN TRANSACTION;
+
+-- Create a new order
+INSERT INTO orders (customer_id, order_date, status, shipping_address)
+VALUES (1, NOW(), 'pending', '123 Main St, New York, NY');
+
+-- Get the new order ID (in a real application, you'd use RETURNING or similar)
+-- For demo, we'll use a specific order_id
+INSERT INTO order_items (order_id, product_id, quantity, unit_price)
+VALUES 
+    (7, 1, 1, 899.99),
+    (7, 3, 1, 199.99);
+
+-- Update product stock
+UPDATE products SET stock_quantity = stock_quantity - 1 WHERE product_id = 1;
+UPDATE products SET stock_quantity = stock_quantity - 1 WHERE product_id = 3;
+
+-- Update order total
+UPDATE orders 
+SET total_amount = (SELECT SUM(quantity * unit_price) FROM order_items WHERE order_id = 7)
+WHERE order_id = 7;
+
+-- If everything looks good, commit the transaction
+COMMIT;
+
+-- To rollback instead: ROLLBACK;">
+                            <h3 class="text-lg font-semibold text-red-400 mb-2">4. Transactions</h3>
+                            <p class="text-gray-400 text-sm mb-3">Ensure data consistency with BEGIN, COMMIT, and ROLLBACK</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                BEGIN TRANSACTION; ... COMMIT; / ROLLBACK;
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-teal-300">Date & Time Analysis</h2>
+                <p class="text-gray-400 mb-4">Master temporal data analysis with DuckDB's powerful date and time functions for business intelligence.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Current date and time functions
+SELECT 
+    NOW() as current_timestamp,
+    CURRENT_DATE as today,
+    CURRENT_TIME as current_time,
+    EXTRACT(year FROM NOW()) as current_year,
+    EXTRACT(month FROM NOW()) as current_month,
+    EXTRACT(day FROM NOW()) as current_day,
+    EXTRACT(hour FROM NOW()) as current_hour;
+
+-- Date arithmetic
+SELECT 
+    NOW() as now,
+    NOW() + INTERVAL 7 DAY as one_week_later,
+    NOW() - INTERVAL 1 MONTH as one_month_ago,
+    NOW() + INTERVAL '2 years 3 months' as future_date;">
+                            <h3 class="text-lg font-semibold text-teal-400 mb-2">1. Date & Time Basics</h3>
+                            <p class="text-gray-400 text-sm mb-3">Work with current dates, extract parts, and perform date arithmetic</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                NOW(), CURRENT_DATE, INTERVAL arithmetic
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Date formatting and parsing
+SELECT 
+    order_date,
+    strftime(order_date, '%Y-%m-%d') as formatted_date,
+    strftime(order_date, '%B %d, %Y') as readable_date,
+    strftime(order_date, '%W') as week_of_year,
+    DATE_TRUNC('month', order_date) as month_start,
+    DATE_TRUNC('week', order_date) as week_start,
+    DATE_TRUNC('year', order_date) as year_start
+FROM orders;
+
+-- Parse date strings
+SELECT 
+    strptime('2024-01-15 14:30:00', '%Y-%m-%d %H:%M:%S') as parsed_datetime,
+    DATE '2024-01-15' as date_literal,
+    TIMESTAMP '2024-01-15 14:30:00' as timestamp_literal;">
+                            <h3 class="text-lg font-semibold text-teal-400 mb-2">2. Date Formatting</h3>
+                            <p class="text-gray-400 text-sm mb-3">Format dates for display and truncate to specific time periods</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                strftime(date, '%Y-%m-%d'), DATE_TRUNC('month', date)
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Time-based analysis
+SELECT 
+    DATE_TRUNC('month', order_date) as order_month,
+    COUNT(*) as orders_count,
+    SUM(total_amount) as monthly_revenue,
+    AVG(total_amount) as avg_order_value,
+    MAX(total_amount) as largest_order
+FROM orders
+GROUP BY DATE_TRUNC('month', order_date)
+ORDER BY order_month;
+
+-- Day of week analysis
+SELECT 
+    EXTRACT(dow FROM order_date) as day_of_week,
+    CASE EXTRACT(dow FROM order_date)
+        WHEN 0 THEN 'Sunday'
+        WHEN 1 THEN 'Monday'
+        WHEN 2 THEN 'Tuesday'
+        WHEN 3 THEN 'Wednesday'
+        WHEN 4 THEN 'Thursday'
+        WHEN 5 THEN 'Friday'
+        WHEN 6 THEN 'Saturday'
+    END as day_name,
+    COUNT(*) as orders,
+    AVG(total_amount) as avg_amount
+FROM orders
+GROUP BY EXTRACT(dow FROM order_date)
+ORDER BY day_of_week;">
+                            <h3 class="text-lg font-semibold text-teal-400 mb-2">3. Time-Based Grouping</h3>
+                            <p class="text-gray-400 text-sm mb-3">Group data by time periods for trend analysis</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                GROUP BY DATE_TRUNC('month', order_date)
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Advanced date calculations
+SELECT 
+    customer_id,
+    first_name,
+    last_name,
+    registration_date,
+    DATE_DIFF('day', registration_date, CURRENT_DATE) as days_since_registration,
+    DATE_DIFF('month', registration_date, CURRENT_DATE) as months_as_customer,
+    CASE 
+        WHEN DATE_DIFF('day', registration_date, CURRENT_DATE) < 30 THEN 'New Customer'
+        WHEN DATE_DIFF('day', registration_date, CURRENT_DATE) < 365 THEN 'Regular Customer'
+        ELSE 'Loyal Customer'
+    END as customer_tenure
+FROM customers
+ORDER BY registration_date;
+
+-- Find seasonal patterns
+SELECT 
+    EXTRACT(quarter FROM order_date) as quarter,
+    EXTRACT(month FROM order_date) as month,
+    COUNT(*) as orders,
+    SUM(total_amount) as revenue
+FROM orders
+GROUP BY EXTRACT(quarter FROM order_date), EXTRACT(month FROM order_date)
+ORDER BY quarter, month;">
+                            <h3 class="text-lg font-semibold text-teal-400 mb-2">4. Date Calculations</h3>
+                            <p class="text-gray-400 text-sm mb-3">Calculate differences between dates and analyze seasonal patterns</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                DATE_DIFF('day', start_date, end_date)
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-green-300">Conditional Logic & Case Statements</h2>
+                <p class="text-gray-400 mb-4">Add business logic to your queries with conditional statements and data transformations.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Basic CASE statement
+SELECT 
+    name,
+    price,
+    CASE 
+        WHEN price < 50 THEN 'Budget'
+        WHEN price < 200 THEN 'Mid-Range'
+        WHEN price < 500 THEN 'Premium'
+        ELSE 'Luxury'
+    END as price_category,
+    CASE 
+        WHEN stock_quantity = 0 THEN 'Out of Stock'
+        WHEN stock_quantity < 10 THEN 'Low Stock'
+        WHEN stock_quantity < 50 THEN 'Moderate Stock'
+        ELSE 'Well Stocked'
+    END as stock_status
+FROM products
+ORDER BY price;">
+                            <h3 class="text-lg font-semibold text-green-400 mb-2">1. Basic CASE Statements</h3>
+                            <p class="text-gray-400 text-sm mb-3">Create categorical data and status indicators</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                CASE WHEN price < 50 THEN 'Budget' ELSE 'Premium' END
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- CASE in aggregations
+SELECT 
+    category_id,
+    COUNT(*) as total_products,
+    COUNT(CASE WHEN price > 100 THEN 1 END) as expensive_products,
+    COUNT(CASE WHEN stock_quantity > 50 THEN 1 END) as well_stocked_products,
+    SUM(CASE WHEN price > 100 THEN price ELSE 0 END) as expensive_products_value,
+    AVG(CASE WHEN price > 100 THEN price END) as avg_expensive_price
+FROM products
+GROUP BY category_id;
+
+-- Pivot-like analysis with CASE
+SELECT 
+    status,
+    COUNT(*) as total_orders,
+    SUM(CASE WHEN total_amount > 500 THEN 1 ELSE 0 END) as high_value_orders,
+    SUM(CASE WHEN total_amount BETWEEN 100 AND 500 THEN 1 ELSE 0 END) as medium_value_orders,
+    SUM(CASE WHEN total_amount < 100 THEN 1 ELSE 0 END) as low_value_orders
+FROM orders
+GROUP BY status;">
+                            <h3 class="text-lg font-semibold text-green-400 mb-2">2. CASE in Aggregations</h3>
+                            <p class="text-gray-400 text-sm mb-3">Use CASE statements within aggregate functions for conditional counting</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                COUNT(CASE WHEN price > 100 THEN 1 END)
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- NULL handling functions
+SELECT 
+    name,
+    description,
+    COALESCE(description, 'No description available') as description_with_default,
+    NULLIF(stock_quantity, 0) as stock_or_null,
+    IFNULL(description, 'Product description missing') as description_alt
+FROM products;
+
+-- Complex conditional logic
+SELECT 
+    customer_id,
+    first_name,
+    last_name,
+    CASE 
+        WHEN email LIKE '%@gmail.%' THEN 'Gmail'
+        WHEN email LIKE '%@yahoo.%' THEN 'Yahoo'
+        WHEN email LIKE '%@hotmail.%' OR email LIKE '%@outlook.%' THEN 'Microsoft'
+        ELSE 'Other'
+    END as email_provider,
+    CASE 
+        WHEN city IN ('New York', 'Los Angeles', 'Chicago') THEN 'Major City'
+        WHEN city IS NULL THEN 'Unknown Location'
+        ELSE 'Other City'
+    END as city_category
+FROM customers;">
+                            <h3 class="text-lg font-semibold text-green-400 mb-2">3. NULL Handling</h3>
+                            <p class="text-gray-400 text-sm mb-3">Handle NULL values and complex conditional logic</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                COALESCE(description, 'Default'), NULLIF(value, 0)
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Advanced conditional logic
+SELECT 
+    o.order_id,
+    o.customer_id,
+    o.total_amount,
+    CASE 
+        WHEN o.total_amount > 1000 THEN 'VIP Order'
+        WHEN o.total_amount > 500 AND EXISTS (
+            SELECT 1 FROM orders o2 
+            WHERE o2.customer_id = o.customer_id 
+            AND o2.order_id != o.order_id
+        ) THEN 'Repeat Customer High Value'
+        WHEN EXISTS (
+            SELECT 1 FROM orders o2 
+            WHERE o2.customer_id = o.customer_id 
+            AND o2.order_id != o.order_id
+        ) THEN 'Repeat Customer'
+        ELSE 'New Customer'
+    END as order_classification,
+    CASE 
+        WHEN DATE_DIFF('day', o.order_date, CURRENT_DATE) <= 1 THEN 'Same Day'
+        WHEN DATE_DIFF('day', o.order_date, CURRENT_DATE) <= 7 THEN 'This Week'
+        WHEN DATE_DIFF('day', o.order_date, CURRENT_DATE) <= 30 THEN 'This Month'
+        ELSE 'Older'
+    END as recency
+FROM orders o
+ORDER BY o.order_date DESC;">
+                            <h3 class="text-lg font-semibold text-green-400 mb-2">4. Advanced Conditional Logic</h3>
+                            <p class="text-gray-400 text-sm mb-3">Combine CASE with subqueries and complex business rules</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                CASE with EXISTS subqueries and date calculations
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-purple-300">Business Intelligence Queries</h2>
+                <p class="text-gray-400 mb-4">Put it all together with real-world business intelligence queries for actionable insights.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Customer analysis dashboard
+WITH customer_metrics AS (
+    SELECT 
+        c.customer_id,
+        c.first_name,
+        c.last_name,
+        c.email,
+        c.registration_date,
+        COUNT(o.order_id) as total_orders,
+        COALESCE(SUM(o.total_amount), 0) as total_spent,
+        COALESCE(AVG(o.total_amount), 0) as avg_order_value,
+        MAX(o.order_date) as last_order_date,
+        DATE_DIFF('day', MAX(o.order_date), CURRENT_DATE) as days_since_last_order
+    FROM customers c
+    LEFT JOIN orders o ON c.customer_id = o.customer_id
+    GROUP BY c.customer_id, c.first_name, c.last_name, c.email, c.registration_date
+)
+SELECT 
+    *,
+    CASE 
+        WHEN total_orders = 0 THEN 'Never Purchased'
+        WHEN days_since_last_order <= 30 THEN 'Active'
+        WHEN days_since_last_order <= 90 THEN 'At Risk'
+        ELSE 'Churned'
+    END as customer_status,
+    CASE 
+        WHEN total_spent > 1000 THEN 'High Value'
+        WHEN total_spent > 300 THEN 'Medium Value'
+        WHEN total_spent > 0 THEN 'Low Value'
+        ELSE 'No Value'
+    END as value_segment
+FROM customer_metrics
+ORDER BY total_spent DESC;">
+                            <h3 class="text-lg font-semibold text-purple-400 mb-2">1. Customer Analysis</h3>
+                            <p class="text-gray-400 text-sm mb-3">Comprehensive customer segmentation and lifecycle analysis</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                Customer metrics with status and value segmentation
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Product performance analysis
+WITH product_performance AS (
+    SELECT 
+        p.product_id,
+        p.name,
+        c.name as category,
+        p.price,
+        p.stock_quantity,
+        COUNT(oi.order_item_id) as times_ordered,
+        COALESCE(SUM(oi.quantity), 0) as total_quantity_sold,
+        COALESCE(SUM(oi.quantity * oi.unit_price), 0) as total_revenue
+    FROM products p
+    INNER JOIN categories c ON p.category_id = c.category_id
+    LEFT JOIN order_items oi ON p.product_id = oi.product_id
+    GROUP BY p.product_id, p.name, c.name, p.price, p.stock_quantity
+)
+SELECT 
+    *,
+    CASE 
+        WHEN times_ordered = 0 THEN 'Never Sold'
+        WHEN times_ordered >= 5 THEN 'Best Seller'
+        WHEN times_ordered >= 2 THEN 'Popular'
+        ELSE 'Slow Mover'
+    END as performance_category,
+    RANK() OVER (PARTITION BY category ORDER BY total_revenue DESC) as revenue_rank_in_category,
+    total_revenue / NULLIF(times_ordered, 0) as avg_revenue_per_order
+FROM product_performance
+ORDER BY total_revenue DESC;">
+                            <h3 class="text-lg font-semibold text-purple-400 mb-2">2. Product Performance</h3>
+                            <p class="text-gray-400 text-sm mb-3">Analyze product sales performance and profitability</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                Product revenue ranking and performance categorization
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Sales trend analysis
+WITH monthly_sales AS (
+    SELECT 
+        DATE_TRUNC('month', order_date) as month,
+        COUNT(*) as orders,
+        SUM(total_amount) as revenue,
+        AVG(total_amount) as avg_order_value,
+        COUNT(DISTINCT customer_id) as unique_customers
+    FROM orders
+    GROUP BY DATE_TRUNC('month', order_date)
+),
+sales_with_growth AS (
+    SELECT 
+        *,
+        LAG(revenue, 1) OVER (ORDER BY month) as prev_month_revenue,
+        LAG(orders, 1) OVER (ORDER BY month) as prev_month_orders
+    FROM monthly_sales
+)
+SELECT 
+    month,
+    orders,
+    revenue,
+    avg_order_value,
+    unique_customers,
+    revenue / NULLIF(unique_customers, 0) as revenue_per_customer,
+    CASE 
+        WHEN prev_month_revenue IS NULL THEN NULL
+        ELSE ROUND(((revenue - prev_month_revenue) / prev_month_revenue * 100), 2)
+    END as revenue_growth_pct,
+    CASE 
+        WHEN prev_month_orders IS NULL THEN NULL
+        ELSE ROUND(((orders - prev_month_orders) / prev_month_orders * 100), 2)
+    END as order_growth_pct
+FROM sales_with_growth
+ORDER BY month;">
+                            <h3 class="text-lg font-semibold text-purple-400 mb-2">3. Sales Trends</h3>
+                            <p class="text-gray-400 text-sm mb-3">Month-over-month growth analysis and trend identification</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                Growth rates and trend analysis with LAG functions
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Advanced business metrics
+WITH cohort_analysis AS (
+    SELECT 
+        DATE_TRUNC('month', c.registration_date) as registration_month,
+        DATE_TRUNC('month', o.order_date) as order_month,
+        COUNT(DISTINCT c.customer_id) as customers
+    FROM customers c
+    INNER JOIN orders o ON c.customer_id = o.customer_id
+    GROUP BY DATE_TRUNC('month', c.registration_date), DATE_TRUNC('month', o.order_date)
+),
+inventory_turnover AS (
+    SELECT 
+        p.product_id,
+        p.name,
+        p.stock_quantity,
+        COALESCE(SUM(oi.quantity), 0) as total_sold,
+        CASE 
+            WHEN p.stock_quantity > 0 THEN COALESCE(SUM(oi.quantity), 0) / p.stock_quantity
+            ELSE NULL
+        END as turnover_ratio
+    FROM products p
+    LEFT JOIN order_items oi ON p.product_id = oi.product_id
+    GROUP BY p.product_id, p.name, p.stock_quantity
+)
+SELECT 
+    'Inventory Analysis' as metric_type,
+    'Average Turnover Ratio' as metric_name,
+    ROUND(AVG(turnover_ratio), 2) as metric_value
+FROM inventory_turnover
+WHERE turnover_ratio IS NOT NULL
+
+UNION ALL
+
+SELECT 
+    'Customer Metrics' as metric_type,
+    'Customer Lifetime Value (Avg)' as metric_name,
+    ROUND(AVG(total_spent), 2) as metric_value
+FROM (
+    SELECT customer_id, SUM(total_amount) as total_spent
+    FROM orders GROUP BY customer_id
+) customer_totals
+
+UNION ALL
+
+SELECT 
+    'Sales Metrics' as metric_type,
+    'Total Revenue' as metric_name,
+    SUM(total_amount) as metric_value
+FROM orders;">
+                            <h3 class="text-lg font-semibold text-purple-400 mb-2">4. Advanced Business Metrics</h3>
+                            <p class="text-gray-400 text-sm mb-3">Cohort analysis, inventory turnover, and key performance indicators</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                Complex business calculations and KPI dashboard
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-gray-300">DuckDB Advanced Features</h2>
+                <p class="text-gray-400 mb-4">Explore DuckDB's unique capabilities including file handling, JSON processing, and analytical extensions.</p>
+                
+                <div class="space-y-6">
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Array and list operations (DuckDB specific)
+SELECT 
+    customer_id,
+    first_name,
+    last_name,
+    -- Create arrays of order amounts for each customer
+    list(total_amount ORDER BY order_date) as order_amounts,
+    array_length(list(total_amount ORDER BY order_date)) as order_count,
+    list_sum(list(total_amount ORDER BY order_date)) as total_spent
+FROM customers c
+LEFT JOIN orders o ON c.customer_id = o.customer_id
+GROUP BY c.customer_id, c.first_name, c.last_name
+HAVING array_length(list(total_amount ORDER BY order_date)) > 0;
+
+-- String operations and pattern matching
+SELECT 
+    name,
+    length(name) as name_length,
+    upper(name) as uppercase_name,
+    lower(name) as lowercase_name,
+    split(name, ' ') as name_parts,
+    regexp_extract(name, '[A-Z][a-z]+') as first_word
+FROM products
+WHERE name ~ '[0-9]'  -- Products with numbers in name
+ORDER BY name_length DESC;">
+                            <h3 class="text-lg font-semibold text-gray-400 mb-2">1. Array & String Functions</h3>
+                            <p class="text-gray-400 text-sm mb-3">Use DuckDB's advanced array aggregation and string processing</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                list(column ORDER BY...), regexp_extract, string arrays
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Statistical functions
+SELECT 
+    category_id,
+    COUNT(*) as product_count,
+    AVG(price) as mean_price,
+    median(price) as median_price,
+    mode(price) as mode_price,
+    stddev(price) as price_stddev,
+    percentile_cont(0.25) WITHIN GROUP (ORDER BY price) as q1_price,
+    percentile_cont(0.75) WITHIN GROUP (ORDER BY price) as q3_price,
+    mad(price) as median_absolute_deviation
+FROM products
+GROUP BY category_id
+ORDER BY category_id;
+
+-- Correlation analysis
+SELECT 
+    corr(p.price, oi.quantity) as price_quantity_correlation,
+    corr(p.stock_quantity, oi.quantity) as stock_sales_correlation
+FROM products p
+INNER JOIN order_items oi ON p.product_id = oi.product_id;">
+                            <h3 class="text-lg font-semibold text-gray-400 mb-2">2. Statistical Analysis</h3>
+                            <p class="text-gray-400 text-sm mb-3">Advanced statistical functions for data analysis</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                median(), mode(), stddev(), percentile_cont(), corr()
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Advanced analytical queries
+SELECT 
+    customer_id,
+    order_date,
+    total_amount,
+    -- Cumulative sum
+    SUM(total_amount) OVER (
+        PARTITION BY customer_id 
+        ORDER BY order_date 
+        ROWS UNBOUNDED PRECEDING
+    ) as cumulative_spending,
+    -- Moving average (3 orders)
+    AVG(total_amount) OVER (
+        PARTITION BY customer_id 
+        ORDER BY order_date 
+        ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+    ) as moving_avg_3_orders,
+    -- Percent of total customer spending
+    total_amount / SUM(total_amount) OVER (PARTITION BY customer_id) * 100 as pct_of_customer_total
+FROM orders
+WHERE customer_id IN (1, 2, 3)  -- Focus on specific customers
+ORDER BY customer_id, order_date;
+
+-- Time series analysis
+SELECT 
+    DATE_TRUNC('day', order_date) as order_day,
+    SUM(total_amount) as daily_revenue,
+    LAG(SUM(total_amount), 1) OVER (ORDER BY DATE_TRUNC('day', order_date)) as prev_day_revenue,
+    SUM(total_amount) - LAG(SUM(total_amount), 1) OVER (ORDER BY DATE_TRUNC('day', order_date)) as day_over_day_change
+FROM orders
+GROUP BY DATE_TRUNC('day', order_date)
+ORDER BY order_day;">
+                            <h3 class="text-lg font-semibold text-gray-400 mb-2">3. Advanced Analytics</h3>
+                            <p class="text-gray-400 text-sm mb-3">Time series analysis and advanced window functions</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                Cumulative sums, moving averages, time series analysis
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg overflow-hidden">
+                        <button class="copy-example w-full text-left p-4 hover:bg-gray-700 transition-colors" data-example="-- Database information and performance
+SHOW TABLES;
+
+-- Table and database statistics
+SELECT 
+    table_name,
+    estimated_size,
+    column_count
+FROM information_schema.tables
+WHERE table_schema = 'main';
+
+-- Query performance tips
+EXPLAIN SELECT 
+    p.name,
+    c.name as category,
+    COUNT(oi.order_item_id) as times_sold
+FROM products p
+INNER JOIN categories c ON p.category_id = c.category_id
+LEFT JOIN order_items oi ON p.product_id = oi.product_id
+GROUP BY p.product_id, p.name, c.name
+ORDER BY times_sold DESC;
+
+-- Memory usage and optimization
+PRAGMA database_size;
+PRAGMA table_info('products');">
+                            <h3 class="text-lg font-semibold text-gray-400 mb-2">4. Performance & Optimization</h3>
+                            <p class="text-gray-400 text-sm mb-3">Query planning, performance analysis, and database introspection</p>
+                            <div class="bg-gray-900 p-3 rounded font-mono text-sm text-gray-300 overflow-x-auto">
+                                EXPLAIN queries, PRAGMA commands, information_schema
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8">
+                <h2 class="text-2xl font-semibold border-b border-gray-600 pb-2 mb-4 text-blue-300">SQL Fundamentals Reference</h2>
+                <p class="text-gray-400 mb-4">Quick reference for core SQL concepts and DuckDB-specific features.</p>
+                
+                <div class="grid md:grid-cols-2 gap-6">
+                    <div class="bg-gray-800 p-4 rounded-lg">
+                        <h3 class="text-blue-300 font-semibold mb-3">SQL Execution Order</h3>
+                        <ol class="list-decimal list-inside space-y-1 text-sm text-gray-300">
+                            <li><code class="bg-gray-700 px-2 py-1 rounded">FROM</code> / <code class="bg-gray-700 px-2 py-1 rounded">JOIN</code> - Assemble data</li>
+                            <li><code class="bg-gray-700 px-2 py-1 rounded">WHERE</code> - Filter rows</li>
+                            <li><code class="bg-gray-700 px-2 py-1 rounded">GROUP BY</code> - Group rows</li>
+                            <li><code class="bg-gray-700 px-2 py-1 rounded">HAVING</code> - Filter groups</li>
+                            <li><code class="bg-gray-700 px-2 py-1 rounded">SELECT</code> - Choose columns</li>
+                            <li><code class="bg-gray-700 px-2 py-1 rounded">DISTINCT</code> - Remove duplicates</li>
+                            <li><code class="bg-gray-700 px-2 py-1 rounded">ORDER BY</code> - Sort results</li>
+                            <li><code class="bg-gray-700 px-2 py-1 rounded">LIMIT</code> - Restrict rows</li>
+                        </ol>
+                    </div>
+                    
+                    <div class="bg-gray-800 p-4 rounded-lg">
+                        <h3 class="text-blue-300 font-semibold mb-3">Common Data Types</h3>
+                        <div class="space-y-2 text-sm">
+                            <div><code class="text-blue-400">INTEGER</code> - Whole numbers</div>
+                            <div><code class="text-blue-400">VARCHAR</code> - Variable-length text</div>
+                            <div><code class="text-blue-400">DECIMAL(p,s)</code> - Fixed-point numbers</div>
+                            <div><code class="text-blue-400">BOOLEAN</code> - True/false values</div>
+                            <div><code class="text-blue-400">DATE</code> - Date values</div>
+                            <div><code class="text-blue-400">TIMESTAMP</code> - Date and time</div>
+                            <div><code class="text-blue-400">SERIAL</code> - Auto-incrementing integer</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mt-6 bg-blue-900/20 border border-blue-700 rounded-lg p-4">
+                    <h3 class="text-blue-300 font-semibold mb-2">📚 Learn More</h3>
+                    <p class="text-blue-200 text-sm mb-2">This playground covers essential SQL concepts with DuckDB. For advanced features and complete documentation:</p>
+                    <a href="https://duckdb.org/docs/stable/sql/introduction" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline text-sm">→ DuckDB Official Documentation</a>
+                </div>
+            </section>
+
+        </div>
+        <style>
+            #examples-view h3 { @apply text-lg font-semibold text-gray-200; }
+            #examples-view p { @apply text-sm text-gray-400 mb-2; }
+            #examples-view pre { @apply bg-[#2d2d2d] rounded-md p-3 relative custom-scrollbar; }
+            
+            .copy-example {
+                transition: all 0.2s ease;
+                position: relative;
+            }
+            
+            .copy-example:hover {
+                transform: translateY(-1px);
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            }
+            
+            .copy-example::after {
+                content: "Click to copy to editor";
+                position: absolute;
+                top: 12px;
+                right: 12px;
+                background: rgba(59, 130, 246, 0.9);
+                color: white;
+                padding: 4px 8px;
+                border-radius: 4px;
+                font-size: 11px;
+                opacity: 0;
+                transition: opacity 0.2s ease;
+                pointer-events: none;
+            }
+            
+            .copy-example:hover::after {
+                opacity: 1;
+            }
+            
+            .copy-example.copied::after {
+                content: "Copied!";
+                background: rgba(34, 197, 94, 0.9);
+                opacity: 1;
+            }
+            
+            .schema-tab.active {
+                border-bottom: 2px solid #3b82f6;
+                color: #60a5fa;
+            }
+            
+            .mobile-nav-btn.active {
+                border-top: 2px solid #3b82f6;
+                color: #60a5fa;
+                background: rgba(59, 130, 246, 0.1);
+            }
+            
+            @media (max-width: 768px) {
+                .copy-example::after {
+                    display: none;
+                }
+                
+                #mobile-nav {
+                    display: flex;
+                }
+                
+                #schema-content.mobile-fullscreen,
+                #visualization-content.mobile-fullscreen {
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    z-index: 50;
+                    background: #252526;
+                }
+            }
+        </style>
+    </div>
+    
+    <nav id="mobile-nav" class="hidden bg-[#282828] border-t border-gray-700 w-full flex-shrink-0">
+        <button class="mobile-nav-btn flex-1 p-3 text-sm text-center font-medium border-t-2" data-view="editor">Editor</button>
+        <button class="mobile-nav-btn flex-1 p-3 text-sm text-center font-medium border-t-2 border-transparent text-gray-400" data-view="output">Output</button>
+        <button class="mobile-nav-btn flex-1 p-3 text-sm text-center font-medium border-t-2 border-transparent text-gray-400" data-view="visualization">Schema</button>
+        <button class="mobile-nav-btn sm:hidden flex-1 p-3 text-sm text-center font-medium border-t-2 border-transparent text-gray-400" data-view="examples">Examples</button>
+    </nav>
+
+    <script type="module">
+        import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/+esm';
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            const editor = CodeMirror.fromTextArea(document.getElementById('sql-editor'), {
+                mode: 'text/x-sql', theme: 'material-darker', lineNumbers: true, autofocus: true,
+                value: `-- Welcome to your SQL Playground!
+-- Click 'Examples' to find commands.
+
+CREATE TABLE books (
+  id INTEGER,
+  title VARCHAR,
+  author VARCHAR,
+  published_year INTEGER
+);
+
+INSERT INTO books VALUES (1, '1984', 'George Orwell', 1949);
+
+SELECT * FROM books;`
+            });
+
+            const runQueryBtn = document.getElementById('run-query-btn');
+            const schemaViewer = document.getElementById('schema-viewer');
+            const resultsContainer = document.getElementById('results-container');
+            const statusIndicator = document.getElementById('status-indicator');
+            const statusText = document.getElementById('status-text');
+            const playgroundView = document.getElementById('playground-view');
+            const examplesView = document.getElementById('examples-view');
+            const leftPanel = document.getElementById('left-panel');
+            const rightPanel = document.getElementById('right-panel');
+            const schemaContent = document.getElementById('schema-content');
+            const visualizationContent = document.getElementById('visualization-content');
+            const schemaDiagram = document.getElementById('schema-diagram');
+            
+            let db_connection;
+            runQueryBtn.disabled = true;
+
+            try {
+                const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
+                const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
+                const worker_url = URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`], {type: 'text/javascript'}));
+                const worker = new Worker(worker_url);
+                const logger = new duckdb.ConsoleLogger();
+                const db = new duckdb.AsyncDuckDB(logger, worker);
+                await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+                URL.revokeObjectURL(worker_url);
+                db_connection = await db.connect(); 
+                
+                statusIndicator.classList.replace('bg-yellow-500', 'bg-green-500');
+                statusIndicator.classList.remove('animate-pulse');
+                statusText.textContent = 'Database Ready';
+                runQueryBtn.disabled = false;
+            } catch(e) {
+                console.error("DuckDB initialization failed:", e);
+                statusIndicator.classList.replace('bg-yellow-500', 'bg-red-500');
+                statusIndicator.classList.remove('animate-pulse');
+                statusText.textContent = 'DB Failed to Load';
+                resultsContainer.innerHTML = `<div class="p-3 text-sm text-red-400 bg-red-900 rounded-md"><strong>Fatal Error:</strong> Could not initialize the in-browser database. ${e.message}</div>`;
+            }
+
+            const renderTable = (data, container) => {
+                if (!data || data.length === 0) {
+                    container.innerHTML = `<p class="text-gray-400">Query executed successfully, but returned no rows.</p>`;
+                    return;
+                }
+                const headers = Object.keys(data[0]);
+                let tableHTML = `<div class="overflow-x-auto custom-scrollbar"><table class="w-full text-sm text-left text-gray-400"><thead class="text-xs text-gray-300 uppercase bg-gray-700"><tr>`;
+                headers.forEach(h => tableHTML += `<th scope="col" class="px-4 py-2 whitespace-nowrap">${h}</th>`);
+                tableHTML += `</tr></thead><tbody>`;
+                data.forEach(row => {
+                    tableHTML += `<tr class="border-b bg-gray-800 border-gray-700">`;
+                    headers.forEach(h => {
+                        let value = row[h];
+                        if (typeof value === 'bigint') value = value.toString();
+                        if (value === null) value = 'NULL';
+                        tableHTML += `<td class="px-4 py-2 whitespace-nowrap">${value}</td>`
+                    });
+                    tableHTML += `</tr>`;
+                });
+                tableHTML += `</tbody></table></div>`;
+                container.innerHTML = tableHTML;
+            };
+
+            const updateSchemaViewer = async () => {
+                if (!db_connection) return;
+                try {
+                    const tablesArrow = await db_connection.query(`SHOW TABLES;`);
+                    const tables = tablesArrow.toArray().map(row => row.toJSON());
+                    
+                    if (tables.length === 0) {
+                        schemaViewer.innerHTML = `<p class="text-gray-500 text-sm">No tables found. Run a 'CREATE TABLE' statement to begin.</p>`;
+                        updateVisualization([]);
+                        return;
+                    }
+
+                    let schemaHTML = '<div class="space-y-4">';
+                    const tableInfo = [];
+                    
+                    for (const table of tables) {
+                        const tableName = table.name;
+                        schemaHTML += `<div class="bg-gray-800 p-3 rounded-md">`;
+                        schemaHTML += `<h3 class="font-semibold text-teal-400 font-mono">${tableName}</h3>`;
+                        
+                        const columnsArrow = await db_connection.query(`PRAGMA table_info('${tableName}');`);
+                        const columns = columnsArrow.toArray().map(row => row.toJSON());
+
+                        schemaHTML += `<ul class="text-xs text-gray-400 mt-2 pl-3 space-y-1">`;
+                        columns.forEach(col => {
+                            let badge = '';
+                            if (col.pk) badge += '<span class="text-yellow-400 text-xs">PK</span> ';
+                            if (col.notnull) badge += '<span class="text-blue-400 text-xs">NOT NULL</span> ';
+                            schemaHTML += `<li><span class="font-mono">${col.name}</span> <span class="text-gray-500">${col.type}</span> ${badge}</li>`;
+                        });
+                        schemaHTML += `</ul></div>`;
+                        
+                        tableInfo.push({ name: tableName, columns: columns });
+                    }
+                    schemaHTML += '</div>';
+                    schemaViewer.innerHTML = schemaHTML;
+                    updateVisualization(tableInfo);
+                } catch (e) {
+                    console.error("Failed to update schema:", e);
+                    schemaViewer.innerHTML = `<p class="text-red-400 text-sm">Error fetching schema.</p>`;
+                    updateVisualization([]);
+                }
+            };
+            
+            const updateVisualization = (tableInfo) => {
+                if (tableInfo.length === 0) {
+                    schemaDiagram.innerHTML = `
+                        <div class="flex items-center justify-center h-full text-gray-500">
+                            <div class="text-center">
+                                <div class="text-4xl mb-4">🗄️</div>
+                                <p>No tables to visualize</p>
+                                <p class="text-sm mt-2">Create some tables to see the schema diagram</p>
+                            </div>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                let diagramHTML = `
+                    <div class="space-y-6">
+                        <div class="text-center mb-6">
+                            <h4 class="text-lg font-semibold text-gray-200">E-Commerce Database Schema</h4>
+                            <p class="text-sm text-gray-400">Relational structure with foreign key relationships</p>
+                        </div>
+                `;
+                
+                // Create visual representation of tables
+                tableInfo.forEach((table, index) => {
+                    const isEven = index % 2 === 0;
+                    diagramHTML += `
+                        <div class="bg-gray-700 rounded-lg p-4 border-l-4 ${getTableColor(table.name)}" style="margin-left: ${isEven ? '0' : '40px'}">
+                            <div class="flex items-center mb-2">
+                                <div class="w-3 h-3 ${getTableIconColor(table.name)} rounded-full mr-2"></div>
+                                <h4 class="font-bold text-gray-100 font-mono">${table.name}</h4>
+                            </div>
+                            <div class="grid gap-1">
+                    `;
+                    
+                    table.columns.forEach(col => {
+                        let typeColor = 'text-blue-300';
+                        if (col.type.includes('INTEGER') || col.type.includes('SERIAL')) typeColor = 'text-green-300';
+                        else if (col.type.includes('VARCHAR') || col.type.includes('TEXT')) typeColor = 'text-yellow-300';
+                        else if (col.type.includes('DECIMAL')) typeColor = 'text-purple-300';
+                        else if (col.type.includes('DATE') || col.type.includes('TIMESTAMP')) typeColor = 'text-pink-300';
+                        
+                        diagramHTML += `
+                            <div class="flex justify-between items-center text-sm py-1 px-2 rounded ${col.pk ? 'bg-yellow-900/30' : ''}">
+                                <span class="font-mono text-gray-200">${col.name}</span>
+                                <div class="flex items-center gap-2">
+                                    <span class="${typeColor} text-xs">${col.type}</span>
+                                    ${col.pk ? '<span class="bg-yellow-600 text-yellow-100 px-1 rounded text-xs">PK</span>' : ''}
+                                    ${col.name.includes('_id') && !col.pk ? '<span class="bg-blue-600 text-blue-100 px-1 rounded text-xs">FK</span>' : ''}
+                                </div>
+                            </div>
+                        `;
+                    });
+                    
+                    diagramHTML += `
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                // Add relationship indicators
+                diagramHTML += `
+                    <div class="mt-6 p-4 bg-gray-700 rounded-lg">
+                        <h5 class="font-semibold text-gray-200 mb-3">📊 Relationships</h5>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex items-center gap-2">
+                                <div class="w-2 h-2 bg-yellow-400 rounded-full"></div>
+                                <span class="text-gray-300">customers.customer_id → orders.customer_id</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <div class="w-2 h-2 bg-blue-400 rounded-full"></div>
+                                <span class="text-gray-300">orders.order_id → order_items.order_id</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <div class="w-2 h-2 bg-green-400 rounded-full"></div>
+                                <span class="text-gray-300">products.product_id → order_items.product_id</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <div class="w-2 h-2 bg-purple-400 rounded-full"></div>
+                                <span class="text-gray-300">categories.category_id → products.category_id</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-4 p-4 bg-gray-700 rounded-lg">
+                        <h5 class="font-semibold text-gray-200 mb-3">🔍 Schema Insights</h5>
+                        <div class="grid md:grid-cols-2 gap-4 text-sm">
+                            <div>
+                                <div class="font-medium text-gray-300">Tables: ${tableInfo.length}</div>
+                                <div class="text-gray-400">Total columns: ${tableInfo.reduce((sum, table) => sum + table.columns.length, 0)}</div>
+                            </div>
+                            <div>
+                                <div class="font-medium text-gray-300">Relationships: ${tableInfo.filter(t => t.columns.some(c => c.name.includes('_id') && !c.pk)).length}</div>
+                                <div class="text-gray-400">Primary keys: ${tableInfo.filter(t => t.columns.some(c => c.pk)).length}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                `;
+                
+                schemaDiagram.innerHTML = diagramHTML;
+            };
+            
+            const getTableColor = (tableName) => {
+                const colors = {
+                    'customers': 'border-yellow-400',
+                    'orders': 'border-blue-400',
+                    'order_items': 'border-green-400',
+                    'products': 'border-purple-400',
+                    'categories': 'border-pink-400'
+                };
+                return colors[tableName] || 'border-gray-400';
+            };
+            
+            const getTableIconColor = (tableName) => {
+                const colors = {
+                    'customers': 'bg-yellow-400',
+                    'orders': 'bg-blue-400',
+                    'order_items': 'bg-green-400',
+                    'products': 'bg-purple-400',
+                    'categories': 'bg-pink-400'
+                };
+                return colors[tableName] || 'bg-gray-400';
+            };
+            
+            const handleRunQuery = async () => {
+                if (!db_connection || runQueryBtn.disabled) return;
+                
+                const userQuery = editor.getValue();
+                if (userQuery.trim() === '') {
+                    resultsContainer.innerHTML = `<p class="text-gray-500 text-sm">Editor is empty. Please enter a SQL query.</p>`;
+                    return;
+                }
+
+                runQueryBtn.disabled = true;
+                resultsContainer.innerHTML = `<p class="text-yellow-400 text-sm">Executing query...</p>`;
+
+                try {
+                    const resultArrow = await db_connection.query(userQuery);
+                    const results = resultArrow.toArray().map(row => row.toJSON());
+                    
+                    if (resultArrow.numRows > 0) {
+                        renderTable(results, resultsContainer);
+                    } else {
+                        resultsContainer.innerHTML = `<div class="p-3 text-sm text-green-400 bg-green-900 rounded-md"><strong>Success!</strong> Query executed with no errors.</div>`;
+                    }
+                } catch (e) {
+                    resultsContainer.innerHTML = `<div class="p-3 text-sm text-red-400 bg-red-900 rounded-md"><strong>Error:</strong> ${e.message}</div>`;
+                } finally {
+                    runQueryBtn.disabled = false;
+                    await updateSchemaViewer();
+                    if (window.innerWidth <= 768) {
+                        showMobilePlaygroundView('output');
+                    }
+                }
+            };
+
+            runQueryBtn.addEventListener('click', handleRunQuery);
+            editor.setOption("extraKeys", { "Ctrl-Enter": handleRunQuery, "Cmd-Enter": handleRunQuery });
+            
+            const headerTabs = document.querySelectorAll('.header-tab');
+            const mobileNavButtons = document.querySelectorAll('.mobile-nav-btn');
+
+            const showMainView = (viewName) => {
+                 playgroundView.style.display = viewName === 'playground' ? 'flex' : 'none';
+                 examplesView.style.display = viewName === 'examples' ? 'flex' : 'none';
+                 
+                 headerTabs.forEach(tab => {
+                     const isActive = tab.dataset.view === viewName;
+                     tab.classList.toggle('active', isActive);
+                     tab.classList.toggle('text-gray-400', !isActive);
+                     tab.classList.toggle('border-transparent', !isActive);
+                 });
+                 
+                 mobileNavButtons.forEach(btn => {
+                    if(btn.dataset.view === 'examples') {
+                        btn.classList.toggle('active', viewName === 'examples');
+                    }
+                 });
+
+
+                 if (viewName === 'playground') {
+                     setTimeout(() => editor.refresh(), 1);
+                 }
+            };
+
+            const showMobilePlaygroundView = (viewName) => {
+                leftPanel.style.display = viewName === 'editor' ? 'flex' : 'none';
+                
+                if (viewName === 'output') {
+                    rightPanel.style.display = 'flex';
+                    // Ensure results are shown in mobile output view
+                    schemaContent.classList.add('hidden');
+                    visualizationContent.classList.add('hidden');
+                    document.querySelector('#right-panel > div:last-child').style.display = 'flex';
+                } else if (viewName === 'visualization') {
+                    rightPanel.style.display = 'flex';
+                    // Show visualization content in fullscreen mobile mode
+                    schemaContent.style.display = 'block';
+                    visualizationContent.style.display = 'block';
+                    document.querySelector('#right-panel > div:last-child').style.display = 'none';
+                    
+                    // Make schema/viz area take full height on mobile
+                    schemaContent.style.height = 'calc(100vh - 200px)';
+                    visualizationContent.style.height = 'calc(100vh - 200px)';
+                } else {
+                    rightPanel.style.display = 'none';
+                }
+                
+                mobileNavButtons.forEach(btn => {
+                    if (btn.dataset.view === 'editor' || btn.dataset.view === 'output' || btn.dataset.view === 'visualization') {
+                        btn.classList.toggle('active', btn.dataset.view === viewName);
+                    }
+                });
+
+                if (viewName === 'editor') {
+                    setTimeout(() => editor.refresh(), 1);
+                }
+            };
+            
+            const handleViewChange = (view) => {
+                if (view === 'editor' || view === 'output' || view === 'visualization') {
+                    showMainView('playground');
+                    showMobilePlaygroundView(view);
+                } else if (view === 'examples') {
+                    showMainView('examples');
+                }
+            };
+
+            headerTabs.forEach(tab => tab.addEventListener('click', () => handleViewChange(tab.dataset.view)));
+            mobileNavButtons.forEach(btn => btn.addEventListener('click', () => handleViewChange(btn.dataset.view)));
+
+            const resizer = document.getElementById('resizer');
+            resizer.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                document.addEventListener('mousemove', handleMouseMove);
+                document.addEventListener('mouseup', () => {
+                    document.removeEventListener('mousemove', handleMouseMove);
+                    editor.refresh();
+                });
+            });
+
+            const handleMouseMove = (e) => {
+                const totalWidth = playgroundView.offsetWidth;
+                const newLeftWidth = (e.clientX / totalWidth) * 100;
+                if (newLeftWidth > 20 && newLeftWidth < 80) {
+                    leftPanel.style.width = `${newLeftWidth}%`;
+                    rightPanel.style.width = `${100 - newLeftWidth}%`;
+                }
+            };
+
+            const checkLayout = () => {
+                if (window.innerWidth <= 768) {
+                    const currentPlaygroundView = document.querySelector('.mobile-nav-btn[data-view="editor"]').classList.contains('active') ? 'editor' : 
+                                                 document.querySelector('.mobile-nav-btn[data-view="output"]').classList.contains('active') ? 'output' :
+                                                 document.querySelector('.mobile-nav-btn[data-view="visualization"]').classList.contains('active') ? 'visualization' : 'editor';
+                    const currentMainViewIsPlayground = playgroundView.style.display !== 'none';
+                    if (currentMainViewIsPlayground) showMobilePlaygroundView(currentPlaygroundView);
+                } else {
+                    showMainView(document.querySelector('.header-tab.active')?.dataset.view || 'playground');
+                    leftPanel.style.display = 'flex';
+                    rightPanel.style.display = 'flex';
+                    
+                    // Reset mobile-specific styles
+                    schemaContent.style.height = '';
+                    visualizationContent.style.height = '';
+                }
+            };
+            
+            window.addEventListener('resize', checkLayout);
+
+            await updateSchemaViewer();
+            checkLayout();
+            hljs.highlightAll();
+            
+            // Copy example functionality
+            const copyButtons = document.querySelectorAll('.copy-example');
+            copyButtons.forEach(button => {
+                button.addEventListener('click', () => {
+                    const example = button.dataset.example;
+                    if (example) {
+                        editor.setValue(example);
+                        editor.focus();
+                        
+                        // Visual feedback
+                        button.classList.add('copied');
+                        setTimeout(() => {
+                            button.classList.remove('copied');
+                        }, 2000);
+                        
+                        // Switch to playground view on mobile
+                        if (window.innerWidth <= 768) {
+                            showMainView('playground');
+                            showMobilePlaygroundView('editor');
+                        } else {
+                            showMainView('playground');
+                        }
+                    }
+                });
+            });
+            
+            // Schema tab functionality
+            const schemaTabs = document.querySelectorAll('.schema-tab');
+            schemaTabs.forEach(tab => {
+                tab.addEventListener('click', () => {
+                    const isSchemaTab = tab.id === 'schema-tab';
+                    
+                    // Update tab appearance
+                    schemaTabs.forEach(t => {
+                        t.classList.remove('active', 'border-blue-500', 'text-blue-400');
+                        t.classList.add('border-transparent', 'text-gray-400');
+                    });
+                    tab.classList.add('active', 'border-blue-500', 'text-blue-400');
+                    tab.classList.remove('border-transparent', 'text-gray-400');
+                    
+                    // Show/hide content
+                    if (isSchemaTab) {
+                        schemaContent.classList.remove('hidden');
+                        visualizationContent.classList.add('hidden');
+                    } else {
+                        schemaContent.classList.add('hidden');
+                        visualizationContent.classList.remove('hidden');
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>

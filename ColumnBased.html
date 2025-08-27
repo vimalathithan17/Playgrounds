@@ -157,7 +157,7 @@
         <div id="right-panel" class="flex flex-col w-full md:w-3/5 h-full bg-[#252526]">
             <!-- Title Bar for Editor -->
             <div class="flex-shrink-0 bg-[#282828] p-3 border-b border-gray-700">
-                <h3 class="text-lg font-semibold text-gray-200">Cassandra CQL Editor</h3>
+                <h3 class="text-lg font-semibold text-gray-200">CQL Command Editor</h3>
                 <p class="text-sm text-gray-400">Enter CQL commands. Supports keyspace operations, table creation, and data manipulation.</p>
             </div>
             <div id="editor-container" class="flex-grow flex flex-col overflow-hidden" style="height: 60%;">
@@ -778,7 +778,20 @@ System Commands:
                         { description: 'Insert with missing required fields', code: 'INSERT INTO devices (device_name) \nVALUES (\'Incomplete Device\');' },
                         { description: 'Update collection without proper syntax', code: 'UPDATE enhanced_devices \nSET tags = \'wrong_syntax\' \nWHERE device_id = \'sensor_004\';' },
                     ]
-                }
+                },
+                {
+                    category: '❌ Common CQL Errors & Edge Cases',
+                    commands: [
+                        { description: 'Missing WHERE clause in SELECT (requires ALLOW FILTERING)', code: 'SELECT * FROM enhanced_devices WHERE device_type = \'temperature\';' },
+                        { description: 'Correct way using ALLOW FILTERING for non-primary key', code: 'SELECT * FROM enhanced_devices WHERE device_type = \'temperature\' ALLOW FILTERING;' },
+                        { description: 'INSERT with duplicate primary key (overwrites in Cassandra)', code: 'INSERT INTO devices (device_id, device_name, device_type) VALUES (\'sensor_001\', \'Original Name\', \'temp\');\nINSERT INTO devices (device_id, device_name, device_type) VALUES (\'sensor_001\', \'Updated Name\', \'humidity\');\nSELECT * FROM devices WHERE device_id = \'sensor_001\';' },
+                        { description: 'IF NOT EXISTS prevents overwrites', code: 'INSERT INTO devices (device_id, device_name) VALUES (\'sensor_001\', \'Should Not Overwrite\') IF NOT EXISTS;' },
+                        { description: 'UPDATE requires WHERE clause with primary key', code: 'UPDATE devices SET device_type = \'pressure\' WHERE device_id = \'sensor_001\';' },
+                        { description: 'DELETE requires WHERE clause with primary key', code: 'DELETE FROM devices WHERE device_id = \'sensor_001\';' },
+                        { description: 'TTL demonstration - data expires after specified time', code: 'INSERT INTO temp_cache (device_id, cached_data) VALUES (\'temp_001\', \'temporary_data\') USING TTL 5;\nSELECT * FROM temp_cache WHERE device_id = \'temp_001\';\n-- Wait 6 seconds and query again to see TTL effect' },
+                        { description: 'Collection operations - proper syntax for sets and maps', code: 'UPDATE enhanced_devices SET tags = tags + {\'production\', \'verified\'} WHERE device_id = \'sensor_002\';\nUPDATE enhanced_devices SET metadata = metadata + {\'last_check\': \'2025-01-15\'} WHERE device_id = \'sensor_002\';' },
+                    ]
+                },
             ];
 
             function renderExamples() {

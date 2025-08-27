@@ -135,7 +135,7 @@
         <div id="right-panel" class="main-panel flex-1 flex-col w-full md:w-3/5 h-full bg-[#252526] hidden md:flex min-w-0">
             <!-- Title Bar for Editor -->
             <div class="flex-shrink-0 bg-[#282828] p-3 border-b border-gray-700">
-                <h3 class="text-lg font-semibold text-gray-200">Cypher Query Editor</h3>
+                <h3 class="text-lg font-semibold text-gray-200">Cypher Query Console</h3>
                 <p class="text-sm text-gray-400">Write Cypher queries to explore and manipulate the graph database.</p>
             </div>
             <div id="editor-container" class="flex-grow flex flex-col overflow-hidden" style="height: 70%;">
@@ -397,15 +397,30 @@
                 this.txOperations = [];
             }
 
-            // Enhanced Cypher query preprocessing
+            // Enhanced Cypher query preprocessing with robust comment removal
             _cleanCypherQuery(query) {
                 const lines = query.split('\n');
                 return lines
                     .map(line => {
-                        // Remove comments (// or /* */)
+                        // Remove single-line comments (// or --)
                         line = line.replace(/\/\/.*$/, '');
-                        line = line.replace(/\/\*[\s\S]*?\*\//g, '');
-                        return line.trim();
+                        line = line.replace(/--.*$/, '');
+                        
+                        // Remove multi-line comments (/* */) carefully
+                        let result = '';
+                        let inComment = false;
+                        for (let i = 0; i < line.length; i++) {
+                            if (!inComment && i < line.length - 1 && line.substr(i, 2) === '/*') {
+                                inComment = true;
+                                i++; // skip the next character
+                            } else if (inComment && i < line.length - 1 && line.substr(i, 2) === '*/') {
+                                inComment = false;
+                                i++; // skip the next character
+                            } else if (!inComment) {
+                                result += line[i];
+                            }
+                        }
+                        return result.trim();
                     })
                     .filter(line => line)
                     .join(' ')
@@ -502,6 +517,8 @@
                     this.dbManager.useDatabase(name);
                     return { type: 'db_manage', message: `Now using database '${name}'.` };
                 }
+                
+                if (upperQuery.startsWith('HELP')) return this._handleHelp(cleanQuery);
                 
                 this.db = this.dbManager.getCurrentDb();
                 if (upperQuery.startsWith('CREATE CONSTRAINT')) return this._handleCreateConstraint(cleanQuery);
@@ -1048,6 +1065,117 @@
                     case 'CASE':
                         // Simplified CASE implementation
                         return getValue(argParts[0]);
+                    
+                    // Additional string functions
+                    case 'LPAD':
+                        const lpadStr = String(getValue(argParts[0]));
+                        const lpadLen = getValue(argParts[1]);
+                        const lpadChar = argParts[2] ? String(getValue(argParts[2])) : ' ';
+                        return lpadStr.padStart(lpadLen, lpadChar);
+                    case 'RPAD':
+                        const rpadStr = String(getValue(argParts[0]));
+                        const rpadLen = getValue(argParts[1]);
+                        const rpadChar = argParts[2] ? String(getValue(argParts[2])) : ' ';
+                        return rpadStr.padEnd(rpadLen, rpadChar);
+                    case 'UPPER':
+                        return String(getValue(argParts[0])).toUpperCase();
+                    case 'LOWER':
+                        return String(getValue(argParts[0])).toLowerCase();
+                    
+                    // Additional math functions
+                    case 'POWER':
+                        return Math.pow(getValue(argParts[0]), getValue(argParts[1]));
+                    case 'MOD':
+                        return getValue(argParts[0]) % getValue(argParts[1]);
+                    case 'FACTORIAL':
+                        const factNum = getValue(argParts[0]);
+                        let result = 1;
+                        for (let i = 2; i <= factNum; i++) result *= i;
+                        return result;
+                    case 'GCD':
+                        let a = getValue(argParts[0]), b = getValue(argParts[1]);
+                        while (b !== 0) { const temp = b; b = a % b; a = temp; }
+                        return a;
+                    case 'LCM':
+                        const gcdVal = this._evaluateBuiltinFunction('GCD', argParts, nodeVars);
+                        return (getValue(argParts[0]) * getValue(argParts[1])) / gcdVal;
+                    
+                    // Additional date/time functions
+                    case 'NOW':
+                        return new Date();
+                    case 'LOCALDATETIME':
+                        return new Date().toISOString().slice(0, 19);
+                    case 'LOCALTIME':
+                        return new Date().toTimeString().slice(0, 8);
+                    case 'YEAR':
+                        return new Date(getValue(argParts[0])).getFullYear();
+                    case 'MONTH':
+                        return new Date(getValue(argParts[0])).getMonth() + 1;
+                    case 'DAY':
+                        return new Date(getValue(argParts[0])).getDate();
+                    case 'HOUR':
+                        return new Date(getValue(argParts[0])).getHours();
+                    case 'MINUTE':
+                        return new Date(getValue(argParts[0])).getMinutes();
+                    case 'SECOND':
+                        return new Date(getValue(argParts[0])).getSeconds();
+                    
+                    // Additional list functions
+                    case 'ALL':
+                        const allList = getValue(argParts[0]);
+                        const allPredicate = argParts[1];
+                        return Array.isArray(allList) ? allList.every(item => this._evaluateExpression(allPredicate, {...nodeVars, item})) : false;
+                    case 'ANY':
+                        const anyList = getValue(argParts[0]);
+                        const anyPredicate = argParts[1];
+                        return Array.isArray(anyList) ? anyList.some(item => this._evaluateExpression(anyPredicate, {...nodeVars, item})) : false;
+                    case 'NONE':
+                        const noneList = getValue(argParts[0]);
+                        const nonePredicate = argParts[1];
+                        return Array.isArray(noneList) ? !noneList.some(item => this._evaluateExpression(nonePredicate, {...nodeVars, item})) : true;
+                    case 'SINGLE':
+                        const singleList = getValue(argParts[0]);
+                        const singlePredicate = argParts[1];
+                        if (!Array.isArray(singleList)) return false;
+                        const matches = singleList.filter(item => this._evaluateExpression(singlePredicate, {...nodeVars, item}));
+                        return matches.length === 1;
+                    
+                    // Additional type functions
+                    case 'TOBOOL':
+                        const boolVal = getValue(argParts[0]);
+                        if (typeof boolVal === 'boolean') return boolVal;
+                        if (typeof boolVal === 'string') return boolVal.toLowerCase() === 'true';
+                        return Boolean(boolVal);
+                    case 'TOFLOAT':
+                        return parseFloat(getValue(argParts[0]));
+                    case 'TOINT':
+                        return parseInt(getValue(argParts[0]));
+                    case 'TOSTRING':
+                        return String(getValue(argParts[0]));
+                    
+                    // Additional spatial functions
+                    case 'DISTANCE':
+                        const point1 = getValue(argParts[0]);
+                        const point2 = getValue(argParts[1]);
+                        if (point1?.x !== undefined && point2?.x !== undefined) {
+                            return Math.sqrt(Math.pow(point2.x - point1.x, 2) + Math.pow(point2.y - point1.y, 2));
+                        }
+                        return null;
+                    case 'POINT':
+                        return { x: getValue(argParts[0]), y: getValue(argParts[1]) };
+                    
+                    // Additional utility functions
+                    case 'RANDOMUUID':
+                        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                            const r = Math.random() * 16 | 0;
+                            const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                            return v.toString(16);
+                        });
+                    case 'HAVERSIN':
+                        return (1 - Math.cos(getValue(argParts[0]))) / 2;
+                    case 'SHORTESTPATH':
+                        // Simplified shortest path
+                        return getValue(argParts[0]);
                         
                     default:
                         return undefined;
@@ -1244,6 +1372,70 @@
                 }
                 this.db.indexes.set(indexKey, new Map());
                 return { type: 'db_manage', message: `Index created on :${label}(${property}).` };
+            }
+
+            _handleHelp(query) {
+                const helpText = `
+🔍 Cypher Query Console - Available Commands:
+
+📊 READING DATA:
+  MATCH (n) RETURN n                    - Get all nodes
+  MATCH (n:Label) RETURN n              - Get nodes by label
+  MATCH (n {property: 'value'}) RETURN n - Get nodes by property
+  MATCH (a)-[r]->(b) RETURN a, r, b     - Get relationships
+  MATCH p = (a)-[*1..3]-(b) RETURN p    - Variable length paths
+
+✏️ CREATING DATA:
+  CREATE (n:Person {name: 'Alice'})     - Create node with label and properties
+  CREATE (a)-[:KNOWS]->(b)              - Create relationship
+  MERGE (n:Person {name: 'Bob'})        - Find or create node
+
+🔧 UPDATING DATA:
+  SET n.age = 30                        - Set property
+  SET n:NewLabel                        - Add label
+  REMOVE n.property                     - Remove property
+  REMOVE n:Label                        - Remove label
+
+🗑️ DELETING DATA:
+  DELETE n                              - Delete node (must not have relationships)
+  DETACH DELETE n                       - Delete node and all its relationships
+  DELETE r                              - Delete relationship
+
+🔍 FILTERING & PROCESSING:
+  WHERE n.age > 25                      - Filter results
+  ORDER BY n.name ASC                   - Sort results
+  LIMIT 10                              - Limit number of results
+  WITH n.name AS name RETURN name       - Pipe results between clauses
+
+📊 AGGREGATION:
+  RETURN count(*)                       - Count results
+  RETURN collect(n.name)                - Collect values into list
+  UNWIND [1,2,3] AS x RETURN x         - Expand list into rows
+
+🛠️ BUILT-IN FUNCTIONS:
+  String: toUpper(), toLower(), split(), replace(), substring()
+  Math: abs(), round(), sqrt(), rand()
+  Collection: size(), head(), tail(), range()
+  Path: shortestPath(), allShortestPaths()
+
+🏗️ SCHEMA:
+  CREATE CONSTRAINT ON (n:Label) ASSERT n.property IS UNIQUE
+  CREATE INDEX ON :Label(property)
+  DROP INDEX ON :Label(property)
+
+💾 DATABASE:
+  USE database_name                     - Switch database
+  CALL db.labels()                      - List all labels
+  CALL db.propertyKeys()                - List all properties
+
+💡 TIPS:
+  - Use () for nodes, [] for relationships
+  - Relationships are always directed: -->
+  - Use : for labels, {} for properties
+  - Variables can be any name (n, node, person, etc.)
+  - String values must be in single quotes: 'value'
+`;
+                return { type: 'help', message: helpText, result: [] };
             }
 
             _handleDropIndex(query) {
@@ -1623,6 +1815,13 @@
                     { title: "Incorrect syntax for property update", query: "MATCH (e:Employee) SET e.name = 'Updated' WHERE e.name = 'Alice Johnson'" },
                     { title: "Invalid aggregation without grouping", query: "MATCH (e:Employee) RETURN e.name, COUNT(*)" },
                     { title: "Using undefined variable", query: "MATCH (e:Employee) RETURN e.name, p.name" },
+                ],
+
+                "🔄 CREATE vs MERGE Behavior Examples": [
+                    { title: "CREATE allows duplicates (creates multiple nodes with same properties)", query: "CREATE (person:Person {name: 'John', age: 30})\nCREATE (person:Person {name: 'John', age: 30})\nMATCH (p:Person {name: 'John'}) RETURN COUNT(p) AS john_count" },
+                    { title: "MERGE creates only if doesn't exist (idempotent)", query: "MERGE (person:Person {name: 'Jane', age: 25})\nMERGE (person:Person {name: 'Jane', age: 25})\nMATCH (p:Person {name: 'Jane'}) RETURN COUNT(p) AS jane_count" },
+                    { title: "CREATE with constraints will fail on duplicates", query: "CREATE CONSTRAINT person_email_unique ON (p:Person) ASSERT p.email IS UNIQUE\nCREATE (p1:Person {email: 'test@example.com'})\nCREATE (p2:Person {email: 'test@example.com'})" },
+                    { title: "MERGE with ON CREATE and ON MATCH clauses", query: "MERGE (u:User {id: 'user123'})\nON CREATE SET u.created = timestamp(), u.login_count = 1\nON MATCH SET u.last_login = timestamp(), u.login_count = u.login_count + 1\nRETURN u" },
                 ],
             };
             

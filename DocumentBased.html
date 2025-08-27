@@ -212,6 +212,10 @@
         <div id="right-panel" class="flex flex-col w-full md:w-3/5 h-full bg-[#252526]">
             <!-- Top section: Editor & Actions -->
             <div id="editor-container" class="flex-grow flex flex-col overflow-hidden" style="height: 60%;">
+                <!-- Title Bar for Editor -->
+                <div class="bg-[#1e1e1e] border-b border-gray-700 px-4 py-2 flex items-center">
+                    <span class="text-green-400 font-semibold">MongoDB Command Editor</span>
+                </div>
                 <div id="editor-wrapper" class="flex-grow relative">
                     <textarea id="command-editor"></textarea>
                 </div>
@@ -270,8 +274,19 @@
                 try { 
                     if (!commandString || commandString.trim() === '') { 
                         throw new Error("Command cannot be empty."); 
-                    } 
-                    const parts = commandString.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g).map(p => p.replace(/^['"]|['"]$/g, '')); 
+                    }
+                    
+                    // Remove comments: // single line and /* multi-line */
+                    let cleanCommand = commandString;
+                    cleanCommand = cleanCommand.replace(/\/\*[\s\S]*?\*\//g, ''); // Remove /* */ comments
+                    cleanCommand = cleanCommand.replace(/\/\/.*$/gm, ''); // Remove // comments
+                    cleanCommand = cleanCommand.trim();
+                    
+                    if (!cleanCommand) {
+                        return { status: 'ok', data: 'Comment only - no command to execute.' };
+                    }
+                    
+                    const parts = cleanCommand.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g).map(p => p.replace(/^['"]|['"]$/g, '')); 
                     const command = parts[0].toUpperCase(); 
                     const args = parts.slice(1); 
                     
@@ -305,10 +320,28 @@
                         case 'CREATEUSER': return this.createUser(args);
                         case 'LOGIN': return this.login(args);
                         case 'SCHEMAVALIDATE': return this.schemaValidate(args);
-                        default: throw new Error(`Unknown command: ${command}`); 
+                        case 'HELP': return this.help(args);
+                        default: throw new Error(`Unknown command: ${command}. Type 'HELP' for available commands.`); 
                     } 
                 } catch (e) { 
-                    return { status: 'error', message: e.message }; 
+                    const errorContext = {
+                        command: parts ? parts[0] : 'UNKNOWN',
+                        database: this.activeDbName,
+                        user: this.currentUser,
+                        inTransaction: this.inTransaction
+                    };
+                    
+                    let enhancedMessage = e.message;
+                    if (e.message.includes('requires') && e.message.includes('arguments')) {
+                        enhancedMessage += `. Usage help: Type 'HELP ${errorContext.command}' for syntax.`;
+                    }
+                    
+                    return { 
+                        status: 'error', 
+                        message: enhancedMessage,
+                        context: errorContext,
+                        timestamp: new Date().toISOString()
+                    }; 
                 } 
             }
             
@@ -361,18 +394,47 @@
                 this._validateDocument(doc, collectionName);
                 if (!doc._id) {
                     doc._id = this._generateObjectId(); 
-                    collection.push(doc); 
-                    return { status: 'ok', data: { insertedId: doc._id } }; 
                 } else {
+                    // MongoDB behavior: duplicate _id should throw error (not update)
                     const existingDocIndex = collection.findIndex(d => d._id === doc._id);
                     if (existingDocIndex > -1) {
-                        collection[existingDocIndex] = doc;
-                        return { status: 'ok', data: { updatedId: doc._id } };
-                    } else {
-                        collection.push(doc);
-                        return { status: 'ok', data: { insertedId: doc._id } };
+                        throw new Error(`E11000 duplicate key error collection: ${this.activeDbName}.${collectionName} index: _id_ dup key: { _id: "${doc._id}" }`);
                     }
                 }
+                collection.push(doc);
+                return { status: 'ok', data: { insertedId: doc._id } }; 
+            }
+
+            // MongoDB-style insertOne with proper duplicate _id error handling
+            insertOne(args) { return this.insert(args); }
+
+            // MongoDB-style replaceOne (upsert behavior)
+            replaceOne(args) {
+                if (args.length < 3) throw new Error("REPLACEONE requires collection, filter, and replacement document.");
+                const [collectionName, filterStr, replacementStr, optionsStr] = args;
+                const db = this.inTransaction ? this.transactionState.databases : this.databases;
+                const collection = this._getCollection(collectionName, db);
+                const filter = this._parseCustomTypes(filterStr);
+                const replacement = this._parseCustomTypes(replacementStr);
+                const options = optionsStr ? this._parseCustomTypes(optionsStr) : {};
+
+                const docIndex = collection.findIndex(doc => this._matchDoc(doc, filter));
+                
+                if (docIndex > -1) {
+                    // Replace existing document but preserve _id
+                    const originalId = collection[docIndex]._id;
+                    replacement._id = originalId;
+                    collection[docIndex] = replacement;
+                    return { status: 'ok', data: { modifiedCount: 1 } };
+                } else if (options.upsert) {
+                    // Insert new document with filter criteria merged
+                    const newDoc = { ...filter, ...replacement };
+                    if (!newDoc._id) newDoc._id = this._generateObjectId();
+                    collection.push(newDoc);
+                    return { status: 'ok', data: { upsertedId: newDoc._id, upsertedCount: 1 } };
+                }
+                
+                return { status: 'ok', data: { modifiedCount: 0 } };
             } 
 
             find(args) { 
@@ -528,6 +590,46 @@
             }
 
             _validateDocument(doc, collectionName) {
+                // Basic MongoDB field name validation
+                if (typeof doc !== 'object' || doc === null) {
+                    throw new Error("Document must be a valid object");
+                }
+                
+                // Check for invalid field names (MongoDB restrictions)
+                for (const key in doc) {
+                    if (key.startsWith('$')) {
+                        throw new Error(`field name cannot start with '$': ${key}`);
+                    }
+                    if (key.includes('.')) {
+                        throw new Error(`field name cannot contain '.': ${key}`);
+                    }
+                    if (key === '') {
+                        throw new Error("field name cannot be empty");
+                    }
+                }
+
+                // Validate unique indexes
+                const indexKey = `${this.activeDbName}.${collectionName}`;
+                const indexes = this.indexes[indexKey] || {};
+                
+                for (const [indexName, indexDef] of Object.entries(indexes)) {
+                    if (indexDef.options && indexDef.options.unique) {
+                        const field = indexDef.field;
+                        const value = this._getNestedValue(doc, field);
+                        if (value !== undefined) {
+                            const collection = this._getCollection(collectionName);
+                            const existing = collection.find(existingDoc => 
+                                existingDoc._id !== doc._id && 
+                                this._getNestedValue(existingDoc, field) === value
+                            );
+                            if (existing) {
+                                throw new Error(`E11000 duplicate key error collection: ${this.activeDbName}.${collectionName} index: ${indexName} dup key: { ${field}: "${value}" }`);
+                            }
+                        }
+                    }
+                }
+
+                // Schema validation (if schema exists)
                 const schema = this.schemas[collectionName];
                 if (!schema) return;
 
@@ -795,6 +897,57 @@
                 return { status: 'ok', data: results };
             }
 
+            help(args) {
+                const helpText = {
+                    "Database Operations": [
+                        "USE <database> - Switch to or create database",
+                        "SHOW DBS - List all databases", 
+                        "SHOW COLLECTIONS - List collections in current database",
+                        "DROPDATABASE - Drop current database"
+                    ],
+                    "CRUD Operations": [
+                        "INSERT <collection> '<document>' - Insert document",
+                        "FIND <collection> ['<query>'] ['<projection>'] ['<sort>'] [<limit>] [<skip>] - Find documents",
+                        "UPDATE <collection> '<query>' '<update>' - Update documents",
+                        "DELETE <collection> '<query>' - Delete documents"
+                    ],
+                    "Advanced Operations": [
+                        "AGGREGATE <collection> '<pipeline>' - Run aggregation pipeline",
+                        "DISTINCT <collection> <field> ['<query>'] - Get distinct values",
+                        "FINDANDMODIFY <collection> '<query>' '<update>' ['<options>'] - Find and modify",
+                        "BULKWRITE <collection> '<operations>' - Bulk operations",
+                        "MAPREDUCE <collection> '<map>' '<reduce>' ['<options>'] - Map-reduce"
+                    ],
+                    "Index Management": [
+                        "CREATEINDEX <collection> <field> ['<options>'] - Create index",
+                        "DROPINDEX <collection> <indexName> - Drop index",
+                        "LISTINDEXES <collection> - List all indexes",
+                        "REINDEX <collection> - Rebuild indexes"
+                    ],
+                    "Other Features": [
+                        "WATCH <collection> - Start change stream",
+                        "STARTTRANSACTION - Begin transaction",
+                        "COMMIT - Commit transaction",
+                        "ROLLBACK - Rollback transaction",
+                        "LOGIN <username> <password> - Authenticate",
+                        "SCHEMAVALIDATE <collection> '<schema>' - Set validation schema"
+                    ]
+                };
+
+                if (args.length === 0) {
+                    return { status: 'ok', data: helpText };
+                } else {
+                    const command = args[0].toUpperCase();
+                    const specificHelp = {
+                        'FIND': 'FIND <collection> [query] [projection] [sort] [limit] [skip]\nExample: FIND users \'{"age": {"$gt": 25}}\' \'{"name": 1}\' \'{"age": -1}\' 10 0',
+                        'INSERT': 'INSERT <collection> \'<document>\'\nExample: INSERT users \'{"name": "John", "age": 30}\'',
+                        'AGGREGATE': 'AGGREGATE <collection> \'<pipeline>\'\nExample: AGGREGATE users \'[{"$match": {"age": {"$gt": 25}}}, {"$group": {"_id": "$city", "count": {"$sum": 1}}}]\'',
+                        'CREATEINDEX': 'CREATEINDEX <collection> <field> [options]\nExample: CREATEINDEX users name \'{"unique": true}\''
+                    };
+                    return { status: 'ok', data: specificHelp[command] || `No specific help available for ${command}` };
+                }
+            }
+
             // Private helper methods
             _getCollection(collectionName, db = this.databases) { 
                 if (!db[this.activeDbName][collectionName]) { 
@@ -854,6 +1007,7 @@
                 for (const key in query) { 
                     if (key === '$or') { return query[key].some(q => this._matchDoc(doc, q)); } 
                     if (key === '$and') { return query[key].every(q => this._matchDoc(doc, q)); } 
+                    if (key === '$nor') { return !query[key].some(q => this._matchDoc(doc, q)); }
                     if (key === '$not') { return !this._matchDoc(doc, query[key]); } 
                     const queryVal = query[key]; 
                     const docVal = doc[key]; 
@@ -878,13 +1032,33 @@
                                 case '$lt': if (!(docData < opData)) match = false; break; 
                                 case '$lte': if (!(docData <= opData)) match = false; break; 
                                 case '$ne': if (this._deepEquals(docVal, opVal)) match = false; break; 
+                                case '$nin': if (opVal.includes(docVal)) match = false; break;
                                 case '$in': if (!opVal.includes(docVal)) match = false; break; 
                                 case '$exists': if ((opVal && !doc.hasOwnProperty(key)) || (!opVal && doc.hasOwnProperty(key))) match = false; break; 
                                 case '$type': if (Array.isArray(docVal) && opVal !== 'array') match = false; else if (typeof docVal !== opVal && !(docVal instanceof Date && opVal === 'date')) match = false; break; 
                                 case '$size': if (!Array.isArray(docVal) || docVal.length !== opVal) match = false; break; 
                                 case '$all': if (!Array.isArray(docVal) || !opVal.every(v => docVal.includes(v))) match = false; break; 
                                 case '$elemMatch': if (!Array.isArray(docVal) || !docVal.some(elem => this._matchDoc(elem, opVal))) match = false; break; 
+                                case '$regex': if (typeof docVal !== 'string' || !new RegExp(opVal).test(docVal)) match = false; break;
+                                case '$text': if (typeof docVal !== 'string' || !docVal.toLowerCase().includes(opVal.toLowerCase())) match = false; break;
+                                case '$mod': if (typeof docVal !== 'number' || docVal % opVal[0] !== opVal[1]) match = false; break;
                                 case '$geoWithin': if (!docVal || !this._isPointInPolygon(docVal['$point'], opVal['$polygon'])) match = false; break;
+                                // Additional query operators
+                                case '$eq': if (!this._deepEquals(docVal, opVal)) match = false; break;
+                                case '$expr': if (!this._evaluateExpression(opVal, doc)) match = false; break;
+                                case '$jsonSchema': if (!this._validateJsonSchema(doc, opVal)) match = false; break;
+                                case '$where': if (!new Function('obj', `return ${opVal}`)(doc)) match = false; break;
+                                case '$comment': break; // Comment operator - no operation needed
+                                case '$bitsAllClear': if (typeof docVal !== 'number' || (docVal & opVal) !== 0) match = false; break;
+                                case '$bitsAllSet': if (typeof docVal !== 'number' || (docVal & opVal) !== opVal) match = false; break;
+                                case '$bitsAnyClear': if (typeof docVal !== 'number' || (docVal & opVal) === opVal) match = false; break;
+                                case '$bitsAnySet': if (typeof docVal !== 'number' || (docVal & opVal) === 0) match = false; break;
+                                case '$geoIntersects': if (!this._geoIntersects(docVal, opVal)) match = false; break;
+                                case '$near': if (!this._geoNear(docVal, opVal)) match = false; break;
+                                case '$nearSphere': if (!this._geoNearSphere(docVal, opVal)) match = false; break;
+                                case '$centerSphere': if (!this._geoCenterSphere(docVal, opVal)) match = false; break;
+                                case '$box': if (!this._geoBox(docVal, opVal)) match = false; break;
+                                case '$center': if (!this._geoCenter(docVal, opVal)) match = false; break;
                                 default: match = false; 
                             } 
                         } 
@@ -918,7 +1092,80 @@
                                 }
                             }
                         }
-                    } 
+                    }
+                    // Additional update operators
+                    else if (op === '$addToSet') { 
+                        for (const field in opBody) { 
+                            if (!doc[field]) doc[field] = []; 
+                            if (Array.isArray(doc[field])) { 
+                                if (opBody[field].hasOwnProperty('$each')) { 
+                                    opBody[field]['$each'].forEach(item => { 
+                                        if (!doc[field].some(existing => this._deepEquals(existing, item))) { 
+                                            doc[field].push(item); 
+                                        } 
+                                    }); 
+                                } else if (!doc[field].some(existing => this._deepEquals(existing, opBody[field]))) { 
+                                    doc[field].push(opBody[field]); 
+                                } 
+                            } 
+                        } 
+                    }
+                    else if (op === '$pop') { 
+                        for (const field in opBody) { 
+                            if (Array.isArray(doc[field])) { 
+                                if (opBody[field] === 1) doc[field].pop(); 
+                                else if (opBody[field] === -1) doc[field].shift(); 
+                            } 
+                        } 
+                    }
+                    else if (op === '$pullAll') { 
+                        for (const field in opBody) { 
+                            if (Array.isArray(doc[field]) && Array.isArray(opBody[field])) { 
+                                doc[field] = doc[field].filter(item => !opBody[field].some(pullItem => this._deepEquals(item, pullItem))); 
+                            } 
+                        } 
+                    }
+                    else if (op === '$mul') { 
+                        for (const field in opBody) { 
+                            if (typeof doc[field] === 'number') { 
+                                doc[field] *= opBody[field]; 
+                            } 
+                        } 
+                    }
+                    else if (op === '$min') { 
+                        for (const field in opBody) { 
+                            if (doc[field] === undefined || doc[field] > opBody[field]) { 
+                                doc[field] = opBody[field]; 
+                            } 
+                        } 
+                    }
+                    else if (op === '$max') { 
+                        for (const field in opBody) { 
+                            if (doc[field] === undefined || doc[field] < opBody[field]) { 
+                                doc[field] = opBody[field]; 
+                            } 
+                        } 
+                    }
+                    else if (op === '$currentDate') { 
+                        for (const field in opBody) { 
+                            if (opBody[field] === true || opBody[field]['$type'] === 'date') { 
+                                doc[field] = new Date(); 
+                            } else if (opBody[field]['$type'] === 'timestamp') { 
+                                doc[field] = { '$timestamp': { t: Math.floor(Date.now() / 1000), i: 1 } }; 
+                            } 
+                        } 
+                    }
+                    else if (op === '$bit') { 
+                        for (const field in opBody) { 
+                            if (typeof doc[field] === 'number') { 
+                                for (const bitOp in opBody[field]) { 
+                                    if (bitOp === 'and') doc[field] &= opBody[field][bitOp]; 
+                                    else if (bitOp === 'or') doc[field] |= opBody[field][bitOp]; 
+                                    else if (bitOp === 'xor') doc[field] ^= opBody[field][bitOp]; 
+                                } 
+                            } 
+                        } 
+                    }  
                 } 
             } 
             
@@ -950,6 +1197,159 @@
 
             _generateObjectId() { const timestamp = (new Date().getTime() / 1000 | 0).toString(16); return timestamp + 'xxxxxxxxxxxxxxxx'.replace(/[x]/g, () => (Math.random() * 16 | 0).toString(16)).toLowerCase(); }
             
+            // Aggregation Stage Handlers
+            _applyFacet(docs, facetBody, db) {
+                const result = {};
+                for (const facetName in facetBody) {
+                    const pipeline = facetBody[facetName];
+                    let facetResults = [...docs];
+                    for (const stage of pipeline) {
+                        const stageName = Object.keys(stage)[0];
+                        const stageBody = stage[stageName];
+                        switch(stageName) {
+                            case '$match': facetResults = facetResults.filter(doc => this._matchDoc(doc, stageBody)); break;
+                            case '$group': facetResults = this._applyGroup(facetResults, stageBody); break;
+                            case '$sort': facetResults = this._applySort(facetResults, stageBody); break;
+                            case '$limit': facetResults = facetResults.slice(0, stageBody); break;
+                        }
+                    }
+                    result[facetName] = facetResults;
+                }
+                return [result];
+            }
+
+            _applySample(docs, sampleBody) {
+                const size = sampleBody.size || 1;
+                const shuffled = [...docs].sort(() => 0.5 - Math.random());
+                return shuffled.slice(0, size);
+            }
+
+            _applyAddFields(docs, addFieldsBody) {
+                return docs.map(doc => {
+                    const newDoc = { ...doc };
+                    for (const field in addFieldsBody) {
+                        newDoc[field] = addFieldsBody[field];
+                    }
+                    return newDoc;
+                });
+            }
+
+            _applyBucket(docs, bucketBody) {
+                const boundaries = bucketBody.boundaries;
+                const groupBy = bucketBody.groupBy.replace('$', '');
+                const buckets = [];
+                
+                for (let i = 0; i < boundaries.length - 1; i++) {
+                    const min = boundaries[i];
+                    const max = boundaries[i + 1];
+                    const count = docs.filter(doc => {
+                        const value = doc[groupBy];
+                        return value >= min && value < max;
+                    }).length;
+                    buckets.push({ _id: min, count });
+                }
+                return buckets;
+            }
+
+            _applyBucketAuto(docs, bucketAutoBody) {
+                const buckets = bucketAutoBody.buckets || 5;
+                const groupBy = bucketAutoBody.groupBy.replace('$', '');
+                const values = docs.map(doc => doc[groupBy]).filter(v => v !== undefined).sort((a, b) => a - b);
+                
+                const bucketSize = Math.ceil(values.length / buckets);
+                const result = [];
+                
+                for (let i = 0; i < buckets; i++) {
+                    const start = i * bucketSize;
+                    const end = Math.min(start + bucketSize, values.length);
+                    if (start < values.length) {
+                        result.push({
+                            _id: { min: values[start], max: values[end - 1] },
+                            count: end - start
+                        });
+                    }
+                }
+                return result;
+            }
+
+            _applyReplaceRoot(docs, replaceRootBody) {
+                return docs.map(doc => {
+                    const newRoot = replaceRootBody.newRoot;
+                    if (typeof newRoot === 'string' && newRoot.startsWith('$')) {
+                        const field = newRoot.substring(1);
+                        return doc[field] || {};
+                    }
+                    return newRoot;
+                });
+            }
+
+            _applyOut(docs, outBody, db) {
+                const collectionName = outBody;
+                db[this.activeDbName][collectionName] = docs;
+                return { status: 'ok', data: `${docs.length} documents written to '${collectionName}'.` };
+            }
+
+            _applyMerge(docs, mergeBody, db) {
+                const into = mergeBody.into || mergeBody;
+                const collection = this._getCollection(into, db);
+                docs.forEach(doc => {
+                    const existingIndex = collection.findIndex(existing => existing._id === doc._id);
+                    if (existingIndex > -1) {
+                        collection[existingIndex] = doc;
+                    } else {
+                        collection.push(doc);
+                    }
+                });
+                return { status: 'ok', data: `${docs.length} documents merged into '${into}'.` };
+            }
+
+            _applyGeoNear(docs, geoNearBody) {
+                // Simple implementation for demonstration
+                return docs.filter(doc => doc.location && doc.location.$point);
+            }
+
+            _applyRedact(docs, redactBody) {
+                // Simple implementation - just return docs
+                return docs;
+            }
+
+            _applyGraphLookup(docs, graphLookupBody, db) {
+                // Simplified graph lookup
+                const from = graphLookupBody.from;
+                const startWith = graphLookupBody.startWith;
+                const connectFromField = graphLookupBody.connectFromField;
+                const connectToField = graphLookupBody.connectToField;
+                const as = graphLookupBody.as;
+                
+                const foreignCollection = db[this.activeDbName][from] || [];
+                
+                return docs.map(doc => {
+                    const newDoc = { ...doc };
+                    newDoc[as] = foreignCollection.filter(foreignDoc => 
+                        foreignDoc[connectToField] === doc[startWith.replace('$', '')]
+                    );
+                    return newDoc;
+                });
+            }
+
+            _applyCollStats(docs, collectionName) {
+                return [{
+                    ns: `${this.activeDbName}.${collectionName}`,
+                    count: docs.length,
+                    size: JSON.stringify(docs).length,
+                    avgObjSize: docs.length > 0 ? JSON.stringify(docs).length / docs.length : 0
+                }];
+            }
+
+            _applyIndexStats(docs, collectionName) {
+                const indexKey = `${this.activeDbName}.${collectionName}`;
+                const indexes = this.indexes[indexKey] || {};
+                return Object.keys(indexes).map(indexName => ({
+                    name: indexName,
+                    accesses: { ops: 0, since: indexes[indexName].created }
+                }));
+            }
+            
             _parseCustomTypes(jsonString) { 
                 return JSON.parse(jsonString, (key, value) => { 
                     if (value && typeof value === 'object' && value.hasOwnProperty('$date')) { 
@@ -963,6 +1363,185 @@
                     }
                     return value; 
                 }); 
+            }
+
+            _evaluateExpression(expr, doc) {
+                if (typeof expr === 'string' && expr.startsWith('$')) {
+                    return doc[expr.substring(1)];
+                }
+                if (typeof expr !== 'object' || expr === null) {
+                    return expr;
+                }
+                
+                // Aggregation expression operators
+                for (const op in expr) {
+                    const args = expr[op];
+                    switch (op) {
+                        // Arithmetic operators
+                        case '$add': return Array.isArray(args) ? args.reduce((sum, arg) => sum + this._evaluateExpression(arg, doc), 0) : 0;
+                        case '$subtract': return Array.isArray(args) && args.length === 2 ? this._evaluateExpression(args[0], doc) - this._evaluateExpression(args[1], doc) : 0;
+                        case '$multiply': return Array.isArray(args) ? args.reduce((prod, arg) => prod * this._evaluateExpression(arg, doc), 1) : 0;
+                        case '$divide': return Array.isArray(args) && args.length === 2 ? this._evaluateExpression(args[0], doc) / this._evaluateExpression(args[1], doc) : 0;
+                        case '$mod': return Array.isArray(args) && args.length === 2 ? this._evaluateExpression(args[0], doc) % this._evaluateExpression(args[1], doc) : 0;
+                        case '$abs': return Math.abs(this._evaluateExpression(args, doc));
+                        case '$ceil': return Math.ceil(this._evaluateExpression(args, doc));
+                        case '$floor': return Math.floor(this._evaluateExpression(args, doc));
+                        case '$round': return Array.isArray(args) ? Math.round(this._evaluateExpression(args[0], doc) * Math.pow(10, this._evaluateExpression(args[1], doc))) / Math.pow(10, this._evaluateExpression(args[1], doc)) : Math.round(this._evaluateExpression(args, doc));
+                        case '$sqrt': return Math.sqrt(this._evaluateExpression(args, doc));
+                        case '$pow': return Array.isArray(args) && args.length === 2 ? Math.pow(this._evaluateExpression(args[0], doc), this._evaluateExpression(args[1], doc)) : 0;
+                        case '$exp': return Math.exp(this._evaluateExpression(args, doc));
+                        case '$ln': return Math.log(this._evaluateExpression(args, doc));
+                        case '$log': return Array.isArray(args) && args.length === 2 ? Math.log(this._evaluateExpression(args[0], doc)) / Math.log(this._evaluateExpression(args[1], doc)) : Math.log(this._evaluateExpression(args, doc));
+                        case '$log10': return Math.log10(this._evaluateExpression(args, doc));
+                        case '$sin': return Math.sin(this._evaluateExpression(args, doc));
+                        case '$cos': return Math.cos(this._evaluateExpression(args, doc));
+                        case '$tan': return Math.tan(this._evaluateExpression(args, doc));
+                        case '$asin': return Math.asin(this._evaluateExpression(args, doc));
+                        case '$acos': return Math.acos(this._evaluateExpression(args, doc));
+                        case '$atan': return Math.atan(this._evaluateExpression(args, doc));
+                        case '$atan2': return Array.isArray(args) && args.length === 2 ? Math.atan2(this._evaluateExpression(args[0], doc), this._evaluateExpression(args[1], doc)) : 0;
+                        case '$sinh': return Math.sinh(this._evaluateExpression(args, doc));
+                        case '$cosh': return Math.cosh(this._evaluateExpression(args, doc));
+                        case '$tanh': return Math.tanh(this._evaluateExpression(args, doc));
+                        case '$asinh': return Math.asinh(this._evaluateExpression(args, doc));
+                        case '$acosh': return Math.acosh(this._evaluateExpression(args, doc));
+                        case '$atanh': return Math.atanh(this._evaluateExpression(args, doc));
+                        case '$radiansToDegrees': return this._evaluateExpression(args, doc) * 180 / Math.PI;
+                        case '$degreesToRadians': return this._evaluateExpression(args, doc) * Math.PI / 180;
+                        
+                        // String operators
+                        case '$concat': return Array.isArray(args) ? args.map(arg => String(this._evaluateExpression(arg, doc))).join('') : '';
+                        case '$substr': return Array.isArray(args) && args.length >= 2 ? String(this._evaluateExpression(args[0], doc)).substr(this._evaluateExpression(args[1], doc), args[2] ? this._evaluateExpression(args[2], doc) : undefined) : '';
+                        case '$toLower': return String(this._evaluateExpression(args, doc)).toLowerCase();
+                        case '$toUpper': return String(this._evaluateExpression(args, doc)).toUpperCase();
+                        case '$strcasecmp': return Array.isArray(args) && args.length === 2 ? String(this._evaluateExpression(args[0], doc)).localeCompare(String(this._evaluateExpression(args[1], doc)), undefined, { sensitivity: 'base' }) : 0;
+                        case '$strLenBytes': return Buffer.byteLength(String(this._evaluateExpression(args, doc)), 'utf8');
+                        case '$strLenCP': return Array.from(String(this._evaluateExpression(args, doc))).length;
+                        case '$indexOfBytes': return Array.isArray(args) && args.length >= 2 ? String(this._evaluateExpression(args[0], doc)).indexOf(String(this._evaluateExpression(args[1], doc)), args[2] ? this._evaluateExpression(args[2], doc) : 0) : -1;
+                        case '$indexOfCP': return Array.isArray(args) && args.length >= 2 ? Array.from(String(this._evaluateExpression(args[0], doc))).indexOf(String(this._evaluateExpression(args[1], doc)), args[2] ? this._evaluateExpression(args[2], doc) : 0) : -1;
+                        case '$split': return Array.isArray(args) && args.length === 2 ? String(this._evaluateExpression(args[0], doc)).split(String(this._evaluateExpression(args[1], doc))) : [];
+                        case '$trim': return typeof args === 'object' && args.input ? String(this._evaluateExpression(args.input, doc)).trim() : String(this._evaluateExpression(args, doc)).trim();
+                        case '$ltrim': return typeof args === 'object' && args.input ? String(this._evaluateExpression(args.input, doc)).replace(/^\s+/, '') : String(this._evaluateExpression(args, doc)).replace(/^\s+/, '');
+                        case '$rtrim': return typeof args === 'object' && args.input ? String(this._evaluateExpression(args.input, doc)).replace(/\s+$/, '') : String(this._evaluateExpression(args, doc)).replace(/\s+$/, '');
+                        case '$regexFind': return Array.isArray(args) && args.length >= 2 ? { match: String(this._evaluateExpression(args[0], doc)).match(new RegExp(String(this._evaluateExpression(args[1], doc)))) } : null;
+                        case '$regexFindAll': return Array.isArray(args) && args.length >= 2 ? Array.from(String(this._evaluateExpression(args[0], doc)).matchAll(new RegExp(String(this._evaluateExpression(args[1], doc)), 'g'))) : [];
+                        case '$regexMatch': return Array.isArray(args) && args.length >= 2 ? new RegExp(String(this._evaluateExpression(args[1], doc))).test(String(this._evaluateExpression(args[0], doc))) : false;
+                        
+                        // Date operators
+                        case '$dateToString': return typeof args === 'object' && args.date ? new Date(this._evaluateExpression(args.date, doc)).toISOString() : new Date(this._evaluateExpression(args, doc)).toISOString();
+                        case '$dateFromString': return typeof args === 'object' && args.dateString ? new Date(String(this._evaluateExpression(args.dateString, doc))) : new Date(String(this._evaluateExpression(args, doc)));
+                        case '$year': return new Date(this._evaluateExpression(args, doc)).getFullYear();
+                        case '$month': return new Date(this._evaluateExpression(args, doc)).getMonth() + 1;
+                        case '$dayOfMonth': return new Date(this._evaluateExpression(args, doc)).getDate();
+                        case '$dayOfWeek': return new Date(this._evaluateExpression(args, doc)).getDay() + 1;
+                        case '$dayOfYear': const date = new Date(this._evaluateExpression(args, doc)); return Math.floor((date - new Date(date.getFullYear(), 0, 0)) / 86400000);
+                        case '$hour': return new Date(this._evaluateExpression(args, doc)).getHours();
+                        case '$minute': return new Date(this._evaluateExpression(args, doc)).getMinutes();
+                        case '$second': return new Date(this._evaluateExpression(args, doc)).getSeconds();
+                        case '$millisecond': return new Date(this._evaluateExpression(args, doc)).getMilliseconds();
+                        case '$week': const d = new Date(this._evaluateExpression(args, doc)); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7); const week1 = new Date(d.getFullYear(), 0, 4); return 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+                        case '$isoWeek': return this._evaluateExpression({ '$week': args }, doc);
+                        case '$isoDayOfWeek': return (new Date(this._evaluateExpression(args, doc)).getDay() + 6) % 7 + 1;
+                        case '$dateAdd': return typeof args === 'object' && args.startDate && args.unit && args.amount ? new Date(new Date(this._evaluateExpression(args.startDate, doc)).getTime() + this._evaluateExpression(args.amount, doc) * this._getDateUnitMultiplier(args.unit)) : null;
+                        case '$dateSubtract': return typeof args === 'object' && args.startDate && args.unit && args.amount ? new Date(new Date(this._evaluateExpression(args.startDate, doc)).getTime() - this._evaluateExpression(args.amount, doc) * this._getDateUnitMultiplier(args.unit)) : null;
+                        case '$dateDiff': return typeof args === 'object' && args.startDate && args.endDate && args.unit ? Math.floor((new Date(this._evaluateExpression(args.endDate, doc)).getTime() - new Date(this._evaluateExpression(args.startDate, doc)).getTime()) / this._getDateUnitMultiplier(args.unit)) : 0;
+                        
+                        // Array operators
+                        case '$arrayElemAt': return Array.isArray(args) && args.length === 2 ? this._evaluateExpression(args[0], doc)[this._evaluateExpression(args[1], doc)] : null;
+                        case '$arrayToObject': const arr = this._evaluateExpression(args, doc); return Array.isArray(arr) ? arr.reduce((obj, item) => { if (item.k && item.v !== undefined) obj[item.k] = item.v; return obj; }, {}) : {};
+                        case '$concatArrays': return Array.isArray(args) ? args.reduce((result, arg) => result.concat(this._evaluateExpression(arg, doc)), []) : [];
+                        case '$filter': return typeof args === 'object' && args.input && args.as && args.cond ? this._evaluateExpression(args.input, doc).filter(item => this._evaluateExpression(args.cond, { ...doc, [args.as]: item })) : [];
+                        case '$first': const firstArr = this._evaluateExpression(args, doc); return Array.isArray(firstArr) && firstArr.length > 0 ? firstArr[0] : null;
+                        case '$in': return Array.isArray(args) && args.length === 2 ? this._evaluateExpression(args[1], doc).includes(this._evaluateExpression(args[0], doc)) : false;
+                        case '$indexOfArray': return Array.isArray(args) && args.length >= 2 ? this._evaluateExpression(args[0], doc).indexOf(this._evaluateExpression(args[1], doc), args[2] ? this._evaluateExpression(args[2], doc) : 0) : -1;
+                        case '$isArray': return Array.isArray(this._evaluateExpression(args, doc));
+                        case '$last': const lastArr = this._evaluateExpression(args, doc); return Array.isArray(lastArr) && lastArr.length > 0 ? lastArr[lastArr.length - 1] : null;
+                        case '$map': return typeof args === 'object' && args.input && args.as && args.in ? this._evaluateExpression(args.input, doc).map(item => this._evaluateExpression(args.in, { ...doc, [args.as]: item })) : [];
+                        case '$objectToArray': const obj = this._evaluateExpression(args, doc); return typeof obj === 'object' && obj !== null ? Object.keys(obj).map(k => ({ k, v: obj[k] })) : [];
+                        case '$range': return Array.isArray(args) && args.length >= 2 ? Array.from({ length: this._evaluateExpression(args[1], doc) - this._evaluateExpression(args[0], doc) }, (_, i) => this._evaluateExpression(args[0], doc) + i * (args[2] ? this._evaluateExpression(args[2], doc) : 1)) : [];
+                        case '$reduce': return typeof args === 'object' && args.input && args.initialValue !== undefined && args.in ? this._evaluateExpression(args.input, doc).reduce((acc, item) => this._evaluateExpression(args.in, { ...doc, $$value: acc, $$this: item }), this._evaluateExpression(args.initialValue, doc)) : null;
+                        case '$reverseArray': const revArr = this._evaluateExpression(args, doc); return Array.isArray(revArr) ? [...revArr].reverse() : [];
+                        case '$size': const sizeArr = this._evaluateExpression(args, doc); return Array.isArray(sizeArr) ? sizeArr.length : 0;
+                        case '$slice': return Array.isArray(args) && args.length >= 2 ? this._evaluateExpression(args[0], doc).slice(this._evaluateExpression(args[1], doc), args[2] ? this._evaluateExpression(args[1], doc) + this._evaluateExpression(args[2], doc) : undefined) : [];
+                        case '$sortArray': return typeof args === 'object' && args.input && args.sortBy ? this._evaluateExpression(args.input, doc).sort((a, b) => this._evaluateExpression(args.sortBy, { ...doc, $$ROOT: a }) - this._evaluateExpression(args.sortBy, { ...doc, $$ROOT: b })) : [];
+                        case '$zip': return typeof args === 'object' && args.inputs ? args.inputs[0] ? this._evaluateExpression(args.inputs[0], doc).map((_, i) => args.inputs.map(input => this._evaluateExpression(input, doc)[i])) : [] : [];
+                        
+                        // Comparison operators
+                        case '$cmp': return Array.isArray(args) && args.length === 2 ? (this._evaluateExpression(args[0], doc) > this._evaluateExpression(args[1], doc) ? 1 : this._evaluateExpression(args[0], doc) < this._evaluateExpression(args[1], doc) ? -1 : 0) : 0;
+                        case '$eq': return Array.isArray(args) && args.length === 2 ? this._evaluateExpression(args[0], doc) === this._evaluateExpression(args[1], doc) : false;
+                        case '$gt': return Array.isArray(args) && args.length === 2 ? this._evaluateExpression(args[0], doc) > this._evaluateExpression(args[1], doc) : false;
+                        case '$gte': return Array.isArray(args) && args.length === 2 ? this._evaluateExpression(args[0], doc) >= this._evaluateExpression(args[1], doc) : false;
+                        case '$lt': return Array.isArray(args) && args.length === 2 ? this._evaluateExpression(args[0], doc) < this._evaluateExpression(args[1], doc) : false;
+                        case '$lte': return Array.isArray(args) && args.length === 2 ? this._evaluateExpression(args[0], doc) <= this._evaluateExpression(args[1], doc) : false;
+                        case '$ne': return Array.isArray(args) && args.length === 2 ? this._evaluateExpression(args[0], doc) !== this._evaluateExpression(args[1], doc) : false;
+                        
+                        // Logical operators
+                        case '$and': return Array.isArray(args) ? args.every(arg => this._evaluateExpression(arg, doc)) : false;
+                        case '$not': return !this._evaluateExpression(args, doc);
+                        case '$or': return Array.isArray(args) ? args.some(arg => this._evaluateExpression(arg, doc)) : false;
+                        
+                        // Conditional operators
+                        case '$cond': return typeof args === 'object' && args.if !== undefined && args.then !== undefined && args.else !== undefined ? (this._evaluateExpression(args.if, doc) ? this._evaluateExpression(args.then, doc) : this._evaluateExpression(args.else, doc)) : null;
+                        case '$ifNull': return Array.isArray(args) && args.length === 2 ? (this._evaluateExpression(args[0], doc) !== null && this._evaluateExpression(args[0], doc) !== undefined ? this._evaluateExpression(args[0], doc) : this._evaluateExpression(args[1], doc)) : null;
+                        case '$switch': if (typeof args === 'object' && args.branches && Array.isArray(args.branches)) { for (const branch of args.branches) { if (this._evaluateExpression(branch.case, doc)) return this._evaluateExpression(branch.then, doc); } return args.default !== undefined ? this._evaluateExpression(args.default, doc) : null; } return null;
+                        
+                        // Type operators
+                        case '$type': const val = this._evaluateExpression(args, doc); return Array.isArray(val) ? 'array' : val === null ? 'null' : typeof val;
+                        case '$convert': return typeof args === 'object' && args.input !== undefined && args.to ? this._convertType(this._evaluateExpression(args.input, doc), args.to) : null;
+                        case '$toBool': return Boolean(this._evaluateExpression(args, doc));
+                        case '$toDate': return new Date(this._evaluateExpression(args, doc));
+                        case '$toDecimal': return { $decimal128: String(this._evaluateExpression(args, doc)) };
+                        case '$toDouble': return Number(this._evaluateExpression(args, doc));
+                        case '$toInt': return parseInt(this._evaluateExpression(args, doc), 10);
+                        case '$toLong': return parseInt(this._evaluateExpression(args, doc), 10);
+                        case '$toObjectId': return String(this._evaluateExpression(args, doc));
+                        case '$toString': return String(this._evaluateExpression(args, doc));
+                        
+                        // Object operators
+                        case '$mergeObjects': return Array.isArray(args) ? args.reduce((merged, arg) => ({ ...merged, ...this._evaluateExpression(arg, doc) }), {}) : {};
+                        case '$objectToArray': const mergeObj = this._evaluateExpression(args, doc); return typeof mergeObj === 'object' && mergeObj !== null ? Object.keys(mergeObj).map(k => ({ k, v: mergeObj[k] })) : [];
+                        
+                        // Set operators
+                        case '$setEquals': return Array.isArray(args) && args.length === 2 ? JSON.stringify([...new Set(this._evaluateExpression(args[0], doc))].sort()) === JSON.stringify([...new Set(this._evaluateExpression(args[1], doc))].sort()) : false;
+                        case '$setIntersection': return Array.isArray(args) ? args.reduce((intersection, arg) => { const set = new Set(this._evaluateExpression(arg, doc)); return intersection.filter(item => set.has(item)); }, this._evaluateExpression(args[0], doc)) : [];
+                        case '$setUnion': return Array.isArray(args) ? [...new Set(args.reduce((union, arg) => union.concat(this._evaluateExpression(arg, doc)), []))] : [];
+                        case '$setDifference': return Array.isArray(args) && args.length === 2 ? this._evaluateExpression(args[0], doc).filter(item => !this._evaluateExpression(args[1], doc).includes(item)) : [];
+                        case '$setIsSubset': return Array.isArray(args) && args.length === 2 ? this._evaluateExpression(args[0], doc).every(item => this._evaluateExpression(args[1], doc).includes(item)) : false;
+                        case '$anyElementTrue': const anyArr = this._evaluateExpression(args, doc); return Array.isArray(anyArr) ? anyArr.some(Boolean) : false;
+                        case '$allElementsTrue': const allArr = this._evaluateExpression(args, doc); return Array.isArray(allArr) ? allArr.every(Boolean) : false;
+                        
+                        default: return expr[op];
+                    }
+                }
+                return expr;
+            }
+
+            _getDateUnitMultiplier(unit) {
+                switch (unit) {
+                    case 'millisecond': return 1;
+                    case 'second': return 1000;
+                    case 'minute': return 60000;
+                    case 'hour': return 3600000;
+                    case 'day': return 86400000;
+                    case 'week': return 604800000;
+                    case 'month': return 2629746000; // Average month
+                    case 'year': return 31556952000; // Average year
+                    default: return 1;
+                }
+            }
+
+            _convertType(value, toType) {
+                switch (toType) {
+                    case 'bool': return Boolean(value);
+                    case 'date': return new Date(value);
+                    case 'decimal': return { $decimal128: String(value) };
+                    case 'double': return Number(value);
+                    case 'int': return parseInt(value, 10);
+                    case 'long': return parseInt(value, 10);
+                    case 'objectId': return String(value);
+                    case 'string': return String(value);
+                    default: return value;
+                }
             }
         }
 
@@ -1028,7 +1607,7 @@
                     { desc: "Add a new tag for Charlie ($push)", cmd: 'UPDATE users \'{"name": "Charlie"}\' \'{"$push": {"tags": "ux"}}\'' },
                     { desc: "Add multiple tags at once ($push with $each)", cmd: 'UPDATE users \'{"name": "Alice"}\' \'{"$push": {"tags": {"$each": ["admin", "manager"]}}}\'' },
                     { desc: "Remove the 'qa' tag from Charlie ($pull)", cmd: 'UPDATE users \'{"name": "Charlie"}\' \'{"$pull": "qa"}\'' },
-                    { desc: "Insert a doc with custom _id, then update it (upsert)", cmd: 'INSERT products \'{"_id": "laptop", "name": "Laptop", "price": 1200}\'\nINSERT products \'{"_id": "laptop", "name": "Laptop", "price": 1100, "brand": "XYZ"}\'\nFIND products \'{"_id": "laptop"}\'' }
+                    { desc: "Insert a doc with custom _id, then try inserting duplicate (should error)", cmd: 'INSERT products \'{"_id": "laptop", "name": "Laptop", "price": 1200}\'\nINSERT products \'{"_id": "laptop", "name": "Laptop", "price": 1100, "brand": "XYZ"}\'\nFIND products \'{"_id": "laptop"}\'' },
                 ],
                 "Data Types & Geospatial": [
                     { desc: "Insert a document with a Decimal128", cmd: 'INSERT products \'{"name": "Widget", "price": {"$decimal128": "99.99"}}\'' },
@@ -1051,6 +1630,41 @@
                     { desc: "Drop a specific index", cmd: 'DROPINDEX users name' },
                     { desc: "Rebuild all indexes on a collection", cmd: 'REINDEX users' },
                     { desc: "Create compound index", cmd: 'CREATEINDEX products \'category,name\' \'{"name": "category_name_idx"}\'' }
+                ],
+                "Advanced MongoDB Features": [
+                    { desc: "Enhanced FIND with limit and skip", cmd: 'FIND users \'{}\' null null 2 1' },
+                    { desc: "Get distinct values from a field", cmd: 'DISTINCT users city' },
+                    { desc: "Get distinct values with query filter", cmd: 'DISTINCT users tags \'{"age": {"$gt": 30}}\'' },
+                    { desc: "Find and modify a document", cmd: 'FINDANDMODIFY users \'{"name": "Alice"}\' \'{"$set": {"status": "updated"}}\' \'{"new": true}\'' },
+                    { desc: "Start watching changes on a collection", cmd: 'WATCH users' },
+                    { desc: "Bulk write operations", cmd: 'BULKWRITE users \'[{"insertOne": {"document": {"name": "Frank", "age": 28}}}, {"updateOne": {"filter": {"name": "Bob"}, "update": {"$set": {"status": "active"}}}}]\'' },
+                    { desc: "Simple map-reduce operation", cmd: 'MAPREDUCE users "function() { emit(this.city, 1); }" "function(key, values) { return values.length; }"' },
+                    { desc: "Proper upsert with replaceOne", cmd: 'REPLACEONE products \'{"_id": "laptop"}\' \'{"name": "New Laptop", "price": 1300, "brand": "ABC"}\' \'{"upsert": true}\'' },
+                    { desc: "Test duplicate _id error handling", cmd: 'INSERT errortest \'{"_id": "test123", "value": "first"}\'\nINSERT errortest \'{"_id": "test123", "value": "duplicate"}\'' }
+                ],
+                "Enhanced Query Operators": [
+                    { desc: "Find users NOT in multiple cities ($nor)", cmd: 'FIND users \'{"$nor": [{"city": "London"}, {"city": "Paris"}]}\'' },
+                    { desc: "Find users NOT in specific ages ($nin)", cmd: 'FIND users \'{"age": {"$nin": [25, 30]}}\'' },
+                    { desc: "Find users with regex pattern ($regex)", cmd: 'INSERT users \'{"name": "Alexander", "email": "alex@example.com"}\'\nFIND users \'{"email": {"$regex": "@example"}}\'' },
+                    { desc: "Simple text search ($text)", cmd: 'FIND users \'{"name": {"$text": "Alex"}}\'' },
+                    { desc: "Modulo operation ($mod)", cmd: 'FIND users \'{"age": {"$mod": [5, 0]}}\'' }
+                ],
+                "Advanced Aggregation Stages": [
+                    { desc: "Sample random documents", cmd: 'AGGREGATE users \'[{"$sample": {"size": 2}}]\'' },
+                    { desc: "Add computed fields", cmd: 'AGGREGATE users \'[{"$addFields": {"ageGroup": "adult", "processed": true}}]\'' },
+                    { desc: "Bucket users by age groups", cmd: 'AGGREGATE users \'[{"$bucket": {"groupBy": "$age", "boundaries": [20, 30, 40, 50]}}]\'' },
+                    { desc: "Faceted search with multiple pipelines", cmd: 'AGGREGATE users \'[{"$facet": {"youngUsers": [{"$match": {"age": {"$lt": 30}}}], "oldUsers": [{"$match": {"age": {"$gte": 30}}}]}}]\'' }
+                ],
+                "Comments & Multi-line Support": [
+                    { desc: "Single-line comments with //", cmd: '// This is a comment\nFIND users \'{"city": "New York"}\' // Find NY users' },
+                    { desc: "Multi-line comments with /* */", cmd: '/* This is a\n   multi-line comment */\nFIND users' },
+                    { desc: "Mixed comments and commands", cmd: '// Setup data\nINSERT users \'{"name": "Test"}\'\n/* Now query it */\nFIND users \'{"name": "Test"}\'' }
+                ],
+                "Help & Documentation": [
+                    { desc: "Show all available commands", cmd: 'HELP' },
+                    { desc: "Get help for specific command", cmd: 'HELP FIND' },
+                    { desc: "Get help for aggregation", cmd: 'HELP AGGREGATE' },
+                    { desc: "Get help for indexing", cmd: 'HELP CREATEINDEX' }
                 ]
             };
 

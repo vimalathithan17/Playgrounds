@@ -104,7 +104,7 @@
         <div id="right-panel" class="flex flex-col w-full md:w-3/5 h-full bg-[#252526]">
             <!-- Title Bar for Editor -->
             <div class="flex-shrink-0 bg-[#282828] p-3 border-b border-gray-700">
-                <h3 class="text-lg font-semibold text-gray-200">Redis Command Editor</h3>
+                <h3 class="text-lg font-semibold text-gray-200">Redis Command Shell</h3>
                 <p class="text-sm text-gray-400">Enter Redis commands below. Multiple commands supported (one per line).</p>
             </div>
             <div id="editor-container" class="flex-grow flex flex-col overflow-hidden" style="height: 60%;">
@@ -261,7 +261,7 @@
                     if (this.transactionQueue !== null && !['EXEC', 'DISCARD'].includes(command) && !isFromTransaction) { 
                         this.transactionQueue.push(commandString); 
                         return { status: 'ok', data: 'QUEUED' }; 
-                    } switch (command) { case 'SET': return this.set(args); case 'GET': return this.get(args); case 'INCR': return this.incrby(args, 1); case 'DECR': return this.incrby(args, -1); case 'INCRBY': return this.incrby(args, parseInt(args[1])); case 'DECRBY': return this.incrby(args, -parseInt(args[1])); case 'DEL': return this.del(args); case 'SELECT': return this.select(args); case 'EXPIRE': return this.expire(args); case 'TTL': return this.ttl(args); case 'EXISTS': return this.exists(args); case 'KEYS': return this.keys(args); case 'FLUSHDB': return this.flushdb(); case 'LPUSH': return this.lpush(args); case 'RPUSH': return this.rpush(args); case 'LPOP': return this.lpop(args); case 'RPOP': return this.rpop(args); case 'LRANGE': return this.lrange(args); case 'HSET': return this.hset(args); case 'HGET': return this.hget(args); case 'HGETALL': return this.hgetall(args); case 'HDEL': return this.hdel(args); case 'SADD': return this.sadd(args); case 'SMEMBERS': return this.smembers(args); case 'SREM': return this.srem(args); case 'SISMEMBER': return this.sismember(args); case 'SCARD': return this.scard(args); case 'ZADD': return this.zadd(args); case 'ZRANGE': return this.zrange(args); case 'ZREM': return this.zrem(args); case 'ZCARD': return this.zcard(args); case 'MULTI': return this.multi(); case 'EXEC': return this.exec(); case 'DISCARD': return this.discard(); case 'XADD': return this.xadd(args); case 'XRANGE': return this.xrange(args); case 'XREAD': return this.xread(args); case 'XGROUP': return this.xgroup(args); case 'XREADGROUP': return this.xreadgroup(args); case 'XACK': return this.xack(args); case 'SUBSCRIBE': return this.subscribe(args); case 'UNSUBSCRIBE': return this.unsubscribe(args); case 'PUBLISH': return this.publish(args); case 'GEOADD': return this.geoadd(args); case 'GEORADIUS': return this.georadius(args); case 'PFADD': return this.pfadd(args); case 'PFCOUNT': return this.pfcount(args); case 'PFMERGE': return this.pfmerge(args); case 'SETBIT': return this.setbit(args); case 'GETBIT': return this.getbit(args); case 'BITCOUNT': return this.bitcount(args); case 'BITOP': return this.bitop(args); case 'MGET': return this.mget(args); case 'MSET': return this.mset(args); case 'STRLEN': return this.strlen(args); case 'APPEND': return this.append(args); case 'GETRANGE': return this.getrange(args); case 'SETRANGE': return this.setrange(args); case 'GETSET': return this.getset(args); case 'SETNX': return this.setnx(args); case 'SETEX': return this.setex(args); case 'LLEN': return this.llen(args); case 'LINDEX': return this.lindex(args); case 'LSET': return this.lset(args); case 'LTRIM': return this.ltrim(args); case 'HEXISTS': return this.hexists(args); case 'HINCRBY': return this.hincrby(args); case 'HKEYS': return this.hkeys(args); case 'HVALS': return this.hvals(args); case 'HLEN': return this.hlen(args); case 'HMSET': return this.hmset(args); case 'HMGET': return this.hmget(args); case 'SPOP': return this.spop(args); case 'SRANDMEMBER': return this.srandmember(args); case 'SUNION': return this.sunion(args); case 'SINTER': return this.sinter(args); case 'SDIFF': return this.sdiff(args); case 'ZRANK': return this.zrank(args); case 'ZSCORE': return this.zscore(args); case 'ZINCRBY': return this.zincrby(args); case 'ZCOUNT': return this.zcount(args); case 'ZRANGEBYSCORE': return this.zrangebyscore(args); case 'ZREVRANGE': return this.zrevrange(args); case 'PING': return this.ping(args); case 'ECHO': return this.echo(args); case 'TIME': return this.time(args); case 'INFO': return this.info(args); case 'TYPE': return this.type(args); case 'PERSIST': return this.persist(args); case 'EXPIREAT': return this.expireat(args); case 'PEXPIRE': return this.pexpire(args); case 'PTTL': return this.pttl(args); case 'RENAME': return this.rename(args); case 'RENAMENX': return this.renamenx(args); case 'RANDOMKEY': return this.randomkey(args); case 'DBSIZE': return this.dbsize(args); case 'FLUSHALL': return this.flushall(args); case 'CONFIG': return this.config(args); case 'CLIENT': return this.client(args); case 'MEMORY': return this.memory(args); case 'LASTSAVE': return this.lastsave(args); case 'SAVE': return this.save(args); case 'BGSAVE': return this.bgsave(args); case 'SHUTDOWN': return this.shutdown(args); default: throw new Error(`Unknown command: '${command}'`); } } catch (e) { if (isFromTransaction) throw e; return { status: 'error', message: e.message }; } }
+                    } switch (command) { case 'HELP': return this.help(args); case 'SET': return this.set(args); case 'GET': return this.get(args); case 'INCR': return this.incrby(args, 1); case 'DECR': return this.incrby(args, -1); case 'INCRBY': return this.incrby(args, parseInt(args[1])); case 'DECRBY': return this.incrby(args, -parseInt(args[1])); case 'DEL': return this.del(args); case 'SELECT': return this.select(args); case 'EXPIRE': return this.expire(args); case 'TTL': return this.ttl(args); case 'EXISTS': return this.exists(args); case 'KEYS': return this.keys(args); case 'FLUSHDB': return this.flushdb(); case 'LPUSH': return this.lpush(args); case 'RPUSH': return this.rpush(args); case 'LPOP': return this.lpop(args); case 'RPOP': return this.rpop(args); case 'LRANGE': return this.lrange(args); case 'HSET': return this.hset(args); case 'HGET': return this.hget(args); case 'HGETALL': return this.hgetall(args); case 'HDEL': return this.hdel(args); case 'SADD': return this.sadd(args); case 'SMEMBERS': return this.smembers(args); case 'SREM': return this.srem(args); case 'SISMEMBER': return this.sismember(args); case 'SCARD': return this.scard(args); case 'ZADD': return this.zadd(args); case 'ZRANGE': return this.zrange(args); case 'ZREM': return this.zrem(args); case 'ZCARD': return this.zcard(args); case 'MULTI': return this.multi(); case 'EXEC': return this.exec(); case 'DISCARD': return this.discard(); case 'XADD': return this.xadd(args); case 'XRANGE': return this.xrange(args); case 'XREAD': return this.xread(args); case 'XGROUP': return this.xgroup(args); case 'XREADGROUP': return this.xreadgroup(args); case 'XACK': return this.xack(args); case 'SUBSCRIBE': return this.subscribe(args); case 'UNSUBSCRIBE': return this.unsubscribe(args); case 'PUBLISH': return this.publish(args); case 'GEOADD': return this.geoadd(args); case 'GEORADIUS': return this.georadius(args); case 'PFADD': return this.pfadd(args); case 'PFCOUNT': return this.pfcount(args); case 'PFMERGE': return this.pfmerge(args); case 'SETBIT': return this.setbit(args); case 'GETBIT': return this.getbit(args); case 'BITCOUNT': return this.bitcount(args); case 'BITOP': return this.bitop(args); case 'MGET': return this.mget(args); case 'MSET': return this.mset(args); case 'STRLEN': return this.strlen(args); case 'APPEND': return this.append(args); case 'GETRANGE': return this.getrange(args); case 'SETRANGE': return this.setrange(args); case 'GETSET': return this.getset(args); case 'SETNX': return this.setnx(args); case 'SETEX': return this.setex(args); case 'LLEN': return this.llen(args); case 'LINDEX': return this.lindex(args); case 'LSET': return this.lset(args); case 'LTRIM': return this.ltrim(args); case 'HEXISTS': return this.hexists(args); case 'HINCRBY': return this.hincrby(args); case 'HKEYS': return this.hkeys(args); case 'HVALS': return this.hvals(args); case 'HLEN': return this.hlen(args); case 'HMSET': return this.hmset(args); case 'HMGET': return this.hmget(args); case 'SPOP': return this.spop(args); case 'SRANDMEMBER': return this.srandmember(args); case 'SUNION': return this.sunion(args); case 'SINTER': return this.sinter(args); case 'SDIFF': return this.sdiff(args); case 'ZRANK': return this.zrank(args); case 'ZSCORE': return this.zscore(args); case 'ZINCRBY': return this.zincrby(args); case 'ZCOUNT': return this.zcount(args); case 'ZRANGEBYSCORE': return this.zrangebyscore(args); case 'ZREVRANGE': return this.zrevrange(args); case 'PING': return this.ping(args); case 'ECHO': return this.echo(args); case 'TIME': return this.time(args); case 'INFO': return this.info(args); case 'TYPE': return this.type(args); case 'PERSIST': return this.persist(args); case 'EXPIREAT': return this.expireat(args); case 'PEXPIRE': return this.pexpire(args); case 'PTTL': return this.pttl(args); case 'RENAME': return this.rename(args); case 'RENAMENX': return this.renamenx(args); case 'RANDOMKEY': return this.randomkey(args); case 'DBSIZE': return this.dbsize(args); case 'FLUSHALL': return this.flushall(args); case 'CONFIG': return this.config(args); case 'CLIENT': return this.client(args); case 'MEMORY': return this.memory(args); case 'LASTSAVE': return this.lastsave(args); case 'SAVE': return this.save(args); case 'BGSAVE': return this.bgsave(args); case 'SHUTDOWN': return this.shutdown(args); default: throw new Error(`Unknown command: '${command}'`); } } catch (e) { if (isFromTransaction) throw e; return { status: 'error', message: e.message }; } }
             _isExpired(key) { const dbExpirations = this.expirations[this.activeDbIndex]; if (dbExpirations.has(key) && dbExpirations.get(key) < Date.now()) { this.databases[this.activeDbIndex].delete(key); dbExpirations.delete(key); return true; } return false; }
             _getKey(key, expectedType) { if (this._isExpired(key)) return undefined; const db = this.databases[this.activeDbIndex]; const value = db.get(key); if (value === undefined) return undefined; const typeError = "WRONGTYPE Operation against a key holding the wrong kind of value"; if (expectedType === 'string' && !(typeof value === 'string')) throw new Error(typeError); if (expectedType === 'list' && !Array.isArray(value)) throw new Error(typeError); if (expectedType === 'hash' && !(value instanceof Map)) throw new Error(typeError); if (expectedType === 'set' && !(value instanceof Set)) throw new Error(typeError); if (expectedType === 'zset' && (!Array.isArray(value) || (value.length > 0 && !value[0].hasOwnProperty('score')))) throw new Error(typeError); if (expectedType === 'stream' && (!value.hasOwnProperty('entries') || !value.hasOwnProperty('groups'))) throw new Error(typeError); if (expectedType === 'geo' && (!Array.isArray(value) || (value.length > 0 && !value[0].hasOwnProperty('lon')))) throw new Error(typeError); return value; }
             set(args) { if (args.length !== 2) throw new Error("SET requires a key and a value."); const [key, value] = args; this.databases[this.activeDbIndex].set(key, value); this.expirations[this.activeDbIndex].delete(key); return { status: 'ok', data: 'OK' }; }
@@ -318,6 +318,72 @@
             // Bitmap operations  
             setbit(args) { if (args.length !== 3) throw new Error("SETBIT requires key, offset, and value."); const [key, offsetStr, valueStr] = args; const offset = parseInt(offsetStr); const value = parseInt(valueStr); if (isNaN(offset) || offset < 0) throw new Error("Offset must be a non-negative integer."); if (value !== 0 && value !== 1) throw new Error("Value must be 0 or 1."); const db = this.databases[this.activeDbIndex]; let bitmap = this._getKey(key, 'bitmap'); if (bitmap === undefined) { bitmap = new Uint8Array(Math.ceil((offset + 1) / 8)); db.set(key, bitmap); } else if (bitmap.length * 8 <= offset) { const newBitmap = new Uint8Array(Math.ceil((offset + 1) / 8)); newBitmap.set(bitmap); bitmap = newBitmap; db.set(key, bitmap); } const byteIndex = Math.floor(offset / 8); const bitIndex = offset % 8; const oldValue = (bitmap[byteIndex] >> (7 - bitIndex)) & 1; if (value === 1) { bitmap[byteIndex] |= (1 << (7 - bitIndex)); } else { bitmap[byteIndex] &= ~(1 << (7 - bitIndex)); } return { status: 'ok', data: `(integer) ${oldValue}` }; }
             getbit(args) { if (args.length !== 2) throw new Error("GETBIT requires key and offset."); const [key, offsetStr] = args; const offset = parseInt(offsetStr); if (isNaN(offset) || offset < 0) throw new Error("Offset must be a non-negative integer."); const bitmap = this._getKey(key, 'bitmap'); if (!bitmap || bitmap.length * 8 <= offset) return { status: 'ok', data: '(integer) 0' }; const byteIndex = Math.floor(offset / 8); const bitIndex = offset % 8; const value = (bitmap[byteIndex] >> (7 - bitIndex)) & 1; return { status: 'ok', data: `(integer) ${value}` }; }
+            
+            // Help command
+            help(args) {
+                const helpText = `
+Redis Command Shell - Available Commands:
+
+📝 STRING OPERATIONS:
+  SET key value              - Set string value
+  GET key                    - Get string value
+  INCR/DECR key             - Increment/decrement integer
+  MGET key1 key2...         - Get multiple values
+  MSET key1 val1 key2 val2  - Set multiple values
+
+📋 LIST OPERATIONS:
+  LPUSH/RPUSH key value     - Add to list start/end
+  LPOP/RPOP key            - Remove from list start/end
+  LRANGE key start stop    - Get list range
+
+🗂️ HASH OPERATIONS:
+  HSET key field value     - Set hash field
+  HGET key field          - Get hash field
+  HGETALL key             - Get all hash fields
+
+🎯 SET OPERATIONS:
+  SADD key member         - Add to set
+  SMEMBERS key           - Get all set members
+  SISMEMBER key member   - Check set membership
+
+⚖️ SORTED SET OPERATIONS:
+  ZADD key score member  - Add to sorted set
+  ZRANGE key start stop  - Get sorted set range
+
+🌊 STREAM OPERATIONS:
+  XADD key * field value - Add to stream
+  XRANGE key start end   - Read stream range
+  XGROUP CREATE key group id - Create consumer group
+
+🌍 GEO OPERATIONS:
+  GEOADD key lon lat member - Add geo location
+  GEORADIUS key lon lat radius unit - Find nearby locations
+
+🔢 HYPERLOGLOG:
+  PFADD key element      - Add to HyperLogLog
+  PFCOUNT key           - Count unique elements
+
+⚡ BITMAP:
+  SETBIT key offset value - Set bit
+  GETBIT key offset      - Get bit
+
+🔧 UTILITY:
+  KEYS *                 - List all keys
+  DEL key               - Delete key
+  EXISTS key            - Check if key exists
+  TTL key              - Get time to live
+  EXPIRE key seconds   - Set expiration
+  SELECT database      - Switch database
+  FLUSHDB             - Clear current database
+  HELP                - Show this help
+
+💾 TRANSACTIONS:
+  MULTI               - Start transaction
+  EXEC               - Execute transaction
+  DISCARD            - Cancel transaction
+`;
+                return { status: 'ok', data: helpText };
+            }
             bitcount(args) { if (args.length < 1) throw new Error("BITCOUNT requires a key."); const [key] = args; const bitmap = this._getKey(key, 'bitmap'); if (!bitmap) return { status: 'ok', data: '(integer) 0' }; let count = 0; for (let i = 0; i < bitmap.length; i++) { let byte = bitmap[i]; while (byte) { count += byte & 1; byte >>= 1; } } return { status: 'ok', data: `(integer) ${count}` }; }
             bitop(args) { if (args.length < 3) throw new Error("BITOP requires operation, destination key, and at least one source key."); const [operation, destKey, ...sourceKeys] = args; const op = operation.toUpperCase(); if (!['AND', 'OR', 'XOR', 'NOT'].includes(op)) throw new Error("Operation must be AND, OR, XOR, or NOT."); const db = this.databases[this.activeDbIndex]; const bitmaps = sourceKeys.map(key => this._getKey(key, 'bitmap') || new Uint8Array(0)); const maxLength = Math.max(...bitmaps.map(b => b.length), 1); const result = new Uint8Array(maxLength); for (let i = 0; i < maxLength; i++) { let value = op === 'NOT' ? 255 : (op === 'AND' ? 255 : 0); bitmaps.forEach(bitmap => { const byte = i < bitmap.length ? bitmap[i] : 0; if (op === 'AND') value &= byte; else if (op === 'OR') value |= byte; else if (op === 'XOR') value ^= byte; else if (op === 'NOT') value = ~bitmaps[0][i] & 255; }); result[i] = value; } db.set(destKey, result); return { status: 'ok', data: `(integer) ${maxLength}` }; }
             
@@ -622,6 +688,17 @@
                     { desc: "Wrong number of arguments", cmd: 'SET\nGET' },
                     { desc: "Wrong data type operation", cmd: 'SET mystring "hello"\nLPUSH mystring "item"' },
                     { desc: "Operation on non-existent key", cmd: 'LPOP nonexistent:list' },
+                ],
+
+                "🔧 Edge Cases & Error Handling": [
+                    { desc: "SET overwrites any existing value (Redis behavior)", cmd: 'SET key1 "string_value"\nSET key1 123\nGET key1' },
+                    { desc: "INCR on non-existent key starts from 0", cmd: 'DEL counter\nINCR counter\nGET counter' },
+                    { desc: "INCR on non-integer value throws error", cmd: 'SET not_number "hello"\nINCR not_number' },
+                    { desc: "WRONGTYPE error when using wrong command on wrong data type", cmd: 'LPUSH mylist "item1"\nGET mylist' },
+                    { desc: "SETNX (set if not exists) vs SET behavior", cmd: 'SET existing_key "value1"\nSETNX existing_key "value2"\nGET existing_key' },
+                    { desc: "Multiple database isolation test", cmd: 'SELECT 0\nSET shared_key "db0_value"\nSELECT 1\nSET shared_key "db1_value"\nSELECT 0\nGET shared_key' },
+                    { desc: "TTL and expiration edge cases", cmd: 'SET temp_key "will_expire"\nEXPIRE temp_key 1\nGET temp_key\n# Wait 2 seconds then check again:\nGET temp_key' },
+                    { desc: "Atomic operations demonstration", cmd: 'SET counter 0\nINCR counter\nINCRBY counter 5\nDECR counter\nGET counter' },
                 ],
             };
 
