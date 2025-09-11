@@ -1,0 +1,353 @@
+{
+  "title": "ALTER TABLE - Schema Evolution",
+  "description": "Stepwise guide to altering table structure in DuckDB with safe, self-contained examples. Exercises are included for practice; where applicable, concrete prompts reference the `users` table.",
+  "sections": [
+    {
+      "title": "0. Introduction: ALTER TABLE & Schema Evolution",
+      "description": "Why ALTER TABLE matters, what DuckDB supports, and safe patterns for evolving schemas without surprises.",
+      "examples": [],
+      "narrative": "ALTER TABLE is how you evolve schemas: add columns, rename things, change data types, or introduce constraints. In analytics engines like DuckDB, many ALTERs are metadata-only (fast), but some require rewriting data. For bigger changes, the create-copy-validate-rename pattern gives you control and rollback safety. Keep migrations idempotent for repeatable runs.",
+      "nerd_notes": "Mental model: DDL that changes metadata is cheap; DDL that moves data can be expensive. Prefer: (1) add new columns with safe defaults, (2) backfill in batches if needed, (3) validate, then (4) enforce NOT NULL or constraints. For type changes, prefer new-table copy with CAST/conversion, then RENAME."
+    },
+    {
+      "title": "1. Setup: create users table",
+      "examples": [
+        {
+          "name": "create_users",
+          "sql": "DROP TABLE IF EXISTS users;\nCREATE TABLE users (\n  user_id INTEGER PRIMARY KEY,\n  username TEXT,\n  created_at DATE\n);\n\nINSERT INTO users VALUES (1, 'alice', '2024-01-01'), (2, 'bob', '2024-01-05');",
+          "description": "Question: how do we create a small users table for schema evolution demos?",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs.",
+          "compat_examples": {
+            "postgres": "-- Postgres: use SERIAL/IDENTITY for user_id if desired\n-- CREATE TABLE users (user_id SERIAL PRIMARY KEY, username TEXT, created_at DATE);",
+            "mysql": "-- MySQL: use AUTO_INCREMENT for PK\n-- CREATE TABLE users (user_id INT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(255), created_at DATE);",
+            "oracle": "-- Oracle: use NUMBER and SEQUENCE for PK in older versions\n-- CREATE TABLE users (user_id NUMBER PRIMARY KEY, username VARCHAR2(4000), created_at DATE);"
+          }
+        }
+      ],
+      "narrative": "Question: how do we create disposable demo tables so subsequent ALTER examples are repeatable and safe? This section shows idempotent setup patterns.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "2. Add column with default",
+      "examples": [
+        {
+          "name": "add_email",
+          "sql": "ALTER TABLE users ADD COLUMN email TEXT DEFAULT 'unknown@example.com';\nSELECT * FROM users;",
+          "description": "Question: how do we add a column with a safe default to an existing table?",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs.",
+          "compat_examples": {
+            "postgres": "-- Postgres: ADD COLUMN with DEFAULT is supported; in some versions adding a non-null default rewrites the table\n-- ALTER TABLE users ADD COLUMN email TEXT DEFAULT 'unknown@example.com';",
+            "mysql": "-- MySQL: ADD COLUMN with DEFAULT is supported\n-- ALTER TABLE users ADD COLUMN email VARCHAR(255) DEFAULT 'unknown@example.com';",
+            "oracle": "-- Oracle: ADD COLUMN with DEFAULT is supported; older versions may behave differently with NOT NULL defaults\n-- ALTER TABLE users ADD (email VARCHAR2(4000) DEFAULT 'unknown@example.com');"
+          }
+        },
+        {
+          "name": "add_multiple_columns",
+          "sql": "-- DuckDB: run one ALTER TABLE clause per statement to avoid parser errors\nALTER TABLE users ADD COLUMN phone VARCHAR(20);\nALTER TABLE users ADD COLUMN date_of_birth DATE;\nALTER TABLE users ADD COLUMN loyalty_points INTEGER DEFAULT 0;\nSELECT * FROM users;",
+          "description": "Question: how do we add multiple columns in one statement when supported?",
+          "nerd_notes": "Adding multiple columns at once reduces DDL steps where the engine allows it; be cautious with defaults on large tables.",
+          "compat_examples": {
+            "postgres": "-- Postgres supports multiple ADD COLUMN clauses in one ALTER TABLE statement.",
+            "mysql": "-- MySQL supports multiple ADD COLUMN clauses in one ALTER TABLE statement.",
+            "oracle": "-- Oracle allows adding multiple columns in one ALTER TABLE ADD (col1 TYPE, col2 TYPE, ...)."
+          }
+        }
+      ],
+      "narrative": "Question: when we need to store new attributes on user records, how can we add columns safely and idempotently? This section compares single-column adds and multi-column statements.",
+      "nerd_notes": "Practical note: adding a column with a default may be metadata-only in some engines; for large production tables plan for background updates."
+    },
+    {
+      "title": "1.5 Cheat Sheet: Common ALTER Patterns",
+      "description": "Copy-ready, idempotent snippets that demonstrate the most frequent ALTER operations.",
+      "examples": [
+        {
+          "name": "cs_add_column_with_default",
+          "description": "Add a column with a default value.",
+          "sql": "DROP TABLE IF EXISTS cs_demo;\nCREATE TABLE cs_demo (id INTEGER PRIMARY KEY, name TEXT);\nINSERT INTO cs_demo VALUES (1,'Alice');\nALTER TABLE cs_demo ADD COLUMN active BOOLEAN DEFAULT TRUE;\nSELECT * FROM cs_demo;\nDROP TABLE IF EXISTS cs_demo;",
+          "nerd_notes": "Defaults can be metadata-only; verify behavior on large tables."
+        },
+        {
+          "name": "cs_rename_column",
+          "description": "Rename a column.",
+          "sql": "DROP TABLE IF EXISTS cs_demo2;\nCREATE TABLE cs_demo2 (id INTEGER, uname TEXT);\nALTER TABLE cs_demo2 RENAME COLUMN uname TO username;\nSELECT * FROM cs_demo2;\nDROP TABLE IF EXISTS cs_demo2;",
+          "nerd_notes": "Update downstream views/queries that reference the old name."
+        },
+        {
+          "name": "cs_rename_table",
+          "description": "Rename a table.",
+          "sql": "DROP TABLE IF EXISTS cs_demo3_new;\nDROP TABLE IF EXISTS cs_demo3;\nCREATE TABLE cs_demo3 (id INTEGER);\nALTER TABLE cs_demo3 RENAME TO cs_demo3_new;\nSELECT table_name FROM duckdb_tables() WHERE table_name LIKE 'cs_demo3%';\nDROP TABLE IF EXISTS cs_demo3_new;",
+          "nerd_notes": "Search for references (views, ETL) that expect the old table name."
+        },
+        {
+          "name": "cs_change_type_copy_pattern",
+          "description": "Change a column type using create-copy-rename.",
+          "sql": "DROP TABLE IF EXISTS cs_demo4;\nCREATE TABLE cs_demo4 (id INTEGER, created TEXT);\nINSERT INTO cs_demo4 VALUES (1,'2024-01-01');\nCREATE TABLE cs_demo4_new AS SELECT id, CAST(created AS DATE) AS created FROM cs_demo4;\nDROP TABLE IF EXISTS cs_demo4;\nALTER TABLE cs_demo4_new RENAME TO cs_demo4;\nSELECT * FROM cs_demo4;\nDROP TABLE IF EXISTS cs_demo4;",
+          "nerd_notes": "This pattern avoids risky in-place type changes and allows validation before cutover."
+        },
+        {
+          "name": "cs_drop_column",
+          "description": "Drop an unneeded column.",
+          "sql": "DROP TABLE IF EXISTS cs_demo5;\nCREATE TABLE cs_demo5 (id INTEGER, obsolete TEXT, val INTEGER);\nALTER TABLE cs_demo5 DROP COLUMN obsolete;\nSELECT * FROM cs_demo5;\nDROP TABLE IF EXISTS cs_demo5;",
+          "nerd_notes": "Dropping columns can break consumers; coordinate releases."
+        }
+      ],
+      "narrative": "Most ALTER tasks boil down to add, rename, type-change (via copy), and drop. These snippets are safe and repeatable.",
+      "nerd_notes": "Use disposable demo tables to practice DDL; for production migrations use transactions and take backups as needed."
+    },
+    {
+      "title": "1.6 Pitfalls, Tips, and Q&A",
+      "description": "Common schema-evolution questions with crisp guidance.",
+      "examples": [
+        {
+          "name": "pitfall_locking_and_large_tables",
+          "description": "Q: Will ALTER TABLE lock my table for a long time?",
+          "sql": "",
+          "nerd_notes": "Metadata-only changes are fast; data-moving changes (type conversions, reorders) can be expensive. Prefer copy-rename for predictable performance and rollback."
+        },
+        {
+          "name": "tip_backfill_in_batches",
+          "description": "Tip: Backfill heavy updates in batches.",
+          "sql": "",
+          "nerd_notes": "Even in analytics engines, large UPDATEs can be heavy. Batch updates (by id ranges or dates) and validate progress."
+        },
+        {
+          "name": "question_if_not_exists_support",
+          "description": "Q: Can I use IF EXISTS / IF NOT EXISTS with ALTER?",
+          "sql": "",
+          "nerd_notes": "DROP TABLE IF EXISTS is supported; ADD COLUMN IF NOT EXISTS may vary by engine/version. Prefer idempotent demo tables or existence checks via catalog queries."
+        },
+        {
+          "name": "tricky_constraints_portability",
+          "description": "Q: Why do constraints behave differently across engines?",
+          "sql": "",
+          "nerd_notes": "DuckDB may treat some constraints as metadata; other engines enforce at write time. For portability, validate with queries and add tests in ETL."
+        },
+        {
+          "name": "fundamental_copy_rename_pattern",
+          "description": "Q: When should I use the create-copy-rename pattern?",
+          "sql": "",
+          "nerd_notes": "Use it for type changes, column reorderings, or wide-table refactors. It enables transformation, validation, and safe cutover."
+        }
+      ],
+      "narrative": "Avoid surprises with a few practical rules: assume large changes move data, prefer copy-rename, validate with queries, and keep migrations idempotent.",
+      "nerd_notes": "Document every step and its expected effect; add post-migration checks (row counts, NULL scans, constraint emulations)."
+    },
+    {
+      "title": "3. Rename column (simulate by adding/dropping in DuckDB)",
+      "description": "DuckDB has limited rename support; we'll demonstrate a safe copy pattern",
+      "examples": [
+        {
+          "name": "rename_simulate",
+          "sql": "ALTER TABLE users RENAME COLUMN username TO user_name;\nSELECT * FROM users;",
+          "description": "Question: how do we rename a column safely and keep examples repeatable?",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs.",
+          "compat_examples": {
+            "postgres": "-- Postgres: ALTER TABLE ... RENAME COLUMN is supported\n-- ALTER TABLE users RENAME COLUMN username TO user_name;",
+            "mysql": "-- MySQL: use ALTER TABLE ... RENAME COLUMN (8.0+) or CHANGE old_name new_name type\n-- ALTER TABLE users RENAME COLUMN username TO user_name;",
+            "oracle": "-- Oracle: use RENAME COLUMN implicitly via ALTER TABLE ... RENAME COLUMN\n-- ALTER TABLE users RENAME COLUMN username TO user_name;"
+          }
+        }
+      ],
+      "narrative": "Question: what patterns let us rename columns safely across engines? We'll show metadata renames and copy-rename patterns for portability.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "4. Change column type (copy pattern)",
+      "examples": [
+        {
+          "name": "change_type",
+          "sql": "CREATE TABLE users_new AS SELECT user_id, user_name, CAST(created_at AS TIMESTAMP) AS created_at_ts, email FROM users;\nDROP TABLE users;\nALTER TABLE users_new RENAME TO users;\nSELECT * FROM users;",
+          "description": "Question: how can we change a column's type without risking production data?",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs.",
+          "compat_examples": {
+            "postgres": "-- Postgres: ALTER TABLE ... ALTER COLUMN TYPE is supported in many cases\n-- ALTER TABLE users ALTER COLUMN created_at TYPE TIMESTAMP USING created_at::timestamp;",
+            "mysql": "-- MySQL: use ALTER TABLE ... MODIFY COLUMN to change type\n-- ALTER TABLE users MODIFY COLUMN created_at DATETIME;",
+            "oracle": "-- Oracle: use ALTER TABLE ... MODIFY (col TYPE) or create-copy-rename pattern for complex changes."
+          }
+        }
+      ],
+      "narrative": "Question: when a column needs a new type, how do we migrate safely? The copy-and-rename pattern provides control and validation before switchover.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "5. Add and remove constraints (DuckDB supports PRIMARY KEY metadata but limited enforcement)",
+      "examples": [
+        {
+          "name": "add_remove_constraints",
+          "sql": "-- DuckDB treats PRIMARY KEY as metadata in many versions; illustrate adding documentation\nALTER TABLE users ADD COLUMN active BOOLEAN DEFAULT TRUE;\nSELECT * FROM users;",
+          "description": "Question: how do we add constraint-like metadata and simple columns for validation in DuckDB?",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs.",
+          "compat_examples": {
+            "postgres": "-- Postgres: add constraints with ALTER TABLE ADD CONSTRAINT\n-- ALTER TABLE users ADD CONSTRAINT pk_users PRIMARY KEY (user_id);",
+            "mysql": "-- MySQL: add constraints with ALTER TABLE ADD CONSTRAINT or use column-level PRIMARY KEY definitions\n-- ALTER TABLE users ADD CONSTRAINT uk_users_email UNIQUE (email);",
+            "oracle": "-- Oracle: supports ADD CONSTRAINT syntax; be aware of constraint naming and enforcement semantics."
+          }
+        }
+      ],
+      "narrative": "Question: how do constraints differ across engines, and how do we add or remove them safely? This section shows examples and notes for portability.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "6. Cleanup",
+      "examples": [
+        {
+          "name": "cleanup",
+          "sql": "DROP TABLE IF EXISTS users;",
+          "description": "Question: how do we clean up demo tables when a lesson is complete?",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs.",
+          "compat_examples": {
+            "postgres": "-- Postgres: DROP TABLE IF EXISTS works and supports CASCADE for dependent objects\n-- DROP TABLE IF EXISTS users CASCADE;",
+            "mysql": "-- MySQL: DROP TABLE IF EXISTS works as-is\n-- DROP TABLE IF EXISTS users;",
+            "oracle": "-- Oracle: older versions don't support IF EXISTS; use DROP TABLE users CASCADE CONSTRAINTS guarded by PL/SQL if needed."
+          }
+        }
+      ],
+      "narrative": "Question: how do we safely remove demo artifacts so validator runs remain repeatable and clean?",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "ALTER TABLE Operations",
+      "narrative": "Overview: why ALTER TABLE matters and safe, idempotent patterns to evolve schemas in DuckDB. We'll use small demo tables so each example can be re-run safely.",
+      "nerd_notes": "ALTER TABLE changes are often cheap for metadata but can be expensive when data migration is required. For major structural changes consider the copy-and-rename pattern shown below.",
+      "examples": [
+        {
+          "name": "overview_operations",
+          "description": "Question: how do we safely perform common ALTER TABLE operations without breaking existing data? This example demonstrates an idempotent demo workflow.",
+          "sql": "DROP TABLE IF EXISTS alter_demo;\nCREATE TABLE alter_demo (id INTEGER, name TEXT);\nINSERT INTO alter_demo VALUES (1, 'Alice');\n-- Add a column with a default\nALTER TABLE alter_demo ADD COLUMN phone VARCHAR(15) DEFAULT 'unknown';\nSELECT * FROM alter_demo;\n-- Cleanup\nDROP TABLE IF EXISTS alter_demo;",
+          "nerd_notes": "We create a disposable demo table (alter_demo) to show ALTER operations. Using disposable tables avoids mutating important demo fixtures and keeps validator runs repeatable.",
+          "compat_examples": {
+            "postgres": "-- Postgres: same pattern works in Postgres. Add IF NOT EXISTS to make creation idempotent when supported.",
+            "mysql": "-- MySQL: same pattern works in MySQL. Beware of zone-specific default functions like NOW().",
+            "oracle": "-- Oracle: similar pattern; watch for different default function names and identity/sequence semantics."
+          }
+        }
+      ]
+    },
+    {
+      "title": "1. Adding Columns",
+      "narrative": "Question: we need to add new attributes to existing rows—how do we add a column safely and populate it? We'll show both adding with a default and the copy-pattern for larger migrations.",
+      "nerd_notes": "Adding a column with a DEFAULT can be cheap if the engine supports metadata-only defaults; otherwise you may need a background update. For large tables consider creating a new table and copying data in batches.",
+      "examples": [
+        {
+          "name": "add_column_demo",
+          "description": "Add a phone column with a default on a disposable demo table (idempotent).",
+          "sql": "DROP TABLE IF EXISTS add_col_demo;\nCREATE TABLE add_col_demo (id INTEGER, name TEXT);\nINSERT INTO add_col_demo VALUES (1, 'Bob');\nALTER TABLE add_col_demo ADD COLUMN phone VARCHAR(15) DEFAULT 'n/a';\nSELECT * FROM add_col_demo;\nDROP TABLE IF EXISTS add_col_demo;",
+          "nerd_notes": "If you need to backfill expensive defaults, perform the update in batches. Some engines support ADD COLUMN IF NOT EXISTS; when supported use it to make migrations idempotent.",
+          "compat_examples": {
+            "postgres": "-- Postgres: ADD COLUMN ... DEFAULT is supported; consider USING clause for type conversion when backfilling\n-- ALTER TABLE add_col_demo ADD COLUMN phone VARCHAR(15) DEFAULT 'n/a';",
+            "mysql": "-- MySQL: ADD COLUMN ... DEFAULT supported\n-- ALTER TABLE add_col_demo ADD COLUMN phone VARCHAR(15) DEFAULT 'n/a';",
+            "oracle": "-- Oracle: use ADD (col TYPE DEFAULT ...) syntax\n-- ALTER TABLE add_col_demo ADD (phone VARCHAR2(15) DEFAULT 'n/a');"
+          }
+        }
+      ]
+    },
+    {
+      "title": "2. Dropping & Renaming",
+      "narrative": "Question: how do we remove or rename columns and tables safely? We'll show a small demo renaming a column and renaming a table using disposable objects.",
+      "nerd_notes": "Renaming is often metadata-only, but dropping columns can require data reorganization. Always verify dependent objects (views, queries) before dropping columns.",
+      "examples": [
+        {
+          "name": "drop_rename_demo",
+          "description": "Demonstrate renaming a column and temporarily renaming a table on a disposable table.",
+          "sql": "DROP TABLE IF EXISTS drop_demo;\nCREATE TABLE drop_demo (id INTEGER, first_name TEXT, last_name TEXT);\nINSERT INTO drop_demo VALUES (1, 'John', 'Doe');\nALTER TABLE drop_demo RENAME COLUMN first_name TO fname;\nALTER TABLE drop_demo RENAME TO client_list;\nSELECT * FROM client_list;\nALTER TABLE client_list RENAME TO drop_demo;\nDROP TABLE IF EXISTS drop_demo;",
+          "nerd_notes": "DuckDB supports RENAME COLUMN / RENAME TO for tables. When renaming in production, update downstream code. To drop a column in engines without native support, use the copy-and-rename pattern.",
+          "compat_examples": {
+            "postgres": "-- Postgres: ALTER TABLE ... RENAME COLUMN supported\n-- ALTER TABLE drop_demo RENAME COLUMN first_name TO fname;",
+            "mysql": "-- MySQL: use CHANGE old_name new_name type for older versions or RENAME COLUMN in 8.0+\n-- ALTER TABLE drop_demo RENAME COLUMN first_name TO fname;",
+            "oracle": "-- Oracle: RENAME COLUMN supported in modern versions; older versions may require create-copy-rename."
+          }
+        }
+      ]
+    },
+    {
+      "title": "3. Modifying Columns",
+      "narrative": "Question: how do we change a column's data type safely? We'll show the copy-and-rename pattern which is safe and portable.",
+      "nerd_notes": "Altering a column type in-place may be unsupported or expensive. The common safe approach is: create a new table with the desired types, copy/transform data, drop the old table, and rename the new one.",
+      "examples": [
+        {
+          "name": "change_type_demo",
+          "description": "Convert a TEXT date column into a DATE/TIMESTAMP using create-copy-rename pattern.",
+          "sql": "DROP TABLE IF EXISTS mod_demo;\nCREATE TABLE mod_demo (id INTEGER, val TEXT);\nINSERT INTO mod_demo VALUES (1, '2024-01-01');\nCREATE TABLE mod_demo_new AS SELECT id, CAST(val AS DATE) AS val_date FROM mod_demo;\nDROP TABLE IF EXISTS mod_demo;\nALTER TABLE mod_demo_new RENAME TO mod_demo;\nSELECT * FROM mod_demo;\nDROP TABLE IF EXISTS mod_demo;",
+          "nerd_notes": "This pattern avoids dangerous in-place type changes and lets you validate transformed data before switching. For very large tables copy in batches to limit downtime."
+        }
+      ]
+    },
+    {
+      "title": "4. Managing Constraints",
+      "narrative": "Question: how do we add constraints and validate data? We'll create a small table with PRIMARY KEY, UNIQUE and CHECK constraints to demonstrate behavior.",
+      "nerd_notes": "DuckDB offers constraint metadata; enforcement can vary. Creating constraints at table creation time is often the safest approach. Complex validations can be implemented via application logic or ETL checks.",
+      "examples": [
+        {
+          "name": "constraints_demo",
+          "description": "Create a table with PRIMARY KEY, UNIQUE and CHECK constraints and show a safe insert.",
+          "sql": "DROP TABLE IF EXISTS constr_demo;\nCREATE TABLE constr_demo (id INTEGER PRIMARY KEY, sku TEXT UNIQUE, price DOUBLE CHECK (price > 0));\nINSERT INTO constr_demo VALUES (1, 'SKU-1', 9.99);\nSELECT * FROM constr_demo;\nDROP TABLE IF EXISTS constr_demo;",
+          "nerd_notes": "When adding constraints to existing tables, ensure current data satisfies them or use a staged validation to find violations. For cross-row invariants triggers or application-level checks may be necessary."
+        }
+      ]
+    }
+    ,
+    {
+      "title": "Advanced table alterations",
+      "narrative": "Question: how do we perform larger schema migrations that include data transformations, computed columns, and JSON/structured columns? The HTML contains a worked example that we'll adapt to be self-contained and annotated for portability.",
+      "nerd_notes": "These larger examples demonstrate migration strategies: add-compute-validate, copy-and-rename, and versioned schema updates.",
+      "examples": [
+        {
+          "name": "user_profiles_setup",
+          "description": "Create a user_profiles table and apply multiple alterations (full_name, username_length, preferences, email_verified, audit columns).",
+          "sql": "DROP TABLE IF EXISTS user_profiles;\nCREATE TABLE user_profiles (\n    user_id INTEGER PRIMARY KEY,\n    username VARCHAR(50),\n    email VARCHAR(100),\n    first_name VARCHAR(50),\n    last_name VARCHAR(50),\n    registration_date DATE,\n    account_status VARCHAR(20) DEFAULT 'active'\n);\n\nINSERT INTO user_profiles VALUES\n(1, 'john_doe', 'john@example.com', 'John', 'Doe', '2023-01-15', 'active'),\n(2, 'jane_smith', 'jane@example.com', 'Jane', 'Smith', '2023-02-20', 'active'),\n(3, 'bob_johnson', 'bob@example.com', 'Bob', 'Johnson', '2023-03-10', 'inactive');\n\n-- Add full_name and populate\nALTER TABLE user_profiles ADD COLUMN full_name VARCHAR(101);\nUPDATE user_profiles SET full_name = first_name || ' ' || last_name;\nALTER TABLE user_profiles ALTER COLUMN full_name SET NOT NULL;\n\n-- Add username_length and populate\nALTER TABLE user_profiles ADD COLUMN username_length INTEGER;\nUPDATE user_profiles SET username_length = LENGTH(username);\n\n-- Add preferences (as TEXT) and populate with JSON-like strings\nALTER TABLE user_profiles ADD COLUMN preferences TEXT;\nUPDATE user_profiles SET preferences = '{\"theme\": \"light\", \"notifications\": true}';\n\n-- Email verification derived from simple heuristic\nALTER TABLE user_profiles ADD COLUMN email_verified BOOLEAN DEFAULT FALSE;\nUPDATE user_profiles SET email_verified = CASE WHEN email LIKE '%@%.%' THEN TRUE ELSE FALSE END;\n\n-- Audit timestamps\nALTER TABLE user_profiles ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;\nALTER TABLE user_profiles ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;\n\nSELECT user_id, username, email, full_name, username_length, preferences, email_verified, created_at, updated_at FROM user_profiles;\n\n-- Cleanup\nDROP TABLE IF EXISTS user_profiles;",
+          "nerd_notes": "These steps show common mid-size migrations: add computed columns, populate them, and enforce NOT NULL when safe. For production, validate each change and consider lock/downtime impact.",
+          "compat_examples": {
+            "postgres": "-- Postgres: use JSON/JSONB for preferences and functions like NOW() for timestamps\n-- ALTER TABLE user_profiles ADD COLUMN preferences JSONB;",
+            "mysql": "-- MySQL: use JSON type if available (5.7+) or TEXT; NOW() for timestamps\n-- ALTER TABLE user_profiles ADD COLUMN preferences JSON;",
+            "oracle": "-- Oracle: use CLOB or JSON data types depending on version; use SYSDATE/SYSTIMESTAMP for timestamps."
+          }
+        },
+        {
+          "name": "product_catalog_advanced",
+          "description": "Create a product_catalog with complex constraints and test validations (from HTML).",
+          "sql": "DROP TABLE IF EXISTS product_catalog;\nCREATE TABLE product_catalog (\n    product_id INTEGER PRIMARY KEY,\n    sku VARCHAR(50),\n    name VARCHAR(200),\n    description TEXT,\n    price DOUBLE,\n    cost DOUBLE,\n    category VARCHAR(50),\n    subcategory VARCHAR(50),\n    stock_quantity INTEGER,\n    min_stock_level INTEGER,\n    max_stock_level INTEGER,\n    supplier_id INTEGER,\n    is_active BOOLEAN DEFAULT TRUE,\n    created_date DATE,\n    last_updated DATE\n);\n\nINSERT INTO product_catalog VALUES\n(1, 'LAPTOP-001', 'Gaming Laptop', 'High-performance gaming laptop', 1299.99, 899.99, 'Electronics', 'Computers', 50, 10, 100, 1, TRUE, '2023-01-01', '2024-01-01'),\n(2, 'MOUSE-001', 'Wireless Mouse', 'Ergonomic wireless mouse', 29.99, 15.99, 'Electronics', 'Accessories', 200, 20, 300, 2, TRUE, '2023-02-01', '2024-01-02'),\n(3, 'BOOK-001', 'SQL Guide', 'Comprehensive SQL programming guide', 49.99, 25.99, 'Books', 'Technology', 75, 15, 150, 3, TRUE, '2023-03-01', '2024-01-03');\n\n-- DuckDB: many ALTER TABLE ADD CONSTRAINT variants are not implemented; leave constraint declarations as comments and add validation queries instead\n-- ALTER TABLE product_catalog ADD CONSTRAINT chk_price_positive CHECK (price > 0);\n-- ALTER TABLE product_catalog ADD CONSTRAINT chk_cost_positive CHECK (cost > 0);\n-- ALTER TABLE product_catalog ADD CONSTRAINT chk_price_greater_than_cost CHECK (price > cost);\n-- ALTER TABLE product_catalog ADD CONSTRAINT chk_stock_levels CHECK (min_stock_level >= 0 AND max_stock_level > min_stock_level);\n-- ALTER TABLE product_catalog ADD CONSTRAINT chk_stock_quantity_range CHECK (stock_quantity BETWEEN 0 AND max_stock_level);\n-- ALTER TABLE product_catalog ADD CONSTRAINT uk_product_sku UNIQUE (sku);\n-- ALTER TABLE product_catalog ADD CONSTRAINT uk_product_name_category UNIQUE (name, category);\n\n-- Validation queries to emulate constraint checks:\nSELECT product_id, price FROM product_catalog WHERE price <= 0;\nSELECT product_id, cost FROM product_catalog WHERE cost <= 0;\nSELECT product_id, price, cost FROM product_catalog WHERE price <= cost;\nSELECT product_id, min_stock_level, max_stock_level FROM product_catalog WHERE min_stock_level < 0 OR max_stock_level <= min_stock_level;\nSELECT product_id, stock_quantity, max_stock_level FROM product_catalog WHERE stock_quantity < 0 OR stock_quantity > max_stock_level;\nSELECT sku, COUNT(*) AS dup_sku_count FROM product_catalog GROUP BY sku HAVING COUNT(*) > 1;\nSELECT name, category, COUNT(*) AS dup_name_cat_count FROM product_catalog GROUP BY name, category HAVING COUNT(*) > 1;\n\n-- Simple validation query (summary)\nSELECT product_id, sku, name, price, cost, stock_quantity, min_stock_level, max_stock_level, CASE WHEN price > cost THEN 'Valid' ELSE 'Invalid' END AS price_validation FROM product_catalog;\n\n-- Cleanup\nDROP TABLE IF EXISTS product_catalog;",
+          "nerd_notes": "Complex constraints are useful to capture business rules; apply iteratively and test with representative data. DuckDB may not enforce all constraint types; rely on ETL/validation where needed.",
+          "compat_examples": {
+            "postgres": "-- Postgres: add constraints with ALTER TABLE ADD CONSTRAINT and they will be enforced\n-- ALTER TABLE product_catalog ADD CONSTRAINT chk_price_positive CHECK (price > 0);",
+            "mysql": "-- MySQL: supports CHECK starting 8.0.16 (prior versions parse but may not enforce)\n-- Use triggers or application checks if needed.",
+            "oracle": "-- Oracle: constraints enforced and support named constraints and triggers for advanced rules."
+          }
+        },
+        {
+          "name": "large_table_performance",
+          "description": "Demonstrate performance-conscious strategies for altering very large tables (batch updates, create-copy-rename).",
+          "sql": "DROP TABLE IF EXISTS large_table;\nCREATE TABLE large_table (\n    id INTEGER PRIMARY KEY,\n    data1 VARCHAR(100),\n    data2 VARCHAR(100),\n    data3 INTEGER,\n    data4 DECIMAL(10,2),\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);\n\n-- Simulate dataset (small in validator to keep runs fast)\nINSERT INTO large_table (id, data1, data2, data3, data4) VALUES (1,'Data_1','Info_1',10, 12.34), (2,'Data_2','Info_2',20, 56.78);\n\n-- Add processed flag with default and update in batches\nALTER TABLE large_table ADD COLUMN processed BOOLEAN DEFAULT FALSE;\nUPDATE large_table SET processed = TRUE WHERE id BETWEEN 1 AND 1000;\n\n-- Create new table pattern for heavy changes\nCREATE TABLE large_table_new (\n    id INTEGER PRIMARY KEY,\n    data1 VARCHAR(100),\n    data2 VARCHAR(100),\n    data3 INTEGER,\n    data4 DECIMAL(10,2),\n    processed BOOLEAN DEFAULT FALSE,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);\n\nINSERT INTO large_table_new (id, data1, data2, data3, data4, created_at) SELECT id, data1, data2, data3, data4, created_at FROM large_table;\n\n-- Rename and cleanup\nDROP TABLE IF EXISTS large_table;\nALTER TABLE large_table_new RENAME TO large_table;\n\nSELECT COUNT(*) AS total_records FROM large_table;\n\n-- Cleanup\nDROP TABLE IF EXISTS large_table;",
+          "nerd_notes": "Simulate batch updates and copy-rename patterns; in production, tune batch sizes and monitor performance."
+        },
+        {
+          "name": "schema_versions_and_customer_data",
+          "description": "Implement a simple schema_versions log and show incremental schema updates to customer_data (add phone, addresses, constraints, audit columns).",
+          "sql": "DROP TABLE IF EXISTS schema_versions;\nCREATE TABLE schema_versions (\n    version_id INTEGER PRIMARY KEY,\n    version_number VARCHAR(20),\n    description TEXT,\n    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    applied_by VARCHAR(100),\n    success BOOLEAN DEFAULT FALSE\n);\n\nDROP TABLE IF EXISTS customer_data;\nCREATE TABLE customer_data (\n    customer_id INTEGER PRIMARY KEY,\n    name VARCHAR(100),\n    email VARCHAR(100),\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);\n\nINSERT INTO customer_data VALUES (1, 'John Doe', 'john@example.com', '2023-01-01'), (2, 'Jane Smith', 'jane@example.com', '2023-02-01');\n\n-- Version 1.1: Add phone\nINSERT INTO schema_versions (version_id, version_number, description, applied_by) VALUES (1, '1.1', 'Add phone number field to customer_data', 'admin');\nALTER TABLE customer_data ADD COLUMN phone VARCHAR(20);\nUPDATE customer_data SET phone = CASE WHEN customer_id = 1 THEN '+1-555-0101' WHEN customer_id = 2 THEN '+1-555-0102' END;\nUPDATE schema_versions SET success = TRUE WHERE version_id = 1;\n\n-- Version 1.2: Add address fields\nINSERT INTO schema_versions (version_id, version_number, description, applied_by) VALUES (2, '1.2', 'Add address fields to customer_data', 'admin');\nALTER TABLE customer_data ADD COLUMN address_line1 VARCHAR(255);\nALTER TABLE customer_data ADD COLUMN address_line2 VARCHAR(255);\nALTER TABLE customer_data ADD COLUMN city VARCHAR(100);\nALTER TABLE customer_data ADD COLUMN state VARCHAR(50);\nALTER TABLE customer_data ADD COLUMN postal_code VARCHAR(20);\nALTER TABLE customer_data ADD COLUMN country VARCHAR(50) DEFAULT 'USA';\nUPDATE customer_data SET address_line1 = CASE WHEN customer_id = 1 THEN '123 Main St' WHEN customer_id = 2 THEN '456 Oak Ave' END, city = CASE WHEN customer_id = 1 THEN 'New York' WHEN customer_id = 2 THEN 'Los Angeles' END, state = CASE WHEN customer_id = 1 THEN 'NY' WHEN customer_id = 2 THEN 'CA' END, postal_code = CASE WHEN customer_id = 1 THEN '10001' WHEN customer_id = 2 THEN '90210' END;\nUPDATE schema_versions SET success = TRUE WHERE version_id = 2;\n\n-- Version 1.3: Constraints and indexes\nINSERT INTO schema_versions (version_id, version_number, description, applied_by) VALUES (3, '1.3', 'Add constraints and indexes to customer_data', 'admin');\n-- DuckDB: ALTER TABLE ADD CONSTRAINT for UNIQUE/CHECK may not be implemented; use validation queries instead and create indexes separately if needed\n-- ALTER TABLE customer_data ADD CONSTRAINT uk_customer_email UNIQUE (email);\n-- ALTER TABLE customer_data ADD CONSTRAINT chk_customer_email_format CHECK (email LIKE '%@%.%');\n-- Index creation may be a no-op or metadata in DuckDB; included for portability\nCREATE INDEX IF NOT EXISTS idx_customer_email ON customer_data(email);\nCREATE INDEX IF NOT EXISTS idx_customer_name ON customer_data(name);\nCREATE INDEX IF NOT EXISTS idx_customer_created ON customer_data(created_at);\n-- Validation queries in lieu of constraints:\nSELECT email, COUNT(*) AS dup_count FROM customer_data GROUP BY email HAVING COUNT(*) > 1;\nSELECT customer_id, email FROM customer_data WHERE email NOT LIKE '%@%.%';\nUPDATE schema_versions SET success = TRUE WHERE version_id = 3;\n\n-- Version 1.4: Data cleanup and audit columns\nINSERT INTO schema_versions (version_id, version_number, description, applied_by) VALUES (4, '1.4', 'Data cleanup and normalization', 'admin');\nUPDATE customer_data SET phone = REPLACE(REPLACE(REPLACE(phone, '-', ''), '(', ''), ')', '');\n-- DuckDB: CHECK constraint on phone format may not be implemented via ALTER; use validation query instead\n-- ALTER TABLE customer_data ADD CONSTRAINT chk_customer_phone_format CHECK (LENGTH(phone) >= 10);\nSELECT customer_id, phone FROM customer_data WHERE LENGTH(phone) < 10;\nALTER TABLE customer_data ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;\nALTER TABLE customer_data ADD COLUMN version INTEGER DEFAULT 1;\nUPDATE schema_versions SET success = TRUE WHERE version_id = 4;\n\n-- Reporting queries (run a few to show state)\nSELECT sv.version_number, sv.description, sv.applied_at, sv.applied_by, sv.success, (SELECT COUNT(*) FROM customer_data) AS current_record_count FROM schema_versions sv ORDER BY sv.applied_at;\nSELECT name AS column_name, type AS data_type, \"notnull\" AS is_not_null, dflt_value AS default_value, pk AS is_primary_key FROM pragma_table_info('customer_data') ORDER BY cid;\n\n-- Cleanup\nDROP TABLE IF EXISTS customer_data;\nDROP TABLE IF EXISTS schema_versions;",
+          "nerd_notes": "Schema versioning tables help track applied migrations and their success; this example shows a simple approach useful in dev environments.",
+          "compat_examples": {
+            "postgres": "-- Postgres: use jsonb, SERIAL, or IDENTITY and functions like NOW(); enforce constraints at DDL time\n-- CREATE TABLE schema_versions (version_id SERIAL PRIMARY KEY, version_number TEXT, ...);",
+            "mysql": "-- MySQL: use JSON or TEXT for flexible columns; use AUTO_INCREMENT for PKs and NOW() for timestamps.",
+            "oracle": "-- Oracle: use sequences or IDENTITY and SYSDATE/SYSTIMESTAMP for timestamps; JSON handling depends on version."
+          }
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+      "id": "basic-select",
+      "prompt": "Show the first 5 rows from `users`.",
+      "answer_sql": "SELECT * FROM users LIMIT 5;"
+    },
+    {
+      "id": "aggregate-1",
+      "prompt": "Count rows grouped by `user_id`.",
+      "answer_sql": "SELECT user_id, COUNT(*) AS cnt FROM users GROUP BY user_id ORDER BY cnt DESC;"
+    },
+    {
+      "id": "filter-top",
+      "prompt": "Select the top 10 rows where `user_id` is positive (if numeric) or not null otherwise.",
+      "answer_sql": "SELECT * FROM users WHERE user_id IS NOT NULL AND user_id > 0 LIMIT 10;"
+    }
+  ]
+}

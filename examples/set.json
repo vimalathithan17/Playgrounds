@@ -1,0 +1,325 @@
+{
+  "title": "Set operations (UNION, INTERSECT, EXCEPT)",
+  "description": "A question-first, story-style journey through SQL set operations. We start from what sets are and why they matter, then apply UNION/UNION ALL, INTERSECT, and EXCEPT to real scenarios. Every example is DuckDB-compatible, self-contained, idempotent, and includes cross-dialect notes.",
+  "sections": [
+    {
+      "title": "0) What are set operations?",
+      "description": "Question: what does it mean to combine result sets, and when would I use set operations instead of JOINs?",
+      "narrative": "Set operations treat query outputs as mathematical sets: UNION merges two results (with or without deduplication), INTERSECT finds common rows, and EXCEPT subtracts rows. Use them when your question is about membership across lists (\"in A or B?\", \"in both?\", \"in A but not B?\") rather than aligning columns across tables (JOIN). The columns and types must line up positionally across SELECTs.",
+      "nerd_notes": "Rules: same column count and compatible types; names are taken from the first SELECT; ORDER BY applies to the final combined result. On large inputs, UNION ALL is faster (no dedup)."
+    },
+    {
+      "title": "1.5) Cheat Sheet: Set Ops Quick Patterns",
+      "description": "Tiny, portable patterns for UNION/INTERSECT/EXCEPT.",
+      "narrative": "Copy-ready snippets: union with counts, intersect via INTERSECT, EXCEPT via NOT EXISTS, and a multi-column UNION. All use inline VALUES and deterministic ORDER BY.",
+      "examples": [
+        {
+          "name": "cs_union_vs_union_all_quick",
+          "description": "UNION ALL + GROUP BY to keep and count duplicates.",
+          "sql": "WITH a(val) AS (VALUES ('x'),('y')), b(val) AS (VALUES ('y'),('z'))\nSELECT val, COUNT(*) AS cnt\nFROM (SELECT val FROM a UNION ALL SELECT val FROM b) t\nGROUP BY val\nORDER BY cnt DESC, val;",
+          "nerd_notes": "Use UNION ALL when you need to preserve duplicates or for performance; add GROUP BY when you want counts.",
+          "compat_examples": {
+            "postgres": "WITH a(val) AS (VALUES ('x'),('y')), b(val) AS (VALUES ('y'),('z')) SELECT val, COUNT(*) FROM (SELECT val FROM a UNION ALL SELECT val FROM b) t GROUP BY val ORDER BY COUNT(*) DESC, val;",
+            "mysql": "WITH a(val) AS (SELECT 'x' UNION ALL SELECT 'y'), b(val) AS (SELECT 'y' UNION ALL SELECT 'z') SELECT val, COUNT(*) FROM (SELECT val FROM a UNION ALL SELECT val FROM b) t GROUP BY val ORDER BY COUNT(*) DESC, val;",
+            "oracle": "WITH a(val) AS (SELECT 'x' FROM dual UNION ALL SELECT 'y' FROM dual), b(val) AS (SELECT 'y' FROM dual UNION ALL SELECT 'z' FROM dual) SELECT val, COUNT(*) FROM (SELECT val FROM a UNION ALL SELECT val FROM b) t GROUP BY val ORDER BY COUNT(*) DESC, val;"
+          }
+        },
+        {
+          "name": "cs_intersect_exists_quick",
+          "description": "INTERSECT of inline lists (use EXISTS in engines without INTERSECT).",
+          "sql": "WITH a(x) AS (VALUES (1),(2)), b(x) AS (VALUES (2),(3))\nSELECT x FROM a INTERSECT SELECT x FROM b ORDER BY x;",
+          "nerd_notes": "If INTERSECT isn’t available (e.g., MySQL), use EXISTS or INNER JOIN DISTINCT.",
+          "compat_examples": {
+            "postgres": "WITH a(x) AS (VALUES (1),(2)), b(x) AS (VALUES (2),(3)) SELECT x FROM a INTERSECT SELECT x FROM b ORDER BY x;",
+            "mysql": "WITH a(x) AS (SELECT 1 UNION ALL SELECT 2), b(x) AS (SELECT 2 UNION ALL SELECT 3) SELECT a.x FROM a WHERE EXISTS (SELECT 1 FROM b WHERE b.x = a.x) ORDER BY a.x;",
+            "oracle": "WITH a(x) AS (SELECT 1 FROM dual UNION ALL SELECT 2 FROM dual), b(x) AS (SELECT 2 FROM dual UNION ALL SELECT 3 FROM dual) SELECT x FROM a INTERSECT SELECT x FROM b ORDER BY x;"
+          }
+        },
+        {
+          "name": "cs_except_not_exists_quick",
+          "description": "EXCEPT alternative using NOT EXISTS (portable).",
+          "sql": "WITH a(x) AS (VALUES (1),(2),(3)), b(x) AS (VALUES (2),(3))\nSELECT a.x FROM a WHERE NOT EXISTS (SELECT 1 FROM b WHERE b.x = a.x) ORDER BY a.x;",
+          "nerd_notes": "Prefer NOT EXISTS over NOT IN when NULLs might appear on the right side.",
+          "compat_examples": {
+            "postgres": "WITH a(x) AS (VALUES (1),(2),(3)), b(x) AS (VALUES (2),(3)) SELECT a.x FROM a WHERE NOT EXISTS (SELECT 1 FROM b WHERE b.x = a.x) ORDER BY a.x;",
+            "mysql": "WITH a(x) AS (SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3), b(x) AS (SELECT 2 UNION ALL SELECT 3) SELECT a.x FROM a WHERE NOT EXISTS (SELECT 1 FROM b WHERE b.x = a.x) ORDER BY a.x;",
+            "oracle": "WITH a(x) AS (SELECT 1 FROM dual UNION ALL SELECT 2 FROM dual UNION ALL SELECT 3 FROM dual), b(x) AS (SELECT 2 FROM dual UNION ALL SELECT 3 FROM dual) SELECT a.x FROM a WHERE NOT EXISTS (SELECT 1 FROM b WHERE b.x = a.x) ORDER BY a.x;"
+          }
+        },
+        {
+          "name": "cs_multi_column_union_quick",
+          "description": "UNION on two columns (column count/types must match).",
+          "sql": "WITH a(id,cat) AS (VALUES (1,'A'),(2,'B')), b(id,cat) AS (VALUES (2,'B'),(3,'C'))\nSELECT id, cat FROM a UNION SELECT id, cat FROM b ORDER BY id, cat;",
+          "nerd_notes": "Column names in the final set come from the first SELECT.",
+          "compat_examples": {
+            "postgres": "WITH a(id,cat) AS (VALUES (1,'A'),(2,'B')), b(id,cat) AS (VALUES (2,'B'),(3,'C')) SELECT id, cat FROM a UNION SELECT id, cat FROM b ORDER BY id, cat;",
+            "mysql": "WITH a(id,cat) AS (SELECT 1,'A' UNION ALL SELECT 2,'B'), b(id,cat) AS (SELECT 2,'B' UNION ALL SELECT 3,'C') SELECT id, cat FROM a UNION SELECT id, cat FROM b ORDER BY id, cat;",
+            "oracle": "WITH a(id,cat) AS (SELECT 1,'A' FROM dual UNION ALL SELECT 2,'B' FROM dual), b(id,cat) AS (SELECT 2,'B' FROM dual UNION ALL SELECT 3,'C' FROM dual) SELECT id, cat FROM a UNION SELECT id, cat FROM b ORDER BY id, cat;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "1.6) Pitfalls, Tips, and Q&A",
+      "description": "Common set-operation gotchas and portable fixes.",
+      "narrative": "• Column alignment: All SELECTs must project the same number of columns with compatible types; final column names come from the first SELECT.\n• Ordering: ORDER BY applies to the final combined result only; don’t rely on input ordering.\n• Dedup vs speed: UNION removes duplicates (can be expensive); prefer UNION ALL when preserving duplicates or for performance.\n• Portability: Some engines (e.g., MySQL) lack INTERSECT/EXCEPT—use EXISTS/NOT EXISTS or JOIN alternatives.\n• NULLs: Set dedup treats rows with NULLs as duplicates if all columns are equal; avoid NOT IN with NULLs—use NOT EXISTS.\n• Determinism: Always include ORDER BY (and tie-breakers) when showing top-N from combined sets.",
+      "examples": []
+    },
+    {
+      "title": "1) Tiny warm‑up: UNION vs UNION ALL",
+      "description": "Question: how do UNION and UNION ALL differ in output and performance?",
+      "narrative": "We'll build two tiny lists and show how UNION removes duplicates while UNION ALL keeps them. Then we count duplicates explicitly to make the difference concrete.",
+      "examples": [
+        {
+          "name": "set_warmup_union_all",
+          "description": "Now let's say we need the combined set of values and also the frequency of each value—how do we do it?",
+          "sql": "WITH a(val) AS (VALUES ('x'),('y')), b(val) AS (VALUES ('y'),('z'))\n-- UNION removes duplicates\nSELECT val FROM a UNION SELECT val FROM b ORDER BY val;\n-- UNION ALL keeps duplicates (often faster)\nWITH a(val) AS (VALUES ('x'),('y')), b(val) AS (VALUES ('y'),('z'))\nSELECT val, COUNT(*) AS cnt\nFROM (SELECT val FROM a UNION ALL SELECT val FROM b) t\nGROUP BY val\nORDER BY cnt DESC, val;",
+          "nerd_notes": "Prefer UNION ALL when you don't need deduplication. If you do need distinct values and counts, UNION ALL + GROUP BY shows both.",
+          "compat_examples": {
+            "postgres": "-- Same syntax; ORDER BY applies to the combined result.",
+            "mysql": "-- Same syntax; be mindful of collations impacting duplicates.",
+            "oracle": "-- Same syntax; UNION/UNION ALL supported."
+          }
+        }
+      ]
+    },
+    {
+      "title": "2) UNION and UNION ALL (full examples)",
+      "description": "Question: how do we combine customers and employees, stitch product catalogs, and summarize activity across periods?",
+      "narrative": "We'll create compact demo tables (customers, employees, products, orders) and run several UNION/UNION ALL scenarios: labeling sources, combining catalogs, computing per-period summaries. We'll use DuckDB-native date math (date_trunc, intervals) and keep each block idempotent.",
+      "examples": [
+        {
+          "name": "union_label_sources",
+          "description": "Now let's say we need one directory of people across customers and employees—how do we combine and label them?",
+          "sql": "DROP TABLE IF EXISTS customers_u; DROP TABLE IF EXISTS employees_u;\nCREATE TABLE customers_u (customer_id INTEGER, first_name TEXT, last_name TEXT, email TEXT, country TEXT, registration_date DATE);\nCREATE TABLE employees_u (employee_id INTEGER, first_name TEXT, last_name TEXT, work_email TEXT, department TEXT, hire_date DATE);\nINSERT INTO customers_u VALUES\n  (1,'John','Smith','john@x.com','USA', DATE '2024-01-01'),\n  (2,'Jane','Doe','jane@x.com','UK',  DATE '2024-02-01');\nINSERT INTO employees_u VALUES\n  (10,'Bob','Johnson','bob@corp.com','Sales', DATE '2023-12-10'),\n  (11,'Alice','Wilson','alice@corp.com','Sales', DATE '2024-03-05');\n-- Combine and label\nSELECT customer_id AS id, first_name, last_name, email AS contact, 'Customer' AS source_type\nFROM customers_u WHERE country = 'USA'\nUNION\nSELECT employee_id AS id, first_name, last_name, work_email AS contact, 'Employee' AS source_type\nFROM employees_u WHERE department = 'Sales'\nORDER BY last_name, first_name;\nDROP TABLE IF EXISTS customers_u; DROP TABLE IF EXISTS employees_u;",
+          "nerd_notes": "We project compatible columns (id, names, contact, label) from two different tables, then UNION. Only distinct rows are kept.",
+          "compat_examples": {
+            "postgres": "-- Same pattern; DISTINCT is implicit in UNION.",
+            "mysql": "-- Same pattern; beware of collation differences for string equality.",
+            "oracle": "-- Same pattern; use VARCHAR2 types in DDL if preferred."
+          }
+        },
+        {
+          "name": "union_all_catalogs",
+          "description": "Now let's say we need the combined product feed from active and discontinued catalogs—how do we keep all rows with a status label?",
+          "sql": "DROP TABLE IF EXISTS products_u;\nCREATE TABLE products_u (product_id INTEGER, name TEXT, price DECIMAL(10,2), is_active BOOLEAN);\nINSERT INTO products_u VALUES\n  (1,'Phone',699.00, TRUE),\n  (2,'Case',19.99, TRUE),\n  (3,'Old Tablet',199.00, FALSE);\nSELECT product_id, name, price, 'Current Products' AS status\nFROM products_u WHERE is_active\nUNION ALL\nSELECT product_id, name, price, 'Discontinued Products' AS status\nFROM products_u WHERE NOT is_active\nORDER BY price DESC;\nDROP TABLE IF EXISTS products_u;",
+          "nerd_notes": "UNION ALL retains duplicates and is typically faster. Use after normalizing projections across sources.",
+          "compat_examples": {
+            "postgres": "-- Same syntax; BOOLEAN supported.",
+            "mysql": "-- Same syntax; if using TINYINT(1) as boolean, adjust inserts accordingly.",
+            "oracle": "-- Oracle has no BOOLEAN in SQL tables; use NUMBER(1) or CHAR(1) and map TRUE/FALSE accordingly."
+          }
+        },
+        {
+          "name": "union_activity_last_year",
+          "description": "Now let's say we need a people directory with an activity_count metric over the last year—how do we compute it across sources?",
+          "sql": "DROP TABLE IF EXISTS customers_u2; DROP TABLE IF EXISTS employees_u2; DROP TABLE IF EXISTS orders_u2;\nCREATE TABLE customers_u2 (customer_id INTEGER, first_name TEXT, last_name TEXT, email TEXT, registration_date DATE);\nCREATE TABLE employees_u2 (employee_id INTEGER, first_name TEXT, last_name TEXT, work_email TEXT, hire_date DATE);\nCREATE TABLE orders_u2 (order_id INTEGER, customer_id INTEGER, created_by INTEGER, order_date DATE, total_amount DECIMAL(10,2));\nINSERT INTO customers_u2 VALUES (1,'John','Smith','john@x.com', DATE '2024-01-15'),(2,'Jane','Doe','jane@x.com', DATE '2023-11-20');\nINSERT INTO employees_u2 VALUES (10,'Bob','Johnson','bob@corp.com', DATE '2023-10-10'),(11,'Alice','Wilson','alice@corp.com', DATE '2024-03-01');\nINSERT INTO orders_u2 VALUES (100,1,10, DATE '2024-02-01',120.00),(101,1,10, DATE '2024-06-01',95.00),(102,2,11, DATE '2023-12-15',50.00);\nWITH last_year AS (SELECT (current_date - INTERVAL 1 YEAR) AS since)\nSELECT 'Customer' AS entity_type, c.customer_id AS id, c.first_name||' '||c.last_name AS full_name, c.email AS contact, c.registration_date AS created_date,\n       (SELECT COUNT(*) FROM orders_u2 o, last_year ly WHERE o.customer_id = c.customer_id AND o.order_date >= ly.since) AS activity_count\nFROM customers_u2 c\nWHERE c.registration_date >= (SELECT since FROM last_year)\nUNION\nSELECT 'Employee' AS entity_type, e.employee_id AS id, e.first_name||' '||e.last_name AS full_name, e.work_email AS contact, e.hire_date AS created_date,\n       (SELECT COUNT(*) FROM orders_u2 o, last_year ly WHERE o.created_by = e.employee_id AND o.order_date >= ly.since) AS activity_count\nFROM employees_u2 e\nWHERE e.hire_date >= (SELECT since FROM last_year)\nORDER BY created_date DESC, entity_type;\nDROP TABLE IF EXISTS orders_u2; DROP TABLE IF EXISTS customers_u2; DROP TABLE IF EXISTS employees_u2;",
+          "nerd_notes": "We compute \"last year\" once and reference it from correlated subqueries on both sources.",
+          "compat_examples": {
+            "postgres": "-- Use current_date - INTERVAL '1 year' similarly; string concatenation uses ||.",
+            "mysql": "-- Use CURRENT_DATE - INTERVAL 1 YEAR; string concatenation uses CONCAT.",
+            "oracle": "-- Use ADD_MONTHS(TRUNC(SYSDATE), -12); concatenation uses ||."
+          }
+        },
+        {
+          "name": "union_period_summaries",
+          "description": "Now let's say we need daily/weekly/monthly revenue summaries in one result—how do we combine them while keeping periods aligned?",
+          "sql": "DROP TABLE IF EXISTS orders_p;\nCREATE TABLE orders_p(order_id INTEGER, order_date DATE, total_amount DECIMAL(10,2));\nINSERT INTO orders_p VALUES (1, DATE '2024-01-01', 100.00),(2, DATE '2024-01-08', 150.00),(3, DATE '2024-01-16', 200.00),(4, DATE '2024-02-01', 250.00);\nSELECT 'Daily' AS period_type, CAST(order_date AS DATE) AS period, COUNT(*) AS order_count, SUM(total_amount) AS revenue\nFROM orders_p\nWHERE order_date >= current_date - INTERVAL 7 DAY\nGROUP BY period\nUNION\nSELECT 'Weekly' AS period_type, DATE_TRUNC('week', order_date) AS period, COUNT(*) AS order_count, SUM(total_amount) AS revenue\nFROM orders_p\nWHERE order_date >= current_date - INTERVAL 4 WEEK\nGROUP BY period\nUNION\nSELECT 'Monthly' AS period_type, DATE_TRUNC('month', order_date) AS period, COUNT(*) AS order_count, SUM(total_amount) AS revenue\nFROM orders_p\nWHERE order_date >= current_date - INTERVAL 12 MONTH\nGROUP BY period\nORDER BY period_type, period DESC;\nDROP TABLE IF EXISTS orders_p;",
+          "nerd_notes": "DuckDB's DATE_TRUNC handles week/month buckets. A single ORDER BY at the end orders the combined set.",
+          "compat_examples": {
+            "postgres": "-- Use DATE_TRUNC('week'|'month', ts) similarly.",
+            "mysql": "-- Use DATE_FORMAT for month (e.g., DATE_FORMAT(date,'%Y-%m-01')) and YEARWEEK or a helper calendar for weeks.",
+            "oracle": "-- Use TRUNC(date,'IW') for ISO week and TRUNC(date,'MM') for month."
+          }
+        }
+      ]
+    },
+    {
+      "title": "3) INTERSECT: overlap, with portable alternatives",
+      "description": "Question: how do we find rows present in both results—and what if a dialect lacks INTERSECT?",
+      "narrative": "We'll use INTERSECT directly and also show EXISTS/INNER JOIN alternatives that work everywhere. We'll also demo multi-filter intersections like \"products ordered by customers in both cities\" and \"customers present in both years\".",
+      "examples": [
+        {
+          "name": "intersect_people_overlap",
+          "description": "Now let's say we need people that appear in both lists by (first,last,email)—what are two ways to do it?",
+          "sql": "DROP TABLE IF EXISTS customers_i; DROP TABLE IF EXISTS employees_i;\nCREATE TABLE customers_i (first_name TEXT, last_name TEXT, email TEXT);\nCREATE TABLE employees_i (first_name TEXT, last_name TEXT, personal_email TEXT);\nINSERT INTO customers_i VALUES ('Ann','Lee','ann@x'),('Bob','Rae','bob@x');\nINSERT INTO employees_i VALUES ('Ann','Lee','ann@x'),('Cara','Wu','cara@x');\n-- Using INTERSECT\nSELECT first_name, last_name, email FROM customers_i\nINTERSECT\nSELECT first_name, last_name, personal_email AS email FROM employees_i;\n-- Portable EXISTS alternative\nSELECT c.first_name, c.last_name, c.email\nFROM customers_i c\nWHERE EXISTS (SELECT 1 FROM employees_i e WHERE e.first_name=c.first_name AND e.last_name=c.last_name AND e.personal_email=c.email);\nDROP TABLE IF EXISTS customers_i; DROP TABLE IF EXISTS employees_i;",
+          "nerd_notes": "INTERSECT is concise but EXISTS is universally supported and lets you tweak match predicates easily.",
+          "compat_examples": {
+            "postgres": "SELECT ... INTERSECT SELECT ...; -- supported",
+            "mysql": "-- MySQL lacks INTERSECT. Use EXISTS or INNER JOIN DISTINCT as shown.",
+            "oracle": "SELECT ... INTERSECT SELECT ...; -- supported"
+          }
+        },
+        {
+          "name": "intersect_products_both_cities",
+          "description": "Now let's say we need products ordered by customers from both New York AND Los Angeles—how?",
+          "sql": "DROP TABLE IF EXISTS products_i; DROP TABLE IF EXISTS customers_i2; DROP TABLE IF EXISTS orders_i; DROP TABLE IF EXISTS order_items_i;\nCREATE TABLE products_i(product_id INTEGER, name TEXT, price DECIMAL(10,2));\nCREATE TABLE customers_i2(customer_id INTEGER, city TEXT);\nCREATE TABLE orders_i(order_id INTEGER, customer_id INTEGER);\nCREATE TABLE order_items_i(order_id INTEGER, product_id INTEGER);\nINSERT INTO products_i VALUES (1,'P1',10.0),(2,'P2',20.0),(3,'P3',30.0);\nINSERT INTO customers_i2 VALUES (1,'New York'),(2,'Los Angeles'),(3,'New York');\nINSERT INTO orders_i VALUES (10,1),(11,2),(12,3);\nINSERT INTO order_items_i VALUES (10,1),(11,1),(12,2);\nSELECT p.product_id, p.name, p.price\nFROM products_i p\nWHERE p.product_id IN (\n  SELECT DISTINCT oi.product_id\n  FROM order_items_i oi\n  JOIN orders_i o ON oi.order_id=o.order_id\n  JOIN customers_i2 c ON o.customer_id=c.customer_id\n  WHERE c.city='New York'\n)\nAND p.product_id IN (\n  SELECT DISTINCT oi.product_id\n  FROM order_items_i oi\n  JOIN orders_i o ON oi.order_id=o.order_id\n  JOIN customers_i2 c ON o.customer_id=c.customer_id\n  WHERE c.city='Los Angeles'\n);\nDROP TABLE IF EXISTS products_i; DROP TABLE IF EXISTS customers_i2; DROP TABLE IF EXISTS orders_i; DROP TABLE IF EXISTS order_items_i;",
+          "nerd_notes": "Intersect two IN lists to express \"must appear in both\" conditions without INTERSECT.",
+          "compat_examples": {
+            "postgres": "-- Same pattern.",
+            "mysql": "-- Same pattern.",
+            "oracle": "-- Same pattern."
+          }
+        },
+          {
+            "name": "intersect_categories_price_ranges",
+            "description": "Now let's say we need categories that have products in both price buckets — under $50 AND over $100 — how do we express that without relying on INTERSECT?",
+            "sql": "DROP TABLE IF EXISTS categories_i; DROP TABLE IF EXISTS products_i2;\nCREATE TABLE categories_i(category_id INTEGER, name TEXT);\nCREATE TABLE products_i2(product_id INTEGER, category_id INTEGER, price DECIMAL(10,2));\nINSERT INTO categories_i VALUES (1,'CatA'),(2,'CatB'),(3,'CatC');\nINSERT INTO products_i2 VALUES (10,1, 20.00),(11,1, 120.00),(12,2, 15.00),(13,3, 250.00);\n-- Categories with at least one product < 50 and at least one product > 100\nSELECT c.category_id, c.name\nFROM categories_i c\nWHERE c.category_id IN (SELECT category_id FROM products_i2 WHERE price < 50)\n  AND c.category_id IN (SELECT category_id FROM products_i2 WHERE price > 100)\nORDER BY c.category_id;\nDROP TABLE IF EXISTS products_i2; DROP TABLE IF EXISTS categories_i;",
+            "nerd_notes": "Intersect the conditions via two IN-lists. This pattern is portable and avoids dialect differences around INTERSECT.",
+            "compat_examples": {
+              "postgres": "-- Same pattern using two IN lists; INTERSECT of two SELECTs would also work.",
+              "mysql": "-- Same pattern; MySQL lacks INTERSECT, so this IN-list approach is preferred.",
+              "oracle": "-- Same pattern; could also use INTERSECT in Oracle if desired."
+            }
+        },
+        {
+          "name": "intersect_customers_both_years",
+          "description": "Now let's say we need customers who ordered in both 2023 and 2024—how do we express that?",
+          "sql": "DROP TABLE IF EXISTS orders_y;\nCREATE TABLE orders_y(order_id INTEGER, customer_id INTEGER, order_date DATE);\nINSERT INTO orders_y VALUES (1, 1, DATE '2023-01-01'),(2, 1, DATE '2024-05-10'),(3, 2, DATE '2024-02-02');\nSELECT DISTINCT customer_id FROM orders_y WHERE EXTRACT(YEAR FROM order_date)=2023\nINTERSECT\nSELECT DISTINCT customer_id FROM orders_y WHERE EXTRACT(YEAR FROM order_date)=2024;\nDROP TABLE IF EXISTS orders_y;",
+          "nerd_notes": "Year-bucketing via EXTRACT keeps the predicate clear.",
+          "compat_examples": {
+            "postgres": "SELECT ... WHERE EXTRACT(YEAR FROM order_date)=2023 INTERSECT SELECT ...=2024;",
+            "mysql": "-- MySQL: use YEAR(order_date)=2023 and emulate INTERSECT via INNER JOIN or IN conditions.",
+            "oracle": "SELECT ... WHERE EXTRACT(YEAR FROM order_date)=2023 INTERSECT SELECT ...=2024;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "4) EXCEPT (aka MINUS): subtracting rows",
+      "description": "Question: how do we find rows in A that are not in B—and what are portable alternatives?",
+      "narrative": "We'll use EXCEPT directly and also show NOT EXISTS and LEFT JOIN ... IS NULL patterns. We'll include a \"never purchased\" variant and a \"registered but no order\" variant that uses safe date math.",
+      "examples": [
+        {
+          "name": "except_vs_not_exists",
+          "description": "Now let's say we need customers without any orders—what are three ways to express that?",
+          "sql": "DROP TABLE IF EXISTS customers_e; DROP TABLE IF EXISTS orders_e;\nCREATE TABLE customers_e(customer_id INTEGER, first_name TEXT, last_name TEXT, email TEXT, registration_date DATE);\nCREATE TABLE orders_e(order_id INTEGER, customer_id INTEGER, status TEXT, order_date DATE);\nINSERT INTO customers_e VALUES (1,'A','One','a@x', DATE '2024-01-01'),(2,'B','Two','b@x', DATE '2024-01-02');\nINSERT INTO orders_e VALUES (10,1,'completed', DATE '2024-01-03');\n-- EXCEPT (DuckDB supports EXCEPT)\nSELECT customer_id FROM customers_e\nEXCEPT\nSELECT customer_id FROM orders_e;\n-- NOT EXISTS (portable)\nSELECT c.customer_id FROM customers_e c WHERE NOT EXISTS (SELECT 1 FROM orders_e o WHERE o.customer_id=c.customer_id);\n-- LEFT JOIN IS NULL (portable)\nSELECT c.customer_id FROM customers_e c LEFT JOIN orders_e o ON o.customer_id=c.customer_id WHERE o.customer_id IS NULL;\nDROP TABLE IF EXISTS customers_e; DROP TABLE IF EXISTS orders_e;",
+          "nerd_notes": "NOT EXISTS and LEFT JOIN ... IS NULL emulate EXCEPT in engines that lack it.",
+          "compat_examples": {
+            "postgres": "SELECT ... EXCEPT SELECT ...; -- supported",
+            "mysql": "-- MySQL lacks EXCEPT. Use NOT EXISTS or LEFT JOIN ... IS NULL.",
+            "oracle": "-- Oracle uses MINUS instead of EXCEPT.\n-- SELECT customer_id FROM customers MINUS SELECT customer_id FROM orders;"
+          }
+        },
+        {
+          "name": "except_inventory_never_sold",
+          "description": "Now let's say we need products that exist in inventory but were not sold in the last 90 days—how do we write that with a portable alternative?",
+          "sql": "DROP TABLE IF EXISTS products_e; DROP TABLE IF EXISTS orders_e2; DROP TABLE IF EXISTS order_items_e2;\nCREATE TABLE products_e(product_id INTEGER, name TEXT, price DECIMAL(10,2), stock_quantity INTEGER, created_date DATE);\nCREATE TABLE orders_e2(order_id INTEGER, order_date DATE);\nCREATE TABLE order_items_e2(order_id INTEGER, product_id INTEGER);\nINSERT INTO products_e VALUES (1,'P1',10.0,5, DATE '2023-12-01'),(2,'P2',12.0,3, DATE '2024-01-15');\nINSERT INTO orders_e2 VALUES (100, current_date - INTERVAL 30 DAY);\nINSERT INTO order_items_e2 VALUES (100,1);\nSELECT p.product_id, p.name, p.price, p.stock_quantity, p.created_date\nFROM products_e p\nWHERE p.stock_quantity > 0\nAND NOT EXISTS (\n  SELECT 1 FROM order_items_e2 oi JOIN orders_e2 o ON oi.order_id=o.order_id\n  WHERE oi.product_id=p.product_id AND o.order_date >= current_date - INTERVAL 90 DAY\n);\nDROP TABLE IF EXISTS products_e; DROP TABLE IF EXISTS orders_e2; DROP TABLE IF EXISTS order_items_e2;",
+          "nerd_notes": "Expressing the \"not sold in last 90 days\" rule in the NOT EXISTS subquery keeps it tight and index-friendly in row-store engines.",
+          "compat_examples": {
+            "postgres": "-- Same pattern; CURRENT_DATE - INTERVAL '90 days'.",
+            "mysql": "-- Same pattern; CURDATE() - INTERVAL 90 DAY.",
+            "oracle": "-- Same pattern; SYSDATE - 90 for days difference."
+          }
+        }
+        ,
+        {
+          "name": "except_products_never_ordered",
+          "description": "Now let's say we need products that have never been ordered—what's the simplest anti-join pattern?",
+          "sql": "DROP TABLE IF EXISTS products_e0; DROP TABLE IF EXISTS order_items_e0;\nCREATE TABLE products_e0(product_id INTEGER, name TEXT, price DECIMAL(10,2), stock_quantity INTEGER);\nCREATE TABLE order_items_e0(order_id INTEGER, product_id INTEGER);\nINSERT INTO products_e0 VALUES (1,'P1',10.0,5),(2,'P2',12.0,3),(3,'P3',9.0,0);\nINSERT INTO order_items_e0 VALUES (100,1);\nSELECT p.product_id, p.name, p.price, p.stock_quantity\nFROM products_e0 p\nWHERE NOT EXISTS (SELECT 1 FROM order_items_e0 oi WHERE oi.product_id = p.product_id)\nORDER BY p.product_id;\nDROP TABLE IF EXISTS order_items_e0; DROP TABLE IF EXISTS products_e0;",
+          "nerd_notes": "Classic anti-join via NOT EXISTS is portable and usually more robust than NOT IN when NULLs can appear.",
+          "compat_examples": {
+            "postgres": "-- Same pattern; use NOT EXISTS with a correlated subquery.",
+            "mysql": "-- Same pattern; NOT EXISTS works the same.",
+            "oracle": "-- Same pattern; NOT EXISTS works the same."
+          }
+        }
+        ,
+        {
+          "name": "except_registered_never_completed",
+          "description": "Now let's say we need customers who registered but never completed a purchase—how do we compute days since registration and filter by status?",
+          "sql": "DROP TABLE IF EXISTS customers_e4; DROP TABLE IF EXISTS orders_e4;\nCREATE TABLE customers_e4(customer_id INTEGER, first_name TEXT, last_name TEXT, email TEXT, registration_date DATE);\nCREATE TABLE orders_e4(order_id INTEGER, customer_id INTEGER, status TEXT, order_date DATE);\nINSERT INTO customers_e4 VALUES (1,'Ana','A','ana@x', DATE '2024-01-01'),(2,'Ben','B','ben@x', DATE '2024-01-10'),(3,'Cid','C','cid@x', DATE '2024-02-01');\nINSERT INTO orders_e4 VALUES (10,1,'completed', DATE '2024-01-05'),(11,2,'pending', DATE '2024-01-12');\nSELECT c.customer_id, c.first_name, c.last_name, c.email, c.registration_date,\n       date_diff('day', c.registration_date, current_date) AS days_since_registration\nFROM customers_e4 c\nWHERE NOT EXISTS (\n  SELECT 1 FROM orders_e4 o\n  WHERE o.customer_id = c.customer_id AND o.status IN ('completed','shipped','delivered')\n)\nORDER BY days_since_registration DESC, c.customer_id;\nDROP TABLE IF EXISTS orders_e4; DROP TABLE IF EXISTS customers_e4;",
+          "nerd_notes": "Using date_diff in DuckDB replaces SQLite's julianday math; filtering by terminal statuses captures \"never completed\" precisely.",
+          "compat_examples": {
+            "postgres": "-- Days since registration: DATE_PART('day', CURRENT_DATE - registration_date)\n-- Same NOT EXISTS pattern with status filter.",
+            "mysql": "-- Days since registration: DATEDIFF(CURDATE(), registration_date)\n-- Same NOT EXISTS pattern with status filter.",
+            "oracle": "-- Days since registration: TRUNC(SYSDATE) - registration_date\n-- Same NOT EXISTS pattern with status filter."
+          }
+        }
+        ,
+        {
+          "name": "categories_no_sales_current_year",
+          "description": "Now let's say we need categories that have products but no sales in the current calendar year — how do we write that in a portable way?",
+          "sql": "DROP TABLE IF EXISTS categories_e; DROP TABLE IF EXISTS products_e3; DROP TABLE IF EXISTS orders_e3; DROP TABLE IF EXISTS order_items_e3;\nCREATE TABLE categories_e(category_id INTEGER, name TEXT);\nCREATE TABLE products_e3(product_id INTEGER, category_id INTEGER);\nCREATE TABLE orders_e3(order_id INTEGER, order_date DATE);\nCREATE TABLE order_items_e3(order_id INTEGER, product_id INTEGER);\nINSERT INTO categories_e VALUES (1,'CatA'),(2,'CatB');\nINSERT INTO products_e3 VALUES (10,1),(11,1),(12,2);\nINSERT INTO orders_e3 VALUES (100, DATE '2024-01-10');\nINSERT INTO order_items_e3 VALUES (100,10);\n-- Categories that have products but no sales in the current year\nWITH current_year AS (SELECT DATE_TRUNC('year', current_date) AS ystart)\nSELECT c.category_id, c.name\nFROM categories_e c\nWHERE EXISTS (SELECT 1 FROM products_e3 p WHERE p.category_id = c.category_id)\n  AND NOT EXISTS (\n    SELECT 1\n    FROM order_items_e3 oi\n    JOIN orders_e3 o ON oi.order_id = o.order_id\n    JOIN products_e3 p ON oi.product_id = p.product_id\n    , current_year cy\n    WHERE p.category_id = c.category_id\n      AND o.order_date >= cy.ystart\n      AND o.order_date <  cy.ystart + INTERVAL 1 YEAR\n  )\nORDER BY c.category_id;\nDROP TABLE IF EXISTS order_items_e3; DROP TABLE IF EXISTS orders_e3; DROP TABLE IF EXISTS products_e3; DROP TABLE IF EXISTS categories_e;",
+          "nerd_notes": "Bounding the current year with DATE_TRUNC('year', current_date) makes the filter precise and index-friendly in many engines.",
+          "compat_examples": {
+            "postgres": "-- Use DATE_TRUNC('year', CURRENT_DATE) for start of year; same bounding with + INTERVAL '1 year'.",
+            "mysql": "-- Use MAKEDATE(YEAR(CURDATE()),1) for start of year; bound with DATE_ADD(start, INTERVAL 1 YEAR).",
+            "oracle": "-- Use TRUNC(SYSDATE,'YYYY') for start of year; bound with ADD_MONTHS(TRUNC(SYSDATE,'YYYY'),12)."
+          }
+        }
+      ]
+    },
+    {
+      "title": "5) Advanced UNION: standardization and consolidation",
+      "description": "Question: how do we union data from three systems with different schemas, add quality checks, and consolidate duplicates?",
+      "narrative": "We'll reproduce the full HTML example: create three source tables, UNION ALL into a standardized view with quality indicators and years-of-service, then build a de-duplicated view using ROW_NUMBER(). DuckDB-compatible date math replaces SQLite's julianday.",
+      "examples": [
+        {
+          "name": "advanced_union_standardize",
+          "description": "Now let's say we need a standardized employee feed across systems A/B/C—how do we line up columns and compute consistency metrics?",
+          "sql": "DROP TABLE IF EXISTS system_a_users; DROP TABLE IF EXISTS system_b_users; DROP TABLE IF EXISTS system_c_users;\nCREATE TABLE system_a_users (user_id VARCHAR, full_name VARCHAR, email VARCHAR, department VARCHAR, hire_date DATE, salary DECIMAL(10,2), system_source VARCHAR DEFAULT 'System_A');\nCREATE TABLE system_b_users (employee_code VARCHAR, name VARCHAR, email_address VARCHAR, division VARCHAR, start_date DATE, compensation DECIMAL(10,2), source_system VARCHAR DEFAULT 'System_B');\nCREATE TABLE system_c_users (id VARCHAR, display_name VARCHAR, contact_email VARCHAR, team VARCHAR, join_date DATE, pay_rate DECIMAL(10,2), origin VARCHAR DEFAULT 'System_C');\nINSERT INTO system_a_users VALUES ('A001','John Smith','john.smith@company.com','Engineering', DATE '2020-01-15',85000.00,'System_A'),('A002','Jane Doe','jane.doe@company.com','Marketing', DATE '2021-03-20',65000.00,'System_A');\nINSERT INTO system_b_users VALUES ('B001','Bob Johnson','bob.johnson@company.com','Sales', DATE '2019-11-10',75000.00,'System_B'),('B002','Alice Wilson','alice.wilson@company.com','HR', DATE '2022-07-05',55000.00,'System_B');\nINSERT INTO system_c_users VALUES ('C001','Charlie Brown','charlie.brown@company.com','Finance', DATE '2018-09-01',95000.00,'System_C'),('C002','Diana Prince','diana.prince@company.com','Engineering', DATE '2023-01-10',78000.00,'System_C');\n-- Standardized UNION ALL with quality checks and \"years_of_service\" (as decimal years)\nSELECT user_id AS employee_id, full_name AS employee_name, email, department AS department_name, hire_date AS employment_date, salary AS compensation, system_source AS data_source,\n       CASE WHEN email LIKE '%@company.com' THEN 'Valid' ELSE 'Check Email' END AS email_status,\n       ROUND(date_diff('day', hire_date, current_date)/365.25, 1) AS years_of_service,\n       CASE WHEN salary >= 80000 THEN 'Executive' WHEN salary >= 60000 THEN 'Senior' WHEN salary >= 40000 THEN 'Mid-Level' ELSE 'Entry-Level' END AS compensation_tier\nFROM system_a_users\nUNION ALL\nSELECT employee_code AS employee_id, name AS employee_name, email_address AS email, division AS department_name, start_date AS employment_date, compensation, source_system AS data_source,\n       CASE WHEN email_address LIKE '%@company.com' THEN 'Valid' ELSE 'Check Email' END,\n       ROUND(date_diff('day', start_date, current_date)/365.25, 1),\n       CASE WHEN compensation >= 80000 THEN 'Executive' WHEN compensation >= 60000 THEN 'Senior' WHEN compensation >= 40000 THEN 'Mid-Level' ELSE 'Entry-Level' END\nFROM system_b_users\nUNION ALL\nSELECT id AS employee_id, display_name AS employee_name, contact_email AS email, team AS department_name, join_date AS employment_date, pay_rate AS compensation, origin AS data_source,\n       CASE WHEN contact_email LIKE '%@company.com' THEN 'Valid' ELSE 'Check Email' END,\n       ROUND(date_diff('day', join_date, current_date)/365.25, 1),\n       CASE WHEN pay_rate >= 80000 THEN 'Executive' WHEN pay_rate >= 60000 THEN 'Senior' WHEN pay_rate >= 40000 THEN 'Mid-Level' ELSE 'Entry-Level' END\nFROM system_c_users\nORDER BY department_name, compensation DESC;\n-- Duplicate detection and consolidation via ROW_NUMBER over email\nWITH consolidated AS (\n  SELECT user_id AS employee_id, full_name AS employee_name, email, department, hire_date, salary, system_source,\n         ROW_NUMBER() OVER (PARTITION BY email ORDER BY hire_date) AS email_priority\n  FROM system_a_users\n  UNION ALL\n  SELECT employee_code, name, email_address, division, start_date, compensation, source_system,\n         ROW_NUMBER() OVER (PARTITION BY email_address ORDER BY start_date)\n  FROM system_b_users\n  UNION ALL\n  SELECT id, display_name, contact_email, team, join_date, pay_rate, origin,\n         ROW_NUMBER() OVER (PARTITION BY contact_email ORDER BY join_date)\n  FROM system_c_users\n)\nSELECT employee_id, employee_name, email, department, hire_date, salary, system_source,\n       COUNT(*) OVER (PARTITION BY email) AS email_occurrences,\n       CASE WHEN COUNT(*) OVER (PARTITION BY email) > 1 THEN 'Potential Duplicate' ELSE 'Unique' END AS duplicate_status,\n       CASE WHEN email_priority = 1 THEN 'Primary Record' ELSE 'Secondary Record' END AS record_priority\nFROM consolidated\nORDER BY email, email_priority;\nDROP TABLE IF EXISTS system_a_users; DROP TABLE IF EXISTS system_b_users; DROP TABLE IF EXISTS system_c_users;",
+          "nerd_notes": "Use UNION ALL for raw consolidation, then window functions to identify and prefer a primary record.",
+          "compat_examples": {
+            "postgres": "-- Same pattern; \n-- years_of_service: date_part('day', current_date - hire_date)/365.25",
+            "mysql": "-- Same pattern; \n-- years_of_service: DATEDIFF(CURRENT_DATE, hire_date)/365.25",
+            "oracle": "-- Same pattern; \n-- years_of_service: (SYSDATE - hire_date)/365.25"
+          }
+        }
+      ]
+    },
+    {
+      "title": "6) Complex INTERSECT patterns (multi-criteria)",
+      "description": "Question: how do we express \"customers that meet all of these criteria\" when the criteria span aggregates, recency, and attributes?",
+      "narrative": "We'll create tiny customers and orders tables with loyalty_points and show multi-criteria \"intersection\" using IN lists derived from grouped queries, a single analytics CTE with flags, and a scoring approach. Each method is easy to port to engines without INTERSECT.",
+      "examples": [
+        {
+          "name": "intersect_multi_criteria",
+          "description": "Now let's say we need customers who are high value, frequent, recent, and VIP—how do we codify and intersect these sets?",
+          "sql": "DROP TABLE IF EXISTS customers_c; DROP TABLE IF EXISTS orders_c;\nCREATE TABLE customers_c(customer_id INTEGER, first_name TEXT, last_name TEXT, loyalty_points INTEGER);\nCREATE TABLE orders_c(order_id INTEGER, customer_id INTEGER, total_amount DECIMAL(10,2), order_date DATE);\nINSERT INTO customers_c VALUES (1,'Amy','Ada',1200),(2,'Ben','Bo',500),(3,'Cid','Cy',1500);\nINSERT INTO orders_c VALUES (10,1,800.00, DATE '2024-01-10'),(11,1,300.00, DATE '2024-02-10'),(12,2,50.00, DATE '2024-01-05'),(13,3,1100.00, DATE '2024-08-01');\n-- Method 1: Intersect with IN sublists\nWITH high_value AS (SELECT customer_id FROM orders_c GROUP BY customer_id HAVING SUM(total_amount) > 1000),\n     frequent    AS (SELECT customer_id FROM orders_c GROUP BY customer_id HAVING COUNT(*) > 1),\n     recent      AS (SELECT DISTINCT customer_id FROM orders_c WHERE order_date >= current_date - INTERVAL 30 DAY),\n     vip         AS (SELECT customer_id FROM customers_c WHERE loyalty_points > 1000)\nSELECT c.customer_id, c.first_name, c.last_name\nFROM customers_c c\nWHERE c.customer_id IN (SELECT customer_id FROM high_value)\n  AND c.customer_id IN (SELECT customer_id FROM frequent)\n  AND c.customer_id IN (SELECT customer_id FROM recent)\n  AND c.customer_id IN (SELECT customer_id FROM vip)\nORDER BY c.customer_id;\n-- Method 2: Flag-based analytics CTE\nWITH analytics AS (\n  SELECT c.customer_id, c.first_name, c.last_name,\n         SUM(o.total_amount) AS total_spent, COUNT(o.order_id) AS total_orders, MAX(o.order_date) AS last_order\n  FROM customers_c c LEFT JOIN orders_c o ON c.customer_id=o.customer_id\n  GROUP BY c.customer_id, c.first_name, c.last_name\n)\nSELECT customer_id, first_name, last_name, total_spent, total_orders, last_order\nFROM analytics\nWHERE total_spent > 1000 AND total_orders > 1 AND last_order >= current_date - INTERVAL 30 DAY\nORDER BY customer_id;\n-- Method 3: Scoring approach\nWITH analytics AS (\n  SELECT c.customer_id, c.first_name, c.last_name,\n         COALESCE(SUM(o.total_amount),0) AS total_spent, COUNT(o.order_id) AS total_orders, COALESCE(MAX(o.order_date), DATE '1900-01-01') AS last_order, c.loyalty_points\n  FROM customers_c c LEFT JOIN orders_c o ON c.customer_id=o.customer_id\n  GROUP BY c.customer_id, c.first_name, c.last_name, c.loyalty_points\n), scores AS (\n  SELECT *,\n         (CASE WHEN total_spent > 1000 THEN 25 ELSE 0 END +\n          CASE WHEN total_orders > 1 THEN 25 ELSE 0 END +\n          CASE WHEN last_order >= current_date - INTERVAL 30 DAY THEN 25 ELSE 0 END +\n          CASE WHEN loyalty_points > 1000 THEN 25 ELSE 0 END) AS total_score\n  FROM analytics\n)\nSELECT customer_id, first_name, last_name, total_score\nFROM scores\nWHERE total_score >= 75\nORDER BY total_score DESC, customer_id;\nDROP TABLE IF EXISTS orders_c; DROP TABLE IF EXISTS customers_c;",
+          "nerd_notes": "Choose the expression that matches how you think: set intersections via IN, boolean flags, or scores.",
+          "compat_examples": {
+            "postgres": "-- Same pattern with INTERVAL '30 day'.",
+            "mysql": "-- Use CURDATE() and INTERVAL 30 DAY.",
+            "oracle": "-- Use SYSDATE - 30 and NVL in place of COALESCE if desired."
+          }
+        }
+      ]
+    },
+    {
+      "title": "7) Advanced EXCEPT: recursive and comparative patterns",
+      "description": "Question: how do we combine EXCEPT-like analysis with recursion and window analytics?",
+      "narrative": "We'll build a small organizational hierarchy and use a recursive CTE to assemble management chains. Then we'll split managers vs individual contributors and run comparative analytics. This mirrors the HTML demo and is fully DuckDB-compatible.",
+      "examples": [
+        {
+          "name": "except_recursive_org",
+          "description": "Now let's say we need non-manager individuals with chain context and per-department salary comparisons—how do we put it together?",
+          "sql": "DROP TABLE IF EXISTS organizational_hierarchy;\nCREATE TABLE organizational_hierarchy (emp_id INTEGER PRIMARY KEY, emp_name TEXT, manager_id INTEGER, department TEXT, level INTEGER, salary DECIMAL(10,2));\nINSERT INTO organizational_hierarchy VALUES\n(1,'CEO',NULL,'Executive',1,300000),(2,'VP Sales',1,'Sales',2,180000),(3,'VP Marketing',1,'Marketing',2,175000),(4,'VP Engineering',1,'Engineering',2,200000),(5,'Sales Manager',2,'Sales',3,120000),(6,'Marketing Manager',3,'Marketing',3,115000),(7,'Engineering Manager',4,'Engineering',3,140000),(8,'Sales Rep 1',5,'Sales',4,80000),(9,'Sales Rep 2',5,'Sales',4,75000),(10,'Marketing Specialist',6,'Marketing',4,70000),(11,'Senior Developer',7,'Engineering',4,110000),(12,'Junior Developer',7,'Engineering',4,85000);\nWITH RECURSIVE management_chain AS (\n  SELECT emp_id, emp_name, manager_id, department, level, salary, emp_name AS full_chain, 1 AS chain_length\n  FROM organizational_hierarchy WHERE manager_id IS NULL\n  UNION ALL\n  SELECT oh.emp_id, oh.emp_name, oh.manager_id, oh.department, oh.level, oh.salary, mc.full_chain||' -> '||oh.emp_name AS full_chain, mc.chain_length + 1\n  FROM organizational_hierarchy oh JOIN management_chain mc ON oh.manager_id = mc.emp_id\n), managers AS (SELECT DISTINCT manager_id AS emp_id FROM organizational_hierarchy WHERE manager_id IS NOT NULL), individual_contributors AS (\n  SELECT e.emp_id, e.emp_name, e.department, e.level, e.salary FROM organizational_hierarchy e\n  WHERE e.emp_id NOT IN (SELECT emp_id FROM managers)\n)\nSELECT ie.emp_id, ie.emp_name, ie.department, ie.level, ie.salary, mc.full_chain, mc.chain_length,\n       ROUND(ie.salary * 100.0 / (SELECT AVG(salary) FROM individual_contributors d WHERE d.department = ie.department), 2) AS dept_salary_pct,\n       CASE WHEN ie.salary > (SELECT AVG(salary) FROM individual_contributors d WHERE d.department = ie.department) THEN 'Above Average'\n            WHEN ie.salary = (SELECT AVG(salary) FROM individual_contributors d WHERE d.department = ie.department) THEN 'At Average'\n            ELSE 'Below Average' END AS dept_salary_comparison\nFROM individual_contributors ie LEFT JOIN management_chain mc ON ie.emp_id = mc.emp_id\nORDER BY ie.department, ie.salary DESC;\n-- Temporal comparison variant\nWITH current_employees AS (SELECT emp_id, emp_name, department, salary FROM organizational_hierarchy),\n     past_employees AS (SELECT 13 AS emp_id, 'Former Employee 1' AS emp_name, 'Sales' AS department, 70000 AS salary UNION ALL SELECT 14,'Former Employee 2','Engineering',95000 UNION ALL SELECT 15,'Former Employee 3','Marketing',65000),\n     employee_comparison AS (\n       SELECT 'Current' AS status, emp_id, emp_name, department, salary FROM current_employees\n       UNION ALL\n       SELECT 'Former', emp_id, emp_name, department, salary FROM past_employees\n     )\nSELECT status, emp_id, emp_name, department, salary,\n       AVG(salary) OVER (PARTITION BY status, department) AS avg_salary_by_status_dept,\n       COUNT(*)  OVER (PARTITION BY status, department) AS count_by_status_dept,\n       RANK()    OVER (PARTITION BY status ORDER BY salary DESC) AS salary_rank_by_status\nFROM employee_comparison\nORDER BY department, status, salary DESC;\n-- Coverage of missing combinations (role levels by dept)\nWITH all_depts AS (SELECT DISTINCT department FROM organizational_hierarchy), levels AS (SELECT DISTINCT level FROM organizational_hierarchy), all_possible AS (\n  SELECT d.department, l.level, CASE WHEN l.level=1 THEN 'Executive' WHEN l.level=2 THEN 'VP' WHEN l.level=3 THEN 'Manager' WHEN l.level=4 THEN 'Individual Contributor' ELSE 'Other' END AS role_type\n  FROM all_depts d CROSS JOIN levels l\n), actual AS (\n  SELECT department, level, CASE WHEN level=1 THEN 'Executive' WHEN level=2 THEN 'VP' WHEN level=3 THEN 'Manager' WHEN level=4 THEN 'Individual Contributor' ELSE 'Other' END AS role_type\n  FROM organizational_hierarchy\n), missing AS (SELECT * FROM all_possible ap WHERE NOT EXISTS (SELECT 1 FROM actual a WHERE a.department=ap.department AND a.level=ap.level AND a.role_type=ap.role_type))\nSELECT department, level, role_type,\n       COUNT(*) OVER (PARTITION BY department) AS missing_levels_in_dept,\n       COUNT(*) OVER (PARTITION BY level) AS depts_missing_this_level\nFROM missing\nORDER BY department, level;\nDROP TABLE IF EXISTS organizational_hierarchy;",
+          "nerd_notes": "Recursive CTEs create chains; window functions compare across groups. We emulate EXCEPT-like ideas via NOT EXISTS/NOT IN.",
+          "compat_examples": {
+            "postgres": "-- Same recursive CTE and window syntax.",
+            "mysql": "-- Recursive CTEs supported in 8.0+; earlier versions need alternative approaches.",
+            "oracle": "-- Use CONNECT BY for hierarchy or recursive subquery factoring in modern versions."
+          }
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+      "id": "set-top-1",
+      "prompt": "Combine two inline lists with UNION ALL then return value counts, ordered by count desc then value asc.",
+      "answer_sql": "WITH a(val) AS (VALUES ('a'),('b')), b(val) AS (VALUES ('b'),('c')) SELECT val, COUNT(*) AS cnt FROM (SELECT val FROM a UNION ALL SELECT val FROM b) t GROUP BY val ORDER BY cnt DESC, val;"
+    },
+    {
+      "id": "set-overlap",
+      "prompt": "Using inline lists a(x)=(1,2,3) and b(x)=(2,3,4), return the intersection in ascending order.",
+      "answer_sql": "WITH a(x) AS (VALUES (1),(2),(3)), b(x) AS (VALUES (2),(3),(4)) SELECT x FROM a INTERSECT SELECT x FROM b ORDER BY x;"
+    },
+    {
+      "id": "set-except",
+      "prompt": "Using inline lists a(x)=(1,2,3) and b(x)=(2,3,4), return values in a but not in b.",
+      "answer_sql": "WITH a(x) AS (VALUES (1),(2),(3)), b(x) AS (VALUES (2),(3),(4)) SELECT x FROM a EXCEPT SELECT x FROM b ORDER BY x;"
+    }
+  ]
+}

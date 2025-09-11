@@ -1,0 +1,521 @@
+{
+  "title": "String Functions & Manipulation",
+  "description": "Question-first tour of string work in SQL: how to format names, extract pieces, validate patterns, and clean messy text. Everything is DuckDB/WASM-ready, idempotent, and deterministic.",
+  "sections": [
+    {
+      "title": "0) Introduction: String functions",
+      "description": "What string functions do and how to use them safely.",
+      "narrative": "Strings drive labels, parsing, validation, and cleanup. Keep examples deterministic (ORDER BY), guard for missing delimiters before slicing, prefer simple LIKE for wildcards, and reach for regex only when needed. Mind NULL propagation in concatenation and quote regex backslashes properly.",
+      "examples": []
+    },
+    {
+      "title": "1.5) Cheat Sheet: String Essentials",
+      "description": "Tiny, copy-ready patterns for the 80%.",
+      "narrative": "Case, concatenation, domain extraction, trim/replace, and a minimal regex extract. All inline VALUES and deterministic.",
+      "examples": [
+        {
+          "name": "cs_case_and_concat_quick",
+          "description": "Upper/lower and a friendly greeting.",
+          "sql": "SELECT name, UPPER(name) AS upper_name, LOWER(name) AS lower_name, 'Hi ' || name AS greeting\nFROM (VALUES ('Alice'),('Bob')) AS t(name)\nORDER BY name;",
+          "nerd_notes": "Concatenation with || is ANSI; NULL || 'x' yields NULL—use COALESCE to protect if needed.",
+          "compat_examples": {
+            "postgres": "SELECT name, UPPER(name), LOWER(name), 'Hi ' || name FROM (VALUES ('Alice'),('Bob')) AS t(name) ORDER BY name;",
+            "mysql": "SELECT name, UPPER(name) AS upper_name, LOWER(name) AS lower_name, CONCAT('Hi ', name) AS greeting FROM (SELECT 'Alice' AS name UNION ALL SELECT 'Bob') t ORDER BY name;",
+            "oracle": "SELECT name, UPPER(name) AS upper_name, LOWER(name) AS lower_name, 'Hi ' || name AS greeting FROM (SELECT 'Alice' name FROM dual UNION ALL SELECT 'Bob' FROM dual) t ORDER BY name;"
+          }
+        },
+        {
+          "name": "cs_split_part_domain_quick",
+          "description": "Extract email local part and domain.",
+          "sql": "SELECT email, split_part(email,'@',1) AS local, split_part(email,'@',2) AS domain\nFROM (VALUES ('alice@example.com'),('bob@work.org')) AS t(email)\nORDER BY email;",
+          "nerd_notes": "split_part(str, delim, index) is tidy vs manual INSTR/SUBSTR chains.",
+          "compat_examples": {
+            "postgres": "SELECT email, split_part(email,'@',1) AS local, split_part(email,'@',2) AS domain FROM (VALUES ('alice@example.com'),('bob@work.org')) t(email) ORDER BY email;",
+            "mysql": "SELECT email, SUBSTRING_INDEX(email,'@',1) AS local, SUBSTRING_INDEX(email,'@',-1) AS domain FROM (SELECT 'alice@example.com' AS email UNION ALL SELECT 'bob@work.org') t ORDER BY email;",
+            "oracle": "SELECT email, REGEXP_SUBSTR(email,'[^@]+',1,1) AS local, REGEXP_SUBSTR(email,'[^@]+',1,2) AS domain FROM (SELECT 'alice@example.com' email FROM dual UNION ALL SELECT 'bob@work.org' FROM dual) t ORDER BY email;"
+          }
+        },
+        {
+          "name": "cs_trim_replace_quick",
+          "description": "Trim spaces and swap characters.",
+          "sql": "SELECT TRIM('  hello  ') AS trimmed, REPLACE('a_b_c','_','-') AS swapped;",
+          "nerd_notes": "TRIM/LTRIM/RTRIM for whitespace; REPLACE is literal—use REGEXP_REPLACE for patterns.",
+          "compat_examples": {
+            "postgres": "SELECT TRIM('  hello  ') AS trimmed, REPLACE('a_b_c','_','-') AS swapped;",
+            "mysql": "SELECT TRIM('  hello  ') AS trimmed, REPLACE('a_b_c','_','-') AS swapped;",
+            "oracle": "SELECT TRIM('  hello  ') AS trimmed, REPLACE('a_b_c','_','-') AS swapped FROM dual;"
+          }
+        },
+        {
+          "name": "cs_regex_extract_quick",
+          "description": "Extract parts with a regex capture.",
+          "sql": "SELECT txt, REGEXP_EXTRACT(txt, '([A-Z]{2})([0-9]+)', 1) AS code_prefix, REGEXP_EXTRACT(txt, '([A-Z]{2})([0-9]+)', 2) AS code_num\nFROM (VALUES ('AB123'),('CD9'),('xx')) AS t(txt)\nORDER BY txt;",
+          "nerd_notes": "When a row doesn't match, REGEXP_EXTRACT returns NULL.",
+          "compat_examples": {
+            "postgres": "SELECT txt, SUBSTRING(txt FROM '([A-Z]{2})([0-9]+)') AS whole FROM (VALUES ('AB123'),('CD9'),('xx')) t(txt) ORDER BY txt; -- or use regexp_matches in a lateral join",
+            "mysql": "SELECT txt, REGEXP_SUBSTR(txt, '([A-Z]{2})([0-9]+)', 1, 1, NULL, 1) AS code_prefix, REGEXP_SUBSTR(txt, '([A-Z]{2})([0-9]+)', 1, 1, NULL, 2) AS code_num FROM (SELECT 'AB123' txt UNION ALL SELECT 'CD9' UNION ALL SELECT 'xx') t ORDER BY txt;",
+            "oracle": "SELECT txt, REGEXP_SUBSTR(txt, '([A-Z]{2})([0-9]+)', 1, 1, NULL, 1) AS code_prefix, REGEXP_SUBSTR(txt, '([A-Z]{2})([0-9]+)', 1, 1, NULL, 2) AS code_num FROM (SELECT 'AB123' txt FROM dual UNION ALL SELECT 'CD9' FROM dual UNION ALL SELECT 'xx' FROM dual) t ORDER BY txt;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "1.6) Pitfalls, Tips, and Q&A",
+      "description": "Common string gotchas and quick fixes.",
+      "narrative": "• Case sensitivity: Some engines have case-insensitive LIKE by default—normalize with LOWER() for portability; DuckDB also supports ILIKE.\n• Regex portability: Function names/flags differ; keep patterns simple and escape backslashes.\n• Empty string vs NULL: Oracle treats '' as NULL—COALESCE defensively in cross-dialect code.\n• TRIM nuances: Default trims spaces; multi-byte/Unicode whitespace may need REGEXP_REPLACE.\n• Concatenation: NULL || 'x' yields NULL—wrap with COALESCE(col,'').\n• Delimiter slicing: Check INSTR/POSITION > 0 before subtracting to avoid negative lengths.",
+      "examples": []
+    },
+    {
+      "title": "1. Setup: users table",
+      "examples": [
+        {
+          "name": "create_users",
+          "sql": "DROP TABLE IF EXISTS users; CREATE TABLE users (id INTEGER, first_name TEXT, last_name TEXT, email TEXT); INSERT INTO users VALUES (1,'Alice','Smith','alice@example.com'),(2,'Bob','Jones','bob@example.com');",
+          "description": "Question: how do we create a tiny users dataset we can reuse across string demos?",
+          "nerd_notes": "Keep setup idempotent so you can re-run the lesson safely.",
+          "compat_examples": {
+            "postgres": "-- Same DDL and INSERT syntax.",
+            "mysql": "-- Same DDL; use VARCHAR instead of TEXT if you want lengths.",
+            "oracle": "-- Use VARCHAR2 types in DDL; INSERT syntax is the same."
+          }
+        }
+      ],
+      "narrative": "We need a minimal users table to make examples concrete—so we build it once and reuse it.",
+      "nerd_notes": "In real projects add constraints and not-null rules; here we keep it lean for clarity."
+    },
+    {
+      "title": "9. Advanced pattern matching: user_data",
+      "narrative": "How can we validate usernames/emails, classify phones by country code, and extract parts using regex and positioning?",
+      "nerd_notes": "Prefer REGEXP_* for character classes and anchors; use INSTR guards before subtracting positions.",
+      "examples": [
+        {
+          "name": "user_data_setup_and_validation",
+          "sql": "DROP TABLE IF EXISTS user_data;\nCREATE TABLE user_data (\n  user_id INTEGER,\n  username VARCHAR,\n  email VARCHAR,\n  phone VARCHAR,\n  address VARCHAR,\n  bio VARCHAR,\n  website VARCHAR,\n  tags VARCHAR\n);\nINSERT INTO user_data VALUES\n  (1, 'john_doe123', 'john.doe@email.com', '+1-555-0123', '123 Main St, NY, NY 10001', 'Tech enthusiast & coffee lover. Love coding!', 'https://johndoe.dev', 'tech, coding, coffee'),\n  (2, 'sarah_smith', 'sarah.smith@company.org', '+44-20-7946-0123', '456 Oak Ave, London, UK SW1A 1AA', 'Marketing professional with 5+ years experience in digital marketing', 'https://sarahsmith.co.uk', 'marketing, digital, strategy'),\n  (3, 'mike_wilson', 'mike.wilson@gmail.com', '+1-415-555-0199', '789 Pine St, San Francisco, CA 94102', 'Software developer passionate about AI and machine learning', NULL, 'ai, ml, python, tensorflow'),\n  (4, 'emma_davis', 'emma.davis@university.edu', '+61-2-9351-0123', '321 University Ave, Sydney, NSW 2006', 'PhD student researching machine learning algorithms', 'https://research.university.edu/emma', 'research, ml, algorithms, phd');\n\nSELECT\n  user_id, username, email, phone,\n  CASE\n    WHEN REGEXP_MATCHES(username, '^[A-Za-z][A-Za-z0-9_]{2,19}$') THEN 'Valid'\n    ELSE 'Invalid'\n  END AS username_status,\n  CASE WHEN INSTR(email, '@') > 0 THEN SUBSTR(email, INSTR(email, '@') + 1) END AS email_domain,\n  CASE\n    WHEN email LIKE '%@gmail.com' THEN 'Gmail'\n    WHEN email LIKE '%@yahoo.com' THEN 'Yahoo'\n    WHEN email LIKE '%@hotmail.com' THEN 'Hotmail'\n    WHEN email LIKE '%.edu' THEN 'Educational'\n    WHEN email LIKE '%.org' THEN 'Organization'\n    WHEN email LIKE '%.gov' THEN 'Government'\n    ELSE 'Other'\n  END AS email_provider,\n  CASE\n    WHEN phone LIKE '+1-%' THEN 'US'\n    WHEN phone LIKE '+44-%' THEN 'UK'\n    WHEN phone LIKE '+61-%' THEN 'Australia'\n    WHEN phone LIKE '+33-%' THEN 'France'\n    ELSE 'Other'\n  END AS phone_country,\n  CASE WHEN phone LIKE '+1-%' THEN SUBSTR(phone, 4, 3) END AS area_code\nFROM user_data\nORDER BY user_id;",
+          "description": "Now let's say we need to validate usernames, label email providers, and categorize phone numbers—how do we do that succinctly?",
+          "nerd_notes": "Regex anchors (^) and ($) enforce whole-string checks; LIKE is great for suffix/prefix tests.",
+          "compat_examples": {
+            "postgres": "-- Use REGEXP_LIKE(username, '^[A-Za-z][A-Za-z0-9_]{2,19}$') or username ~ '^[A-Za-z][A-Za-z0-9_]{2,19}$'.",
+            "mysql": "-- Use REGEXP_LIKE(username, '^[A-Za-z][A-Za-z0-9_]{2,19}$') in MySQL 8+.",
+            "oracle": "-- Use REGEXP_LIKE for username/email checks; INSTR/SUBSTR for slicing."
+          }
+        },
+        {
+          "name": "user_data_address_and_website",
+          "sql": "-- Address parsing: street number, name, city, state, postal code\nSELECT\n  user_id, address,\n  CASE WHEN INSTR(address, ' ') > 0 THEN SUBSTR(address, 1, INSTR(address, ' ') - 1) END AS street_number,\n  CASE WHEN INSTR(address, ',') > 0 THEN TRIM(SUBSTR(address, INSTR(address, ' ') + 1, INSTR(address, ',') - INSTR(address, ' ') - 1)) END AS street_name,\n  CASE WHEN INSTR(address, ',') > 0 AND INSTR(SUBSTR(address, INSTR(address, ',') + 1), ',') > 0 THEN\n    TRIM(SUBSTR(address, INSTR(address, ',') + 1, INSTR(SUBSTR(address, INSTR(address, ',') + 1), ',') - 1)) END AS city,\n  CASE WHEN INSTR(SUBSTR(address, INSTR(address, ',') + 1), ',') > 0 THEN\n    TRIM(SUBSTR(address, INSTR(address, ',') + INSTR(SUBSTR(address, INSTR(address, ',') + 1), ',') + 1, 2)) END AS state,\n  CASE\n    WHEN REGEXP_MATCHES(address, '.*[0-9]{5}(-[0-9]{4})?$') THEN REGEXP_EXTRACT(address, '([0-9]{5})(?:-[0-9]{4})?$', 1)\n    WHEN REGEXP_MATCHES(address, '.*[A-Z]{1,2}[0-9][A-Z0-9]? [0-9][A-Z]{2}$') THEN REGEXP_EXTRACT(address, '([A-Z]{1,2}[0-9][A-Z0-9]? [0-9][A-Z]{2})$', 1)\n    WHEN REGEXP_MATCHES(address, '.*[0-9]{4}$') THEN REGEXP_EXTRACT(address, '([0-9]{4})$', 1)\n    ELSE 'Unknown'\n  END AS postal_code\nFROM user_data\nORDER BY user_id;\n\n-- Website URL analysis\nSELECT\n  user_id, website,\n  CASE WHEN website LIKE 'http%://%' AND LENGTH(website) > 10 THEN 'Valid' ELSE 'Invalid or Missing' END AS url_status,\n  CASE WHEN website LIKE 'https://%' THEN 'Secure (HTTPS)' WHEN website LIKE 'http://%' THEN 'Non-secure (HTTP)' ELSE 'No Protocol' END AS security_status,\n  CASE WHEN website LIKE 'http%://%' THEN\n    CASE WHEN INSTR(SUBSTR(website, INSTR(website, '://') + 3), '/') > 0 THEN\n      SUBSTR(website, INSTR(website, '://') + 3, INSTR(SUBSTR(website, INSTR(website, '://') + 3), '/') - 1)\n    ELSE SUBSTR(website, INSTR(website, '://') + 3) END\n  END AS domain,\n  CASE\n    WHEN website LIKE '%.co.uk' THEN 'UK Commercial'\n    WHEN website LIKE '%.com' THEN 'Commercial'\n    WHEN website LIKE '%.org' THEN 'Organization'\n    WHEN website LIKE '%.edu' THEN 'Educational'\n    WHEN website LIKE '%.dev' THEN 'Development'\n    ELSE 'Other'\n  END AS domain_type,\n  CASE \n    WHEN website LIKE 'http%://%' AND INSTR(SUBSTR(website, INSTR(website, '://') + 3), '/') > 0 THEN\n      SUBSTR( SUBSTR(website, INSTR(website, '://') + 3), INSTR(SUBSTR(website, INSTR(website, '://') + 3), '/'))\n    ELSE '/'\n  END AS url_path\nFROM user_data\nWHERE website IS NOT NULL\nORDER BY user_id;",
+          "description": "Now let's say we need to break down free-form addresses and URLs—how do we extract each part reliably?",
+          "nerd_notes": "Regex helps with postal codes; for domains, parse between '://' and the first '/'.",
+          "compat_examples": {
+            "postgres": "-- Use REGEXP_MATCHES/REGEXP_REPLACE or substring with regex; POSITION/STRPOS for delimiters.",
+            "mysql": "-- Use REGEXP_LIKE / REGEXP_SUBSTR (8.0+) for postal codes; LOCATE/SUBSTR for domains.",
+            "oracle": "-- Use REGEXP_LIKE and REGEXP_SUBSTR; INSTR/SUBSTR for URL parts."
+          }
+        },
+        {
+          "name": "user_data_cleanup",
+          "sql": "DROP TABLE IF EXISTS user_data;",
+          "description": "Question: how do we reset this mini-lab so re-runs are clean?",
+          "nerd_notes": "Keep table lifecycles explicit in lessons.",
+          "compat_examples": {
+            "postgres": "-- DROP TABLE IF EXISTS user_data;",
+            "mysql": "-- DROP TABLE IF EXISTS user_data;",
+            "oracle": "-- BEGIN EXECUTE IMMEDIATE 'DROP TABLE user_data'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "10. Complex string transformations: product_catalog",
+      "narrative": "How do we parse product names/specs, build slugs, and summarize text fields?",
+      "nerd_notes": "Use CASE + INSTR/SUBSTR for positional parsing; GROUP_CONCAT builds readable lists.",
+      "examples": [
+        {
+          "name": "product_catalog_setup_and_parse",
+          "sql": "DROP TABLE IF EXISTS product_catalog;\nCREATE TABLE product_catalog (\n  product_id INTEGER,\n  product_name VARCHAR,\n  sku VARCHAR,\n  description VARCHAR,\n  specifications VARCHAR,\n  tags VARCHAR,\n  metadata VARCHAR\n);\nINSERT INTO product_catalog VALUES\n  (1, 'iPhone 15 Pro Max 256GB', 'IPH15PM256', 'Latest iPhone with advanced camera system and A17 Pro chip', 'Display: 6.7-inch, Camera: 48MP, Storage: 256GB, Color: Natural Titanium', 'smartphone, apple, premium, camera, 5g', '{\"brand\": \"Apple\", \"category\": \"Electronics\", \"release_year\": 2023}'),\n  (2, 'Dell XPS 13 Laptop', 'DLXPS13I7', 'Ultra-portable laptop with Intel i7 processor', 'CPU: Intel i7-1355U, RAM: 16GB, Storage: 512GB SSD, Display: 13.4-inch', 'laptop, dell, ultrabook, intel, portable', '{\"brand\": \"Dell\", \"category\": \"Computers\", \"release_year\": 2023}'),\n  (3, 'Sony WH-1000XM5 Headphones', 'SNYWH1000XM5', 'Industry-leading noise cancelling wireless headphones', 'Battery: 30 hours, ANC: Yes, Codec: LDAC, Weight: 250g', 'headphones, sony, wireless, noise-cancelling, premium', '{\"brand\": \"Sony\", \"category\": \"Audio\", \"release_year\": 2023}');\n\nSELECT\n  product_id, product_name,\n  CASE\n    WHEN product_name LIKE '%iPhone%' THEN SUBSTR(product_name, INSTR(product_name, 'iPhone') + 7, INSTR(SUBSTR(product_name, INSTR(product_name, 'iPhone') + 7), ' ') - 1)\n    WHEN product_name LIKE '%XPS%' THEN 'XPS 13'\n    WHEN product_name LIKE '%WH-%' THEN SUBSTR(product_name, INSTR(product_name, 'WH-'), 9)\n    ELSE 'Unknown'\n  END AS model_number,\n  CASE\n    WHEN product_name LIKE '%256GB%' THEN '256GB'\n    WHEN product_name LIKE '%512GB%' THEN '512GB'\n    WHEN product_name LIKE '%1TB%' THEN '1TB'\n    ELSE 'Unknown'\n  END AS storage,\n  REPLACE(REPLACE(specifications, ': ', '='), ', ', '; ') AS spec_pairs,\n  CASE\n    WHEN INSTR(specifications, 'Display: ') > 0\n     AND INSTR(SUBSTR(specifications, INSTR(specifications, 'Display: ') + 9), '-inch') > 0\n    THEN CAST(\n      SUBSTR(\n        specifications,\n        INSTR(specifications, 'Display: ') + 9,\n        INSTR(SUBSTR(specifications, INSTR(specifications, 'Display: ') + 9), '-inch') - 1\n      ) AS DECIMAL\n    )\n  END AS display_size,\n  '[\"' || REPLACE(tags, ', ', '\", \"') || '\"]' AS tags_array\nFROM product_catalog\nORDER BY product_id;\n\nSELECT\n  product_id, product_name, description,\n  LOWER(REPLACE(REPLACE(REPLACE(REPLACE(product_name, ' ', '-'), 'iPhone', 'iphone'), 'Pro', 'pro'), 'Max', 'max')) AS url_slug,\n  CASE\n    WHEN INSTR(LOWER(description), 'camera') > 0 THEN 'Camera Focus'\n    WHEN INSTR(LOWER(description), 'processor') > 0 OR INSTR(LOWER(description), 'chip') > 0 THEN 'Performance Focus'\n    WHEN INSTR(LOWER(description), 'battery') > 0 THEN 'Battery Focus'\n    WHEN INSTR(LOWER(description), 'noise') > 0 THEN 'Audio Focus'\n    ELSE 'General'\n  END AS product_focus,\n  CASE WHEN INSTR(description, '.') > 0 THEN SUBSTR(description, 1, INSTR(description, '.') - 1) ELSE description END AS short_description,\n  (LENGTH(description) - LENGTH(REPLACE(description, ' ', '')) + 1) AS word_count,\n  ROUND((LENGTH(description) - LENGTH(REPLACE(description, ' ', '')) + 1) / 200.0, 1) AS reading_time_minutes,\n  ROUND( (CASE WHEN INSTR(LOWER(description), 'advanced') > 0 THEN 1 ELSE 0 END + CASE WHEN INSTR(LOWER(description), 'wireless') > 0 THEN 1 ELSE 0 END + CASE WHEN INSTR(LOWER(description), 'premium') > 0 THEN 1 ELSE 0 END) * 100.0 / 3, 2) AS technical_density_pct\nFROM product_catalog\nORDER BY product_id;\n\nSELECT\n  'Product Catalog Summary' AS report_title,\n  COUNT(*) AS total_products,\n  GROUP_CONCAT(product_name, '; ') AS all_product_names,\n  GROUP_CONCAT(DISTINCT CASE WHEN product_name LIKE 'iPhone%' THEN 'Apple' WHEN product_name LIKE 'Dell%' THEN 'Dell' WHEN product_name LIKE 'Sony%' THEN 'Sony' ELSE 'Other' END, ', ') AS brands,\n  ROUND(AVG(LENGTH(product_name)), 1) AS avg_name_length\nFROM product_catalog;",
+          "description": "Now let's say we want to pull a model number, storage size, and a clean spec/tags view—how do we parse that?",
+          "nerd_notes": "For numeric extraction from text, SUBSTR between two markers and CAST.",
+          "compat_examples": {
+            "postgres": "-- Use string functions or REGEXP_SUBSTR to slice between markers.",
+            "mysql": "-- Use SUBSTRING/LOCATE; JSON functions if tags were a JSON array.",
+            "oracle": "-- Use INSTR/SUBSTR/REGEXP_SUBSTR; CAST to NUMBER."
+          }
+        },
+        {
+          "name": "product_catalog_text_processing",
+          "sql": "SELECT\n  product_id, product_name, description,\n  LOWER(REPLACE(REPLACE(REPLACE(REPLACE(product_name, ' ', '-'), 'iPhone', 'iphone'), 'Pro', 'pro'), 'Max', 'max')) AS url_slug,\n  CASE\n    WHEN INSTR(LOWER(description), 'camera') > 0 THEN 'Camera Focus'\n    WHEN INSTR(LOWER(description), 'processor') > 0 OR INSTR(LOWER(description), 'chip') > 0 THEN 'Performance Focus'\n    WHEN INSTR(LOWER(description), 'battery') > 0 THEN 'Battery Focus'\n    WHEN INSTR(LOWER(description), 'noise') > 0 THEN 'Audio Focus'\n    ELSE 'General'\n  END AS product_focus,\n  CASE WHEN INSTR(description, '.') > 0 THEN SUBSTR(description, 1, INSTR(description, '.') - 1) ELSE description END AS short_description,\n  (LENGTH(description) - LENGTH(REPLACE(description, ' ', '')) + 1) AS word_count,\n  ROUND((LENGTH(description) - LENGTH(REPLACE(description, ' ', '')) + 1) / 200.0, 1) AS reading_time_minutes,\n  ROUND( (CASE WHEN INSTR(LOWER(description), 'advanced') > 0 THEN 1 ELSE 0 END + CASE WHEN INSTR(LOWER(description), 'wireless') > 0 THEN 1 ELSE 0 END + CASE WHEN INSTR(LOWER(description), 'premium') > 0 THEN 1 ELSE 0 END) * 100.0 / 3, 2) AS technical_density_pct\nFROM product_catalog\nORDER BY product_id;",
+          "description": "Now let's say we need clean slugs, focus labeling, and quick readability stats—how do we compute those?",
+          "nerd_notes": "Slugging: normalize to lowercase and replace spaces/tokens deterministically.",
+          "compat_examples": {
+            "postgres": "-- REPLACE/LOWER are portable; regex replace via REGEXP_REPLACE.",
+            "mysql": "-- Use REPLACE/LOWER; watch collation for case-insensitivity.",
+            "oracle": "-- Use REPLACE/LOWER; REGEXP_REPLACE for complex slug rules."
+          }
+        },
+        {
+          "name": "product_catalog_aggregation",
+          "sql": "SELECT\n  'Product Catalog Summary' AS report_title,\n  COUNT(*) AS total_products,\n  GROUP_CONCAT(product_name, '; ') AS all_product_names,\n  GROUP_CONCAT(DISTINCT CASE WHEN product_name LIKE 'iPhone%' THEN 'Apple' WHEN product_name LIKE 'Dell%' THEN 'Dell' WHEN product_name LIKE 'Sony%' THEN 'Sony' ELSE 'Other' END, ', ') AS brands,\n  ROUND(AVG(LENGTH(product_name)), 1) AS avg_name_length\nFROM product_catalog;",
+          "description": "Now let's say we need a one-row summary with names and brands—how do we aggregate nicely?",
+          "nerd_notes": "GROUP_CONCAT builds readable strings; DISTINCT removes duplicates.",
+          "compat_examples": {
+            "postgres": "-- Use string_agg(col, '; ') and array_agg(DISTINCT ...).",
+            "mysql": "-- Use GROUP_CONCAT(col SEPARATOR '; '); DISTINCT is supported.",
+            "oracle": "-- Use LISTAGG(col, '; ') WITHIN GROUP (ORDER BY ...)."
+          }
+        },
+        {
+          "name": "product_catalog_cleanup",
+          "sql": "DROP TABLE IF EXISTS product_catalog;",
+          "description": "Question: how do we clean up demo tables at the end?",
+          "nerd_notes": "Keep drops explicit and idempotent.",
+          "compat_examples": {
+            "postgres": "-- DROP TABLE IF EXISTS product_catalog;",
+            "mysql": "-- DROP TABLE IF EXISTS product_catalog;",
+            "oracle": "-- BEGIN EXECUTE IMMEDIATE 'DROP TABLE product_catalog'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "11. Text analytics: customer_reviews",
+      "narrative": "How can we approximate sentiment and extract quick insights using plain SQL string ops?",
+      "nerd_notes": "Heuristics are illustrative only; for production use ML/NLP pipelines.",
+      "examples": [
+        {
+          "name": "customer_reviews_setup",
+          "sql": "DROP TABLE IF EXISTS customer_reviews;\nCREATE TABLE customer_reviews (\n  review_id INTEGER,\n  customer_id INTEGER,\n  product_id INTEGER,\n  review_text VARCHAR,\n  rating INTEGER,\n  review_date DATE,\n  helpful_votes INTEGER\n);\nINSERT INTO customer_reviews VALUES\n  (1, 1, 1, 'This iPhone is absolutely amazing! The camera quality is outstanding and the performance is lightning fast. Highly recommend!', 5, '2024-01-15', 25),\n  (2, 2, 1, 'Great phone but battery life could be better. Still, very satisfied with the purchase.', 4, '2024-01-16', 12),\n  (3, 3, 2, 'The Dell XPS is excellent for work. Fast, reliable, and the display is gorgeous. Perfect for programming.', 5, '2024-01-17', 18),\n  (4, 4, 3, 'Sony headphones are good but overpriced. Sound quality is decent but not worth the premium.', 3, '2024-01-18', 8),\n  (5, 5, 1, 'Camera is terrible in low light. Otherwise, it is a solid phone for the price.', 3, '2024-01-19', 15);",
+          "description": "Question: how do we set up a tiny reviews dataset to analyze?",
+          "nerd_notes": "Keep the dataset minimal yet varied to exercise different branches.",
+          "compat_examples": {
+            "postgres": "-- Same DDL/INSERTs.",
+            "mysql": "-- Same DDL; consider VARCHAR length tuning.",
+            "oracle": "-- Use VARCHAR2 for text columns."
+          }
+        },
+        {
+          "name": "review_sentiment_stats",
+          "sql": "SELECT\n  review_id, review_text, rating,\n  LENGTH(review_text) AS char_count,\n  LENGTH(review_text) - LENGTH(REPLACE(review_text, ' ', '')) + 1 AS word_count,\n  CASE\n    WHEN LOWER(review_text) LIKE '%amazing%' OR LOWER(review_text) LIKE '%outstanding%' OR LOWER(review_text) LIKE '%excellent%' THEN 'Very Positive'\n    WHEN LOWER(review_text) LIKE '%great%' OR LOWER(review_text) LIKE '%good%' OR LOWER(review_text) LIKE '%satisfied%' THEN 'Positive'\n    WHEN LOWER(review_text) LIKE '%terrible%' OR LOWER(review_text) LIKE '%disappointed%' OR LOWER(review_text) LIKE '%overpriced%' THEN 'Negative'\n    ELSE 'Neutral'\n  END AS sentiment,\n  (LENGTH(review_text) - LENGTH(REPLACE(LOWER(review_text), '!', ''))) AS exclamation_count,\n  (LENGTH(review_text) - LENGTH(REPLACE(review_text, '?', ''))) AS question_count\nFROM customer_reviews\nORDER BY review_id;",
+          "description": "Now let's say we want coarse sentiment, word counts, and punctuation signals—how do we compute them simply?",
+          "nerd_notes": "Counting char occurrences via LENGTH - LENGTH(REPLACE(...)).",
+          "compat_examples": {
+            "postgres": "-- Same patterns; use regexp_count for complex tokens if needed.",
+            "mysql": "-- Same patterns work; consider JSON_TABLE for richer tokenization elsewhere.",
+            "oracle": "-- Use LENGTH/REPLACE; REGEXP_COUNT for pattern counts."
+          }
+        },
+        {
+          "name": "review_feature_mentions",
+          "sql": "WITH reviews AS (\n  SELECT review_id, review_text, (LENGTH(review_text) - LENGTH(REPLACE(review_text, ' ', '')) + 1) AS word_count, LOWER(review_text) AS t\n  FROM customer_reviews\n)\nSELECT\n  review_id,\n  CASE WHEN t LIKE '%camera%' THEN 'Camera' END AS camera,\n  CASE WHEN t LIKE '%battery%' THEN 'Battery' END AS battery,\n  CASE WHEN t LIKE '%performance%' OR t LIKE '%fast%' THEN 'Performance' END AS performance,\n  CASE WHEN word_count > 50 THEN 'Detailed' WHEN word_count > 20 THEN 'Moderate' ELSE 'Brief' END AS review_depth,\n  CASE WHEN t LIKE '%but%' OR t LIKE '%however%' OR t LIKE '%although%' THEN 'Constructive' ELSE 'Simple' END AS feedback_type\nFROM reviews\nORDER BY review_id;",
+          "description": "Now let's say we want to detect features mentioned and classify review depth—how do we do that?",
+          "nerd_notes": "Lower once, reuse via CTE to avoid repeated LOWER calls.",
+          "compat_examples": {
+            "postgres": "-- Same; ILIKE for case-insensitive matches if enabled.",
+            "mysql": "-- Same; LIKE is case-insensitive depending on collation.",
+            "oracle": "-- Use LOWER(review_text) LIKE pattern for case-insensitive search."
+          }
+        },
+        {
+          "name": "customer_reviews_summary",
+          "sql": "SELECT\n  'Review Analytics Summary' AS report_type,\n  COUNT(*) AS total_reviews,\n  ROUND(AVG(rating), 2) AS avg_rating,\n  ROUND(AVG(LENGTH(review_text)), 1) AS avg_review_length,\n  SUM(CASE WHEN LOWER(review_text) LIKE '%camera%' THEN 1 ELSE 0 END) AS camera_mentions,\n  SUM(CASE WHEN LOWER(review_text) LIKE '%battery%' THEN 1 ELSE 0 END) AS battery_mentions,\n  SUM(CASE WHEN LOWER(review_text) LIKE '%performance%' THEN 1 ELSE 0 END) AS performance_mentions,\n  ROUND(AVG(helpful_votes), 1) AS avg_helpful_votes,\n  MAX(helpful_votes) AS max_helpful_votes,\n  MIN(helpful_votes) AS min_helpful_votes\nFROM customer_reviews;",
+          "description": "Now let's say we want a one-row summary across the dataset—what should we compute?",
+          "nerd_notes": "Aggregate and round to keep outputs neat.",
+          "compat_examples": {
+            "postgres": "-- Same aggregates.",
+            "mysql": "-- Same aggregates.",
+            "oracle": "-- Same aggregates; AVG returns NUMBER."
+          }
+        },
+        {
+          "name": "customer_reviews_cleanup",
+          "sql": "DROP TABLE IF EXISTS customer_reviews;",
+          "description": "Question: how do we clean up after analysis?",
+          "nerd_notes": "Idempotent drops keep reruns smooth.",
+          "compat_examples": {
+            "postgres": "-- DROP TABLE IF EXISTS customer_reviews;",
+            "mysql": "-- DROP TABLE IF EXISTS customer_reviews;",
+            "oracle": "-- BEGIN EXECUTE IMMEDIATE 'DROP TABLE customer_reviews'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "7. Extended: basic string operations",
+      "narrative": "How do we measure, case-normalize, concatenate, and trim strings in one pass?",
+      "nerd_notes": "All examples are self-contained via VALUES. Use ORDER BY for deterministic output.",
+      "examples": [
+        {
+          "name": "length_case_concat_trim",
+          "sql": "WITH people(name, email) AS (VALUES (' Alice ', 'alice@example.com'), ('Bob', 'bob@example.com'), ('CarOL ', 'carol@example.org')) SELECT name, LENGTH(name) AS name_len, UPPER(TRIM(name)) AS name_upper, LOWER(TRIM(name)) AS name_lower, TRIM(name) AS trimmed, LTRIM(name) AS ltrimmed, RTRIM(name) AS rtrimmed, 'Hi ' || TRIM(name) AS greeting FROM people ORDER BY name_upper, email;",
+          "description": "Now let's say we need length, case, whitespace cleanup, and a friendly greeting—how do we express that succinctly?",
+          "nerd_notes": "TRIM removes spaces on both ends; LTRIM/RTRIM are directional. Concatenation with || is ANSI.",
+          "compat_examples": {
+            "postgres": "-- Same functions; || for concat.",
+            "mysql": "-- LENGTH/UPPER/LOWER/TRIM/LTRIM/RTRIM work; use CONCAT('Hi ', TRIM(name)) if preferred.",
+            "oracle": "-- LENGTH/UPPER/LOWER/TRIM/LTRIM/RTRIM supported; || for concat."
+          }
+        }
+      ]
+    },
+    {
+      "title": "8. Substring and positioning patterns",
+      "narrative": "How do we take left/right slices, find delimiter positions, and parse structured codes?",
+      "nerd_notes": "Prefer LEFT/RIGHT for readability; fall back to SUBSTR + LENGTH when unavailable.",
+      "examples": [
+        {
+          "name": "product_name_substrings",
+          "sql": "WITH products(product_name) AS (VALUES ('Smartphone Pro Max 256GB'), ('Laptop Gaming Ultra 2024'), ('Tablet Air 128GB WiFi'), ('Headphones Wireless NC')) SELECT product_name, LEFT(product_name, 10) AS first_10, RIGHT(product_name, 5) AS last_5, SUBSTR(product_name, 3, 5) AS middle_5 FROM products ORDER BY product_name;",
+          "description": "Now let's say we need the first N, last N, and a middle slice—what functions should we use?",
+          "nerd_notes": "DuckDB supports LEFT/RIGHT. If a dialect lacks them, use SUBSTR(x,1,n) and SUBSTR(x, LENGTH(x)-n+1).",
+          "compat_examples": {
+            "postgres": "-- LEFT/RIGHT/SUBSTRING are available.",
+            "mysql": "-- LEFT/RIGHT/SUBSTRING are available.",
+            "oracle": "-- Use SUBSTR(product_name,1,10) and SUBSTR(product_name, LENGTH(product_name)-4) for last 5."
+          }
+        },
+        {
+          "name": "email_positioning",
+          "sql": "WITH emails(email) AS (VALUES ('alice@example.com'), ('bob.smith@sub.domain.org'), ('no-at-symbol'), ('dave@example.co.uk')) SELECT email, INSTR(email, '@') AS at_pos, CASE WHEN INSTR(email, '@') > 0 THEN SUBSTR(email, 1, INSTR(email, '@') - 1) END AS local_part, CASE WHEN INSTR(email, '@') > 0 THEN SUBSTR(email, INSTR(email, '@') + 1) END AS domain, CASE WHEN INSTR(email, '@') > 0 AND INSTR(SUBSTR(email, INSTR(email, '@') + 1), '.') > 0 THEN SUBSTR(email, INSTR(email, '@') + 1, INSTR(SUBSTR(email, INSTR(email, '@') + 1), '.') - 1) END AS domain_name FROM emails ORDER BY email;",
+          "description": "Now let's say we need to split an email into local part and domain—how do we positionally slice around '@' and '.'?",
+          "nerd_notes": "Guard for missing '@' by checking INSTR(...) > 0 before subtracting 1.",
+          "compat_examples": {
+            "postgres": "-- Use POSITION('@' IN email) or STRPOS(email,'@'); SUBSTRING for slices.",
+            "mysql": "-- LOCATE('@',email) and SUBSTRING(email,1,LOCATE('@',email)-1).",
+            "oracle": "-- INSTR and SUBSTR with the same guards."
+          }
+        },
+        {
+          "name": "sku_parse",
+          "sql": "WITH items(sku) AS (VALUES ('CAT-PROD-001'), ('ELEC-TV-123'), ('BOOK-ENG-42'), ('GROCERY-APPLE-7'), ('MISC')) SELECT sku, CASE WHEN INSTR(sku, '-') > 0 THEN SUBSTR(sku, 1, INSTR(sku, '-') - 1) ELSE sku END AS category_code, CASE WHEN INSTR(sku, '-') > 0 AND INSTR(SUBSTR(sku, INSTR(sku, '-') + 1), '-') > 0 THEN SUBSTR(sku, INSTR(sku, '-') + 1, INSTR(SUBSTR(sku, INSTR(sku, '-') + 1), '-') - 1) END AS product_code, CASE WHEN INSTR(sku, '-') > 0 AND INSTR(SUBSTR(sku, INSTR(sku, '-') + 1), '-') > 0 THEN SUBSTR(sku, LENGTH(sku) - (CASE WHEN LENGTH(sku) >= 3 THEN 2 ELSE 0 END)) END AS sequence FROM items ORDER BY sku;",
+          "description": "Now let's say SKUs use dashes to encode category, product, and sequence—how do we parse each piece safely?",
+          "nerd_notes": "Use nested INSTR/SUBSTR to locate separators. Always guard for missing segments.",
+          "compat_examples": {
+            "postgres": "-- Use SPLIT_PART(sku,'-',1..3) as a simpler alternative.",
+            "mysql": "-- Use SUBSTRING_INDEX for left/right parts, or LOCATE + SUBSTRING.",
+            "oracle": "-- Use INSTR + SUBSTR as written; REGEXP_SUBSTR is another option."
+          }
+        },
+        {
+          "name": "replace_and_manipulate",
+          "sql": "WITH names(name) AS (VALUES ('iPhone 15 Pro Max'), ('Laptop Ultra Pro'), ('Headphones Max'), ('Pro Stand')) SELECT name, REPLACE(name, ' ', '_') AS underscore_name, REPLACE(name, 'Pro', 'Professional') AS expanded, REPLACE(UPPER(name), ' ', '') AS compact_upper, REPLACE(REPLACE(REPLACE(name, ' Pro', ''), ' Max', ''), ' Ultra', '') AS simplified FROM names ORDER BY name;",
+          "description": "Now let's say we need to normalize, expand, and simplify product names—what does a clean REPLACE pipeline look like?",
+          "nerd_notes": "For pattern-aware replacements, switch to REGEXP_REPLACE.",
+          "compat_examples": {
+            "postgres": "-- REPLACE/UPPER work the same.",
+            "mysql": "-- REPLACE/UPPER work the same.",
+            "oracle": "-- REPLACE/UPPER work the same; REGEXP_REPLACE available."
+          }
+        }
+      ]
+    },
+    {
+      "title": "2. Concatenation and basic formatting",
+      "examples": [
+        {
+          "name": "concat",
+          "sql": "SELECT id, first_name || ' ' || last_name AS full_name, UPPER(first_name) AS first_upper FROM users;",
+          "description": "Now let's say we need nicely formatted names and a shouty first name—how do we compose and case strings?",
+          "nerd_notes": "Concatenation with || is ANSI; be mindful that NULL||'x' yields NULL.",
+          "compat_examples": {
+            "postgres": "-- Same; || for concat, UPPER/LOWER for case.",
+            "mysql": "-- Use CONCAT(first_name,' ',last_name) for concat; UPPER/LOWER supported.",
+            "oracle": "-- || works; NVL(col,'') can help avoid NULL||'text' -> NULL."
+          }
+        }
+      ],
+      "narrative": "We join first and last names and tweak case for display.",
+      "nerd_notes": "If you want to protect against NULLs, wrap columns with COALESCE." 
+    },
+    {
+      "title": "3. Substring, length, position",
+      "examples": [
+        {
+          "name": "substr_len",
+          "sql": "SELECT id, SUBSTR(email, 1, INSTR(email, '@')-1) AS local_part, LENGTH(email) AS len FROM users;",
+          "description": "Now let's say we need the local part of an email and its length—how do we slice strings?",
+          "nerd_notes": "This assumes '@' exists. In messy data, add a WHERE email LIKE '%@%'.",
+          "compat_examples": {
+            "postgres": "-- SUBSTR/INSTR exist; POSITION('@' IN email) is another option.",
+            "mysql": "-- SUBSTRING(email,1,LOCATE('@',email)-1) and CHAR_LENGTH(email).",
+            "oracle": "-- SUBSTR/INSTR work; LENGTH(email) is supported."
+          }
+        }
+      ],
+      "narrative": "We use SUBSTR + INSTR for reliable slicing.",
+      "nerd_notes": "Guard for missing delimiters before subtracting 1 from a position."
+    },
+    {
+      "title": "4. Pattern matching (LIKE, REGEXP)",
+      "examples": [
+        {
+          "name": "pattern",
+          "sql": "SELECT * FROM users WHERE email LIKE '%@example.com';\nSELECT * FROM users WHERE REGEXP_MATCHES(email, '^[a-z]+@example\\.com$');",
+          "description": "Now let's say we need all example.com emails and then only lowercase ones—how do we filter with LIKE vs regex?",
+          "nerd_notes": "Use LIKE for simple wildcards; reach for regex when you need anchors or character classes.",
+          "compat_examples": {
+            "postgres": "-- Use LIKE; for regex use email ~ '^[a-z]+@example\\.com$'.",
+            "mysql": "-- Use LIKE; for regex use REGEXP_LIKE(email, '^[a-z]+@example\\.com$') in MySQL 8+.",
+            "oracle": "-- Use LIKE; for regex use REGEXP_LIKE(email, '^[a-z]+@example\\.com$')."
+          }
+        }
+      ],
+      "narrative": "We compare simple globbing to full regex.",
+      "nerd_notes": "Normalize case with LOWER() if you need case-insensitive LIKE without changing collation."
+    },
+    {
+      "title": "5. Trim and replace",
+      "examples": [
+        {
+          "name": "trim_replace",
+          "sql": "SELECT TRIM('  hello  ') AS t, REPLACE('hello world','world','duckdb') AS replaced;",
+          "description": "Now let's say we need to clean whitespace and swap words—how do we trim and replace?",
+          "nerd_notes": "TRIM/LTRIM/RTRIM remove spaces; REPLACE does literal substitutions.",
+          "compat_examples": {
+            "postgres": "-- Same functions: TRIM/LTRIM/RTRIM/REPLACE.",
+            "mysql": "-- Same functions; beware of multi-byte whitespace nuances.",
+            "oracle": "-- Same functions; TRIM can also trim custom characters."
+          }
+        }
+      ],
+      "narrative": "We tidy strings and perform simple substitutions.",
+      "nerd_notes": "For complex cleanup, combine TRIM with REGEXP_REPLACE."
+    },
+    {
+      "title": "6. Cleanup",
+      "examples": [
+        {
+          "name": "cleanup",
+          "sql": "DROP TABLE IF EXISTS users;",
+          "description": "Question: how do we reset the workspace so reruns are clean?",
+          "nerd_notes": "Child-first DROP patterns are safer in multi-object cleanups.",
+          "compat_examples": {
+            "postgres": "-- DROP TABLE IF EXISTS users;",
+            "mysql": "-- DROP TABLE IF EXISTS users;",
+            "oracle": "-- BEGIN EXECUTE IMMEDIATE 'DROP TABLE users'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+          }
+        }
+      ],
+      "narrative": "We drop our demo table so future runs start fresh.",
+      "nerd_notes": "Keep cleanups local and explicit; avoid cascading blindly."
+    },
+    {
+      "title": "String Functions - Complete Guide",
+      "narrative": "Question: what are the core string tasks in analytics, and how do we express them cleanly in SQL? We'll walk through formatting, extraction, pattern filters, and cleanup.",
+      "nerd_notes": "Avoid heavy regex on very large scans; pre-filter first when possible for performance.",
+      "examples": [
+        {
+          "name": "formatting_and_case",
+          "sql": "-- self-contained formatting using inline users CTE\nWITH users(id, first_name, last_name, email) AS (VALUES (1,'Alice','Smith','alice@example.com'),(2,'Bob','Jones','bob@example.com')) SELECT id, first_name || ' ' || last_name AS full_name, UPPER(first_name) AS first_upper FROM users;",
+          "description": "Now let's say we want a formatted full_name and a capitalized first—how do we write it tersely?",
+          "nerd_notes": "Use || for concat or CONCAT() in dialects that prefer functions.",
+          "compat_examples": {
+            "postgres": "-- Same pattern.",
+            "mysql": "-- CONCAT(first_name,' ',last_name) and UPPER(first_name).",
+            "oracle": "-- || for concat; use NVL to avoid NULL propagation if needed."
+          }
+        },
+        {
+          "name": "extract_local_part",
+          "sql": "-- self-contained extract local part\nWITH users(id, first_name, last_name, email) AS (VALUES (1,'Alice','Smith','alice@example.com'),(2,'Bob','Jones','bob@example.com')) SELECT id, SUBSTR(email, 1, INSTR(email, '@') - 1) AS local_part, LENGTH(email) AS len FROM users;",
+          "description": "Now let's say we need the username from an email—how do we slice around '@'?",
+          "nerd_notes": "Guard against emails without '@' using WHERE email LIKE '%@%'.",
+          "compat_examples": {
+            "postgres": "-- POSITION('@' IN email) and SUBSTRING().",
+            "mysql": "-- LOCATE('@',email) and SUBSTRING().",
+            "oracle": "-- INSTR and SUBSTR behave the same."
+          }
+        },
+        {
+          "name": "regex_and_like",
+          "sql": "-- self-contained pattern matching\nWITH users(id, first_name, last_name, email) AS (VALUES (1,'Alice','Smith','alice@example.com'),(2,'bob','Jones','bob@other.com')) SELECT * FROM users WHERE email LIKE '%@example.com';\nWITH users(id, first_name, last_name, email) AS (VALUES (1,'Alice','Smith','alice@example.com'),(2,'bob','Jones','bob@other.com')) SELECT * FROM users WHERE REGEXP_MATCHES(email, '^[a-z]+@example\\.com$');",
+          "description": "Now let's say we need all example.com emails and then strictly lowercase usernames—how do we do both?",
+          "nerd_notes": "LIKE is fast and simple; regex allows anchored checks.",
+          "compat_examples": {
+            "postgres": "-- email ~ '^[a-z]+@example\\.com$'",
+            "mysql": "-- REGEXP_LIKE(email, '^[a-z]+@example\\.com$')",
+            "oracle": "-- REGEXP_LIKE(email, '^[a-z]+@example\\.com$')"
+          }
+        },
+        {
+          "name": "trim_replace_example",
+          "sql": "SELECT TRIM('  hello  ') AS t, REPLACE('hello world','world','duckdb') AS replaced;",
+          "description": "Now let's say we need to normalize spaces and rename tokens—how do we trim and replace?",
+          "nerd_notes": "REPLACE is simple for literals; REGEXP_REPLACE covers patterns.",
+          "compat_examples": {
+            "postgres": "-- TRIM/REPLACE; regex via REGEXP_REPLACE.",
+            "mysql": "-- TRIM/REPLACE; regex replace requires REGEXP_REPLACE (8.0+).",
+            "oracle": "-- TRIM/REPLACE; REGEXP_REPLACE available."
+          }
+        }
+      ]
+    },
+    {
+      "title": "1. Basic String Operations",
+      "narrative": "Basic operations include concatenation, case conversion, and simple formatting.",
+      "nerd_notes": "Nerd note: for localization prefer ICU-aware functions in client code for complex formatting.",
+      "examples": [
+        {
+          "name": "basic_concat",
+          "sql": "-- self-contained basic concat\nWITH users(id, first_name, last_name, email) AS (VALUES (1,'Alice','Smith','alice@example.com'),(2,'Bob','Jones','bob@example.com')) SELECT id, first_name || ' ' || last_name AS full_name FROM users;",
+          "description": "Now let's say we need a human-friendly full name—how do we merge columns?",
+          "nerd_notes": "Handle NULLs with COALESCE if you prefer empty strings.",
+          "compat_examples": {
+            "postgres": "-- Same.",
+            "mysql": "-- CONCAT(first_name,' ',last_name).",
+            "oracle": "-- || works; NVL for NULL handling."
+          }
+        }
+      ]
+    },
+    {
+      "title": "2. Substring and Text Extraction",
+      "narrative": "SUBSTR, INSTR, and LENGTH let you slice and measure strings for parsing and validation tasks.",
+      "nerd_notes": "Nerd note: test edge cases (missing delimiter, empty strings) when writing extractors.",
+      "examples": [
+        {
+          "name": "substr_examples",
+          "sql": "-- self-contained substr example\nWITH users(id, first_name, last_name, email) AS (VALUES (1,'Alice','Smith','alice@example.com'),(2,'Bob','Jones','bob@example.com')) SELECT id, SUBSTR(email, 1, INSTR(email, '@') - 1) AS local FROM users;",
+          "description": "Now let's say we need usernames from emails—how do we slice reliably?",
+          "nerd_notes": "Guard against missing '@' before subtracting.",
+          "compat_examples": {
+            "postgres": "-- POSITION + SUBSTRING.",
+            "mysql": "-- LOCATE + SUBSTRING.",
+            "oracle": "-- INSTR + SUBSTR."
+          }
+        }
+      ]
+    },
+    {
+      "title": "3. Advanced String Processing",
+      "narrative": "Advanced processing includes regex extraction, tokenization, and normalization for analytics.",
+      "nerd_notes": "Nerd note: for heavy NLP tasks move processing to a dedicated pipeline; use SQL for light-weight transforms and filtering.",
+      "examples": [
+        {
+          "name": "regex_extract",
+          "sql": "-- self-contained regex extract example\nWITH users(id, first_name, last_name, email) AS (VALUES (1,'Alice','Smith','alice@example.com'),(2,'Bob','Jones','bob@example.com')) SELECT id, REGEXP_MATCHES(email, '([a-z]+)@') AS username FROM users;",
+          "description": "Now let's say we need to test that an email starts with letters—how do we express that with regex?",
+          "nerd_notes": "In DuckDB REGEXP_MATCHES returns a boolean when used this way; use REGEXP_EXTRACT to capture groups.",
+          "compat_examples": {
+            "postgres": "-- email ~ '^[a-z]+'",
+            "mysql": "-- REGEXP_LIKE(email, '^[a-z]+')",
+            "oracle": "-- REGEXP_LIKE(email, '^[a-z]+')"
+          }
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+      "id": "basic-select",
+      "prompt": "Show the first 5 rows from `users`.",
+      "answer_sql": "SELECT * FROM users LIMIT 5;"
+    },
+    {
+      "id": "aggregate-1",
+      "prompt": "Count rows grouped by `id`.",
+      "answer_sql": "SELECT id, COUNT(*) AS cnt FROM users GROUP BY id ORDER BY cnt DESC;"
+    },
+    {
+      "id": "filter-top",
+      "prompt": "Select the top 10 rows where `id` is positive (if numeric) or not null otherwise.",
+      "answer_sql": "SELECT * FROM users WHERE id IS NOT NULL AND id > 0 LIMIT 10;"
+    }
+  ]
+}

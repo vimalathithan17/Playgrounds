@@ -1,0 +1,239 @@
+{
+  "title": "Indexes (DuckDB notes)",
+  "description": "DuckDB is columnar and does not use traditional B-tree indexes; this lesson focuses on data layout strategies with concise, runnable examples. All examples are self-contained and compatible with DuckDB WASM (no filesystem I/O). Exercises included.",
+  "sections": [
+    {
+      "title": "0. Introduction: Indexes in DuckDB",
+      "narrative": "DuckDB is a columnar analytics engine. Classic B-tree indexes are not central; instead, focus on physical layout (sorting), partitioning (by directory or columns), statistics, and column pruning. These examples are WASM-safe and idempotent.",
+      "nerd_notes": "Sorted CTAS, partitioned Parquet, and selective projections often outperform maintaining indexes in analytic workloads.",
+      "examples": []
+    },
+    {
+    "title": "1. Note on indexes",
+    "description": "Question: if DuckDB is columnar, how should we think about 'indexes' and where to focus for performance?",
+      "examples": [
+        {
+          "name": "note",
+          "sql": "SELECT 'DuckDB is columnar; focus on data layout, partitioning, and Parquet rather than indexes' AS note;",
+          "description": "Note: a short demo.",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+        }
+      ],
+    "narrative": "Instead of asking 'which index to create?', ask 'how should we lay out and segment data for our hot queries?' In DuckDB, sorted layout and partitioning typically beat classic B-tree indexes for analytics.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "1.5 Cheat Sheet: Quick Patterns",
+      "narrative": "Tiny, copy-ready snippets that demonstrate index-like strategies in DuckDB.",
+      "examples": [
+        {
+          "name": "cs_sorted_snapshot_ctas",
+          "description": "Materialize a sorted copy for clustered reads.",
+          "sql": "DROP TABLE IF EXISTS cs_items; CREATE TABLE cs_items(id INTEGER, k TEXT, v DOUBLE); INSERT INTO cs_items VALUES (3,'b',7.0),(1,'a',5.0),(2,'a',6.0); DROP TABLE IF EXISTS cs_items_sorted; CREATE TABLE cs_items_sorted AS SELECT * FROM cs_items ORDER BY k, id; SELECT k, id FROM cs_items_sorted LIMIT 3; DROP TABLE IF EXISTS cs_items; DROP TABLE IF EXISTS cs_items_sorted;",
+          "nerd_notes": "CTAS with ORDER BY clusters data for range/order queries."
+        },
+        {
+          "name": "cs_information_schema_counts",
+          "description": "Preview a few tables with stable ordering.",
+          "sql": "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema='main' ORDER BY table_name LIMIT 5;",
+          "nerd_notes": "Use information_schema for portable catalog checks."
+        },
+        {
+          "name": "cs_analyze_after_ingest",
+          "description": "Refresh stats after load.",
+          "sql": "DROP TABLE IF EXISTS cs_stats; CREATE TABLE cs_stats(id INTEGER, g TEXT, x DOUBLE); INSERT INTO cs_stats VALUES (1,'A',1.0),(2,'B',2.0); ANALYZE cs_stats; SELECT COUNT(*) AS n FROM cs_stats; DROP TABLE IF EXISTS cs_stats;",
+          "nerd_notes": "ANALYZE keeps estimates fresh for planning."
+        },
+        {
+          "name": "cs_explain_selective_filter",
+          "description": "Show a plan for a selective predicate.",
+          "sql": "DROP TABLE IF EXISTS cs_plan; CREATE TABLE cs_plan(id INTEGER, c TEXT, v DOUBLE); INSERT INTO cs_plan VALUES (1,'A',10.0),(2,'B',5.0),(3,'A',20.0); EXPLAIN SELECT * FROM cs_plan WHERE c='A' AND v>15; SELECT COUNT(*) FROM cs_plan WHERE c='A' AND v>15; DROP TABLE IF EXISTS cs_plan;",
+          "nerd_notes": "EXPLAIN is deterministic; avoid ANALYZE in tests to keep output stable."
+        }
+      ]
+    },
+    {
+      "title": "1.6 Pitfalls, Tips, and Q&A",
+      "narrative": "Operational advice to avoid index-centric traps in DuckDB.",
+      "examples": [
+        { "name": "pitfall_building_btree_habits", "description": "Don’t default to B-tree thinking; optimize layout and pruning first.", "sql": "" },
+        { "name": "tip_ctas_cluster_for_ranges", "description": "Cluster hot paths via CTAS ORDER BY for predictable scans.", "sql": "" },
+        { "name": "question_when_to_analyze", "description": "Analyze after big loads or schema changes to refresh stats.", "sql": "" },
+        { "name": "tricky_over_partitioning", "description": "Too many tiny partitions hurt; aim for balanced file sizes.", "sql": "" },
+        { "name": "fundamental_order_by_for_determinism", "description": "Always add ORDER BY in teaching queries for stable outputs.", "sql": "" }
+      ]
+    },
+    {
+    "title": "Indexes & Performance Optimization",
+    "description": "Question: how can we emulate partition pruning and layout benefits without relying on filesystem features (so it runs in WASM)?",
+    "narrative": "We'll simulate partitioning using computed columns and UNION ALL of small in-memory 'partitions'. This keeps the idea clear and runnable anywhere (including DuckDB WASM).",
+      "nerd_notes": "In columnar engines, physical layout and file partitioning often give larger benefits than traditional indexes for analytics.",
+      "examples": [
+        {
+      "name": "partitioning_concept_demo",
+      "description": "Simulate partitions in-memory using a computed year and UNION ALL; then filter by year to mimic pruning.",
+      "sql": "-- two tiny 'partitions' represented as CTEs\nWITH p2023 AS (\n  SELECT 1 AS id, CAST('2023-05-01' AS TIMESTAMP) AS event_ts, 5.0 AS val\n), p2024 AS (\n  SELECT 2 AS id, CAST('2024-02-01' AS TIMESTAMP) AS event_ts, 10.0 AS val\n), events AS (\n  SELECT * FROM p2023\n  UNION ALL\n  SELECT * FROM p2024\n)\nSELECT id, event_ts, val\nFROM events\nWHERE STRFTIME(event_ts, '%Y') = '2024';",
+      "nerd_notes": "This mirrors how partitioned Parquet enables pruning by directory or filename. In production you'd store separate files like year=2023/, year=2024/ and let the engine prune; here we keep it WASM-friendly."
+        }
+      ]
+    },
+    {
+    "title": "1. Creating Indexes",
+    "description": "Question: if B-tree indexes aren't central in DuckDB, what simple, index-like optimization can we do?",
+    "narrative": "Create a sorted materialized copy (CTAS with ORDER BY) to cluster data for your most common filters and orderings.",
+      "nerd_notes": "Use sorted materialized tables or Parquet with partitioning to get index-like benefits for analytics workloads.",
+      "examples": [
+        {
+          "name": "sort_materialized_table",
+          "description": "Create a small table sorted by a key to emulate sort-based read advantages.",
+          "sql": "DROP TABLE IF EXISTS big_demo;\nCREATE TABLE big_demo (id INTEGER, group_id INTEGER, v DOUBLE);\nINSERT INTO big_demo VALUES (1,1,10.0),(2,2,5.0),(3,1,7.0);\n-- Create a sorted snapshot (CTAS) to emulate clustered layout\nDROP TABLE IF EXISTS big_demo_sorted;\nCREATE TABLE big_demo_sorted AS SELECT * FROM big_demo ORDER BY group_id;\nSELECT * FROM big_demo_sorted LIMIT 3;\nDROP TABLE IF EXISTS big_demo; DROP TABLE IF EXISTS big_demo_sorted;",
+          "nerd_notes": "Sorting data physically is useful for range queries and when scanning by key ranges."
+        }
+      ]
+    },
+    {
+    "title": "2. Performance Analysis & Optimization",
+    "description": "Question: how do we inspect a plan and verify a selective filter works as expected?",
+    "narrative": "Use EXPLAIN to view the plan, then run the query to sanity-check results. Keep examples tiny for deterministic output.",
+      "nerd_notes": "EXPLAIN shows the physical plan. For deeper profiling, DuckDB supports EXPLAIN ANALYZE and query profiling pragmas; we avoid those here to keep output deterministic in the validator.",
+      "examples": [
+        {
+          "name": "explain_plan_demo",
+          "description": "Create a small table, show an EXPLAIN plan for a selective filter, then return the matching row count.",
+          "sql": "DROP TABLE IF EXISTS idx_perf;\nCREATE TABLE idx_perf (id INTEGER, category TEXT, price DOUBLE);\nINSERT INTO idx_perf VALUES (1,'A',10.0),(2,'B',200.0),(3,'A',150.0),(4,'C',50.0);\nEXPLAIN SELECT * FROM idx_perf WHERE category = 'A' AND price > 100;\nSELECT COUNT(*) AS rows_matching FROM idx_perf WHERE category = 'A' AND price > 100;\nDROP TABLE IF EXISTS idx_perf;",
+          "nerd_notes": "The plan shows scans and filters; for large data you'd combine sorted layouts or partitioned Parquet so filters prune early.",
+          "compat_examples": {
+            "postgres": "-- Postgres: EXPLAIN (ANALYZE, BUFFERS) SELECT ...;",
+            "mysql": "-- MySQL: EXPLAIN SELECT ...;",
+            "oracle": "-- Oracle: EXPLAIN PLAN FOR SELECT ...; SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY);"
+          }
+        }
+      ]
+    },
+    {
+    "title": "3. Advanced Index Management",
+    "description": "Question: when should we refresh table statistics?",
+    "narrative": "DuckDB maintains lightweight stats; after large ingests, run ANALYZE to keep estimates fresh.",
+      "nerd_notes": "Statistics help cardinality estimates. In analytic engines, physical layout (sorting/partitioning) typically matters more than B-tree index maintenance.",
+      "examples": [
+        {
+          "name": "analyze_stats_demo",
+          "description": "Create a small table, run ANALYZE to refresh stats, then return a simple count.",
+          "sql": "DROP TABLE IF EXISTS idx_stats;\nCREATE TABLE idx_stats (id INTEGER, k TEXT, v DOUBLE);\nINSERT INTO idx_stats VALUES (1,'x',10.0),(2,'y',20.0),(3,'x',30.0);\nANALYZE idx_stats;\nSELECT COUNT(*) AS row_count FROM idx_stats;\nDROP TABLE IF EXISTS idx_stats;",
+          "nerd_notes": "Run ANALYZE after large ingests or major changes to table distribution.",
+          "compat_examples": {
+            "postgres": "-- Postgres: ANALYZE idx_stats;",
+            "mysql": "-- MySQL: ANALYZE TABLE idx_stats;",
+            "oracle": "-- Oracle: DBMS_STATS.GATHER_TABLE_STATS(...)"
+          }
+        }
+      ]
+    },
+    {
+    "title": "4. Cluster Indexes & Physical Organization",
+    "description": "Question: how do we mimic clustered storage to help range scans?",
+    "narrative": "Materialize a sorted copy (CTAS ORDER BY) so hot ranges are contiguous.",
+      "nerd_notes": "CTAS with ORDER BY is a simple, explicit way to control physical order for hot query patterns.",
+      "examples": [
+        {
+          "name": "cluster_ctas_demo",
+          "description": "Create unsorted orders, build a clustered copy ordered by date, then show the earliest row.",
+          "sql": "DROP TABLE IF EXISTS idx_orders;\nCREATE TABLE idx_orders (order_id INTEGER, customer_id INTEGER, order_date DATE, total_amount DOUBLE);\nINSERT INTO idx_orders VALUES (2,1,'2024-02-01',150.0),(1,2,'2024-01-15',100.0),(3,1,'2024-03-05',90.0);\nDROP TABLE IF EXISTS idx_orders_clustered;\nCREATE TABLE idx_orders_clustered AS SELECT * FROM idx_orders ORDER BY order_date, customer_id;\nSELECT order_id, order_date FROM idx_orders_clustered LIMIT 1;\nDROP TABLE IF EXISTS idx_orders; DROP TABLE IF EXISTS idx_orders_clustered;",
+          "nerd_notes": "Physical sort benefits ORDER BY and date-range filters.",
+          "compat_examples": {
+            "postgres": "-- Postgres: CLUSTER idx_orders USING some_index; or CREATE TABLE ... AS SELECT ... ORDER BY ...;",
+            "mysql": "-- MySQL/InnoDB: PRIMARY KEY defines physical order; use appropriate PK or create sorted copy for analytics.",
+            "oracle": "-- Oracle: Index Organized Tables / CTAS with ORDER BY for sorted segments."
+          }
+        }
+      ]
+    },
+    {
+    "title": "5. Multi-Level Indexes & Hierarchical Access",
+    "description": "Question: how do we navigate hierarchical keys efficiently without classic indexes?",
+    "narrative": "Filter by higher-level keys first (country, city), then order by lower-level keys to keep reads local.",
+      "nerd_notes": "In DuckDB, prioritize partitioning and sort order over index stacks for analytic lookups.",
+      "examples": [
+        {
+          "name": "hier_sorted_access_demo",
+          "description": "Create a small directory-like customers table, filter by country/city and order by last/first name.",
+          "sql": "DROP TABLE IF EXISTS idx_customers_ml;\nCREATE TABLE idx_customers_ml (customer_id INTEGER, country TEXT, city TEXT, last_name TEXT, first_name TEXT);\nINSERT INTO idx_customers_ml VALUES (1,'USA','New York','Smith','Alice'),(2,'USA','New York','Anders','Bob'),(3,'UK','London','Brown','Cara');\nSELECT country, city, last_name, first_name FROM idx_customers_ml WHERE country = 'USA' AND city = 'New York' ORDER BY last_name, first_name LIMIT 1;\nDROP TABLE IF EXISTS idx_customers_ml;",
+          "nerd_notes": "Sorting on (country, city, last_name, first_name) in a materialized table provides locality for this access path.",
+          "compat_examples": {
+            "postgres": "-- Postgres: CREATE INDEX ON idx_customers_ml(country, city, last_name, first_name);",
+            "mysql": "-- MySQL: CREATE INDEX idx ON idx_customers_ml(country, city, last_name, first_name);",
+            "oracle": "-- Oracle: CREATE INDEX ...; consider composite indexes for this query pattern."
+          }
+        }
+      ]
+    },
+    {
+  "title": "Indexes - Performance Optimization",
+  "description": "Question: what other knobs exist beyond layout?",
+  "narrative": "Brief pointers to broader topics (compression, column encodings, file layout). Expand with concrete examples as needed.",
+  "nerd_notes": "High-level pointers to maintain coverage. Add targeted examples when you focus on a specific topic.",
+      "examples": [
+        {
+          "name": "concept_indexes_performance_optimization",
+          "description": "Concept marker for 'Indexes - Performance Optimization' (no-op query).",
+          "sql": "SELECT 'Indexes - Performance Optimization' AS topic LIMIT 1;",
+          "nerd_notes": "Intentional no-op query to keep the lesson runnable. Replace with concrete demos in future revisions."
+        }
+      ]
+    },
+    {
+  "title": "1. Index Creation and Types",
+  "description": "Question: what types of indexes or index-like structures are relevant in analytic engines?",
+  "narrative": "In DuckDB, prioritize sort order, partitioning, and statistics over B-tree maintenance for analytics.",
+      "nerd_notes": "High-level guidance. Add concrete examples when exploring trade-offs in your workload.",
+      "examples": [
+        {
+          "name": "concept_index_creation_and_types",
+          "description": "Concept marker for 'Index Creation and Types' (no-op query).",
+          "sql": "SELECT '1. Index Creation and Types' AS topic LIMIT 1;",
+          "nerd_notes": "Intentional no-op query to keep the lesson runnable. Replace with focused demos when available."
+        }
+      ]
+    },
+    {
+  "title": "2. When to Use Indexes",
+  "description": "Question: when do classic indexes still help?",
+  "narrative": "Narrow OLTP-style lookups may benefit from indexes in other engines; in DuckDB, columnar scans are often sufficient for analytics.",
+      "nerd_notes": "Summary note; add side-by-side demos when comparing patterns across engines.",
+      "examples": [
+        {
+          "name": "concept_when_to_use_indexes",
+          "description": "Concept marker for 'When to Use Indexes' (no-op query).",
+          "sql": "SELECT '2. When to Use Indexes' AS topic LIMIT 1;",
+          "nerd_notes": "Intentional no-op query to keep the lesson runnable. Replace with comparative demos later."
+        }
+      ]
+    },
+    {
+  "title": "3. Index Management and Best Practices",
+  "description": "Question: what best practices keep analytic queries fast without heavy index management?",
+  "narrative": "Prefer immutable files, partition by high-selectivity columns, sort by common range filters, and analyze after large ingests.",
+      "nerd_notes": "Guidance summary; add concrete recipes for your storage layout and workload characteristics.",
+      "examples": [
+        {
+          "name": "concept_index_management_and_best_practices",
+          "description": "Concept marker for 'Index Management and Best Practices' (no-op query).",
+          "sql": "SELECT '3. Index Management and Best Practices' AS topic LIMIT 1;",
+          "nerd_notes": "Intentional no-op query to keep the lesson runnable. Replace with concrete practices and measurements later."
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+  "id": "indexes-1-simulate-partitions",
+  "prompt": "Simulate partitioning by year using UNION ALL of small inline datasets (no filesystem), then filter for a specific year.",
+  "answer_sql": "WITH p2023 AS (SELECT 1 AS id, TIMESTAMP '2023-05-01 00:00:00' AS event_ts, 5.0 AS val), p2024 AS (SELECT 2 AS id, TIMESTAMP '2024-02-01 00:00:00' AS event_ts, 10.0 AS val) SELECT * FROM (SELECT * FROM p2023 UNION ALL SELECT * FROM p2024) e WHERE STRFTIME(e.event_ts,'%Y')='2024';"
+    },
+    {
+  "id": "indexes-2-year-filter",
+  "prompt": "Given a table `events(id, event_ts, val)`, select only rows from year 2024 without relying on filesystem paths.",
+  "answer_sql": "SELECT id, event_ts, val FROM events WHERE STRFTIME(event_ts,'%Y')='2024' ORDER BY id;"
+    }
+  ]
+}

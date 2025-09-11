@@ -1,0 +1,303 @@
+{
+  "title": "SELECT — from basics to advanced (DuckDB)",
+  "description": "A focused guide to SELECT: projection, filtering, expressions, DISTINCT, subqueries, and window functions. All examples are DuckDB-compatible, self-contained, and idempotent. Each demo creates its own sel_* tables and cleans up.",
+  "sections": [
+    {
+      "title": "0) Introduction: SELECT",
+      "description": "What SELECT does and how to use it safely in demos.",
+      "narrative": "SELECT is the core read operation: choose columns (projection), compute expressions, filter rows, sort, and optionally aggregate or analyze with windows. In this lesson we keep examples deterministic (ORDER BY with a tie-breaker) and self-contained (VALUES/CTEs or temp tables). Prefer explicit aliases for readability, and use IS NULL/IS NOT NULL for null-safe logic.",
+      "examples": []
+    },
+    {
+      "title": "1.5) Cheat Sheet: SELECT Essentials",
+      "description": "Tiny, self-contained patterns you’ll use daily.",
+      "narrative": "Copy-ready snippets: projection + alias, NULL-safe filtering, stable top-N, and CASE bucketing. All are inline and deterministic.",
+      "examples": [
+        {
+          "name": "cs_project_alias_quick",
+          "description": "Project columns and add a readable alias.",
+          "sql": "SELECT id, name, name || ' (' || id || ')' AS label\nFROM (VALUES (1,'A'),(2,'B')) AS t(id, name)\nORDER BY id;",
+          "nerd_notes": "Use explicit aliases for computed expressions. || concatenates strings in DuckDB/Postgres/Oracle.",
+          "compat_examples": {
+            "postgres": "SELECT id, name, name || ' (' || id || ')' AS label FROM (VALUES (1,'A'),(2,'B')) AS t(id, name) ORDER BY id;",
+            "mysql": "SELECT id, name, CONCAT(name, ' (', id, ')') AS label FROM (SELECT 1 AS id, 'A' AS name UNION ALL SELECT 2, 'B') AS t ORDER BY id;",
+            "oracle": "SELECT id, name, name || ' (' || id || ')' AS label FROM (SELECT 1 id, 'A' name FROM dual UNION ALL SELECT 2, 'B' FROM dual) t ORDER BY id;"
+          }
+        },
+        {
+          "name": "cs_filter_nulls_quick",
+          "description": "Filter with NULL-safe predicates.",
+          "sql": "SELECT id, city\nFROM (VALUES (1,'NY'),(2,NULL),(3,'SF')) AS t(id, city)\nWHERE city IS NOT NULL\nORDER BY id;",
+          "nerd_notes": "Never write = NULL or <> NULL; use IS NULL / IS NOT NULL.",
+          "compat_examples": {
+            "postgres": "SELECT id, city FROM (VALUES (1,'NY'),(2,NULL),(3,'SF')) AS t(id, city) WHERE city IS NOT NULL ORDER BY id;",
+            "mysql": "SELECT id, city FROM (SELECT 1 id, 'NY' city UNION ALL SELECT 2, NULL UNION ALL SELECT 3, 'SF') t WHERE city IS NOT NULL ORDER BY id;",
+            "oracle": "SELECT id, city FROM (SELECT 1 id, 'NY' city FROM dual UNION ALL SELECT 2, CAST(NULL AS VARCHAR2(10)) FROM dual UNION ALL SELECT 3, 'SF' FROM dual) t WHERE city IS NOT NULL ORDER BY id;"
+          }
+        },
+        {
+          "name": "cs_topn_orderby_quick",
+          "description": "Stable ORDER BY with a tie-breaker and LIMIT.",
+          "sql": "SELECT id, score\nFROM (VALUES (1,10),(2,10),(3,8)) AS t(id, score)\nORDER BY score DESC, id ASC\nLIMIT 2;",
+          "nerd_notes": "LIMIT without ORDER BY is non-deterministic. Include a unique secondary key to break ties.",
+          "compat_examples": {
+            "postgres": "SELECT id, score FROM (VALUES (1,10),(2,10),(3,8)) AS t(id, score) ORDER BY score DESC, id ASC LIMIT 2;",
+            "mysql": "SELECT id, score FROM (SELECT 1 id, 10 score UNION ALL SELECT 2, 10 UNION ALL SELECT 3, 8) t ORDER BY score DESC, id ASC LIMIT 2;",
+            "oracle": "SELECT id, score FROM (SELECT 1 id, 10 score FROM dual UNION ALL SELECT 2, 10 FROM dual UNION ALL SELECT 3, 8 FROM dual) t ORDER BY score DESC, id ASC FETCH FIRST 2 ROWS ONLY;"
+          }
+        },
+        {
+          "name": "cs_case_bucket_quick",
+          "description": "CASE for readable bucketing.",
+          "sql": "SELECT age, CASE WHEN age < 18 THEN 'minor' WHEN age < 65 THEN 'adult' ELSE 'senior' END AS band\nFROM (VALUES (12),(30),(70)) AS t(age)\nORDER BY age;",
+          "nerd_notes": "Keep CASE branches mutually exclusive. Prefer ORDER BY for stable outputs.",
+          "compat_examples": {
+            "postgres": "SELECT age, CASE WHEN age < 18 THEN 'minor' WHEN age < 65 THEN 'adult' ELSE 'senior' END AS band FROM (VALUES (12),(30),(70)) AS t(age) ORDER BY age;",
+            "mysql": "SELECT age, CASE WHEN age < 18 THEN 'minor' WHEN age < 65 THEN 'adult' ELSE 'senior' END AS band FROM (SELECT 12 age UNION ALL SELECT 30 UNION ALL SELECT 70) t ORDER BY age;",
+            "oracle": "SELECT age, CASE WHEN age < 18 THEN 'minor' WHEN age < 65 THEN 'adult' ELSE 'senior' END AS band FROM (SELECT 12 age FROM dual UNION ALL SELECT 30 FROM dual UNION ALL SELECT 70 FROM dual) t ORDER BY age;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "1.6) Pitfalls, Tips, and Q&A",
+      "description": "Common SELECT gotchas and quick answers.",
+      "narrative": "• Determinism: LIMIT without ORDER BY is undefined—always sort and add a tie-breaker.\n• SELECT *: convenient but brittle; prefer explicit columns in stable interfaces.\n• Aliases: SELECT-list aliases aren’t visible in WHERE (use a subquery/CTE or repeat the expression).\n• NULLs: = NULL never matches; use IS NULL / IS NOT NULL and consider COALESCE for defaults.\n• Correlated subqueries: fine for tiny data; pre-aggregate and JOIN for clarity/performance.\nSee also section ‘12) Pitfalls and best practices’ for expanded demos.",
+      "examples": []
+    },
+    {
+      "title": "1) Projection and column aliases",
+  "description": "Question: how do we project specific columns and compute readable aliases?",
+      "narrative": "Start with selecting specific columns and adding readable aliases. Keep a deterministic ORDER BY in demos for stable output.",
+      "examples": [
+        {
+          "name": "sel_projection_aliases",
+          "description": "Project a subset of columns and compute a label with aliases.",
+          "sql": "DROP TABLE IF EXISTS sel_people_a;\nCREATE TABLE sel_people_a (id INTEGER, name VARCHAR, age INTEGER);\nINSERT INTO sel_people_a VALUES (1,'Alice',30),(2,'Bob',25),(3,'Carol',40);\n-- basic projection\nSELECT id, name FROM sel_people_a ORDER BY id;\n-- expressions and aliases\nSELECT name || ' (age ' || age || ')' AS label, age AS years FROM sel_people_a ORDER BY years, label;\nDROP TABLE IF EXISTS sel_people_a;",
+          "nerd_notes": "DuckDB uses || for string concatenation. Use explicit ORDER BY when showing example outputs.",
+          "compat_examples": {
+            "postgres": "SELECT name || ' (age ' || age || ')' AS label, age AS years FROM sel_people_a ORDER BY years, label;",
+            "mysql": "SELECT CONCAT(name, ' (age ', age, ')') AS label, age AS years FROM sel_people_a ORDER BY years, label;",
+            "oracle": "SELECT name || ' (age ' || age || ')' AS label, age AS years FROM sel_people_a ORDER BY years, label;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "2) WHERE filtering and NULL handling",
+  "description": "Question: how do we filter with AND/OR, IN, and handle NULLs correctly?",
+      "narrative": "Filter rows with comparisons, AND/OR, IN, and handle NULLs explicitly (IS NULL / IS NOT NULL).",
+      "examples": [
+        {
+          "name": "sel_where_and_nulls",
+          "description": "Filters with AND/OR and proper NULL checks.",
+          "sql": "DROP TABLE IF EXISTS sel_people_b;\nCREATE TABLE sel_people_b (id INTEGER, name VARCHAR, age INTEGER, city VARCHAR);\nINSERT INTO sel_people_b VALUES (1,'Alice',30,'NY'),(2,'Bob',25,NULL),(3,'Carol',40,'SF'),(4,'Dan',NULL,'NY');\n-- basic filters\nSELECT * FROM sel_people_b WHERE age > 25 AND city = 'NY' ORDER BY id;\n-- NULL-safe checks\nSELECT id, name, city FROM sel_people_b WHERE city IS NULL ORDER BY id;\n-- IN list and OR logic\nSELECT id, name FROM sel_people_b WHERE city IN ('NY','SF') OR age IS NULL ORDER BY id;\nDROP TABLE IF EXISTS sel_people_b;",
+          "nerd_notes": "NULL propagates through comparisons; use IS NULL/IS NOT NULL instead of = NULL / <> NULL.",
+          "compat_examples": {
+            "postgres": "-- Same syntax applies.",
+            "mysql": "-- Same syntax applies; beware of three-valued logic with NULL in comparisons.",
+            "oracle": "-- Same syntax applies; NVL/COALESCE available for handling NULLs."
+          }
+        }
+      ]
+    },
+    {
+      "title": "3) DISTINCT vs GROUP BY counts",
+  "description": "Question: when should I use DISTINCT vs GROUP BY for counts and summaries?",
+      "narrative": "DISTINCT returns unique rows. When you need counts, GROUP BY is often more flexible and explicit.",
+      "examples": [
+        {
+          "name": "sel_distinct_groupby",
+          "description": "Compare DISTINCT and GROUP BY with a small demo.",
+          "sql": "DROP TABLE IF EXISTS sel_people_c;\nCREATE TABLE sel_people_c (id INTEGER, name VARCHAR, age INTEGER);\nINSERT INTO sel_people_c VALUES (1,'Alice',30),(2,'Bob',25),(3,'Alice',30),(4,'Eve',35);\n-- distinct names\nSELECT DISTINCT name FROM sel_people_c ORDER BY name;\n-- counts per name with deterministic order\nSELECT name, COUNT(*) AS cnt FROM sel_people_c GROUP BY name ORDER BY cnt DESC, name ASC;\nDROP TABLE IF EXISTS sel_people_c;",
+          "nerd_notes": "DISTINCT can be expensive on large sets. Use GROUP BY when you also need aggregates like counts.",
+          "compat_examples": {
+            "postgres": "-- Portable: DISTINCT and GROUP BY are standard.",
+            "mysql": "-- Portable: DISTINCT and GROUP BY are standard; ONLY_FULL_GROUP_BY affects non-aggregated columns.",
+            "oracle": "-- Portable: DISTINCT and GROUP BY are standard."
+          }
+        }
+      ]
+    },
+    {
+      "title": "4) ORDER BY and deterministic ties",
+  "description": "Question: how do I make ORDER BY and LIMIT deterministic when ties exist?",
+      "narrative": "Always define a stable tie-breaker. LIMIT without ORDER BY is non-deterministic.",
+      "examples": [
+        {
+          "name": "sel_orderby_ties",
+          "description": "Demonstrate multi-column ORDER BY for stable results.",
+          "sql": "DROP TABLE IF EXISTS sel_people_d;\nCREATE TABLE sel_people_d (id INTEGER, name VARCHAR, score INTEGER);\nINSERT INTO sel_people_d VALUES (1,'Alice',90),(2,'Bob',90),(3,'Carol',95),(4,'Dan',90);\n-- stable ordering: primary then tie-breaker\nSELECT id, name, score FROM sel_people_d ORDER BY score DESC, id ASC;\n-- top 2 deterministically\nSELECT id, name, score FROM sel_people_d ORDER BY score DESC, id ASC LIMIT 2;\nDROP TABLE IF EXISTS sel_people_d;",
+          "nerd_notes": "Use a unique column (like id) as a secondary key to keep ordering stable across runs.",
+          "compat_examples": {
+            "postgres": "SELECT id, name, score FROM sel_people_d ORDER BY score DESC, id ASC LIMIT 2;",
+            "mysql": "SELECT id, name, score FROM sel_people_d ORDER BY score DESC, id ASC LIMIT 2;",
+            "oracle": "SELECT id, name, score FROM (SELECT id, name, score FROM sel_people_d ORDER BY score DESC, id ASC) WHERE ROWNUM <= 2;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "5) Subqueries in FROM and SELECT",
+  "description": "Question: how do I use derived tables and scalar subqueries cleanly?",
+      "narrative": "Use a subquery as a derived table in FROM (must have an alias), and scalar subqueries in the SELECT-list.",
+      "examples": [
+        {
+          "name": "sel_subqueries_from_and_scalar",
+          "description": "Derived table plus a scalar subquery for context.",
+          "sql": "DROP TABLE IF EXISTS sel_people_e;\nCREATE TABLE sel_people_e (id INTEGER, name VARCHAR, age INTEGER);\nINSERT INTO sel_people_e VALUES (1,'Alice',30),(2,'Bob',25),(3,'Carol',40);\n-- derived table in FROM\nSELECT p.name, p.age FROM (SELECT * FROM sel_people_e WHERE age >= 30) AS p ORDER BY p.age;\n-- scalar subquery in SELECT\nSELECT name, age, (SELECT AVG(age) FROM sel_people_e) AS avg_age FROM sel_people_e ORDER BY age, name;\nDROP TABLE IF EXISTS sel_people_e;",
+          "nerd_notes": "Always alias subqueries in FROM. Scalar subqueries should be cheap; materialize or pre-aggregate in a CTE if reused.",
+          "compat_examples": {
+            "postgres": "-- Same pattern.",
+            "mysql": "-- Same pattern; ensure ONLY_FULL_GROUP_BY doesn't affect aggregates used.",
+            "oracle": "-- Same pattern; scalar subqueries supported."
+          }
+        }
+      ]
+    },
+    {
+      "title": "6) CASE expressions and derived columns",
+  "description": "Question: how can I express conditional logic for labels and derived metrics?",
+      "narrative": "Conditional logic with CASE builds readable categories and flags.",
+      "examples": [
+        {
+          "name": "sel_case_derived",
+          "description": "Bucket ages and compute a couple of derived metrics.",
+          "sql": "DROP TABLE IF EXISTS sel_people_f;\nCREATE TABLE sel_people_f (id INTEGER, name VARCHAR, age INTEGER);\nINSERT INTO sel_people_f VALUES (1,'Alice',30),(2,'Bob',25),(3,'Carol',40),(4,'Dan',18);\nSELECT id, name, age,\n  CASE WHEN age < 21 THEN 'minor' WHEN age < 35 THEN 'young-adult' WHEN age < 50 THEN 'adult' ELSE 'senior' END AS age_band,\n  age * 12 AS age_months,\n  COALESCE(NULLIF(name, ''), 'unknown') AS name_coalesced\nFROM sel_people_f\nORDER BY age, id;\nDROP TABLE IF EXISTS sel_people_f;",
+          "nerd_notes": "Use COALESCE and NULLIF to normalize values. Keep CASE branches mutually exclusive for clarity.",
+          "compat_examples": {
+            "postgres": "-- Same syntax.",
+            "mysql": "-- Same syntax; NULLIF/COALESCE supported.",
+            "oracle": "-- Same syntax; NVL is Oracle-specific alternative to COALESCE."
+          }
+        }
+      ]
+    },
+    {
+      "title": "7) Window functions: ranking and moving averages",
+  "description": "Question: how do I compute rankings and moving averages without collapsing rows?",
+      "narrative": "Window functions compute analytics without collapsing rows. Control frames explicitly for deterministic results.",
+      "examples": [
+        {
+          "name": "sel_windows_rank_ma",
+          "description": "ROW_NUMBER per group and a 3-row moving average.",
+          "sql": "DROP TABLE IF EXISTS sel_sales_w;\nCREATE TABLE sel_sales_w (d DATE, prod VARCHAR, sales DOUBLE);\nINSERT INTO sel_sales_w VALUES (DATE '2024-01-01','A',100),(DATE '2024-01-02','A',150),(DATE '2024-01-03','A',80),(DATE '2024-01-04','A',120),\n                               (DATE '2024-01-01','B',90),(DATE '2024-01-02','B',60),(DATE '2024-01-03','B',110),(DATE '2024-01-04','B',70);\nSELECT d, prod, sales,\n  ROW_NUMBER() OVER (PARTITION BY prod ORDER BY d) AS seq,\n  AVG(sales) OVER (PARTITION BY prod ORDER BY d ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS ma3\nFROM sel_sales_w\nORDER BY prod, d;\nDROP TABLE IF EXISTS sel_sales_w;",
+          "nerd_notes": "ROWS BETWEEN 2 PRECEDING AND CURRENT ROW yields a trailing 3-row window. Use PARTITION BY to reset per group.",
+          "compat_examples": {
+            "postgres": "-- Supported as-is.",
+            "mysql": "-- Requires MySQL 8.0+ for window frames.",
+            "oracle": "-- Supported; syntax for framing is similar."
+          }
+        }
+      ]
+    },
+    {
+      "title": "8) FROM alternatives: VALUES and range()",
+  "description": "Question: how do I create small inline datasets for quick demos?",
+      "narrative": "You can select from inline VALUES or generate rows with table functions like range().",
+      "examples": [
+        {
+          "name": "sel_values_and_range",
+          "description": "Inline rows with VALUES and generated rows with range().",
+          "sql": "-- VALUES as a one-off table\nSELECT * FROM (VALUES (1,'a'),(2,'b'),(3,'c')) AS t(id, val) ORDER BY id;\n-- range() table function to generate integers [1,5)\nSELECT n, n*n AS n2 FROM range(1,6) AS r(n) WHERE n % 2 = 0 ORDER BY n;",
+          "nerd_notes": "range(start, stop) yields a single column named range by default—alias it for clarity (e.g., AS r(n)).",
+          "compat_examples": {
+            "postgres": "-- VALUES is supported; generate_series for ranges\nSELECT n, n*n AS n2 FROM generate_series(1,5) AS n WHERE n % 2 = 0 ORDER BY n;",
+            "mysql": "-- VALUES in SELECT limited; emulate inline rows with UNION ALL; generate ranges via recursive CTEs.",
+            "oracle": "-- VALUES in FROM via SELECT ... FROM dual UNION ALL; generate ranges with CONNECT BY LEVEL or recursive subquery factoring."
+          }
+        }
+      ]
+    },
+    {
+      "title": "9) Scalar subqueries in WHERE",
+  "description": "Question: how do I filter against an aggregate computed by a subquery?",
+      "narrative": "Compare against an aggregate computed by a subquery. Use CTEs if reused multiple times to avoid recomputation.",
+      "examples": [
+        {
+          "name": "sel_scalar_where",
+          "description": "Filter rows above the average.",
+          "sql": "DROP TABLE IF EXISTS sel_people_g;\nCREATE TABLE sel_people_g (id INTEGER, name VARCHAR, age INTEGER);\nINSERT INTO sel_people_g VALUES (1,'Alice',30),(2,'Bob',25),(3,'Carol',40),(4,'Dan',20);\nSELECT id, name, age FROM sel_people_g\nWHERE age > (SELECT AVG(age) FROM sel_people_g)\nORDER BY age DESC, id;\nDROP TABLE IF EXISTS sel_people_g;",
+          "nerd_notes": "Scalar subqueries are evaluated per-row if they reference outer columns; when uncorrelated, the engine may compute them once.",
+          "compat_examples": {
+            "postgres": "-- Works as-is.",
+            "mysql": "-- Works as-is.",
+            "oracle": "-- Works as-is."
+          }
+        }
+      ]
+    },
+    {
+      "title": "10) Date math and categorization (DuckDB)",
+  "description": "Question: how do I compute age/tenure and bucket by ranges in DuckDB?",
+      "narrative": "Use DATE literals and date_diff() for robust calculations in DuckDB.",
+      "examples": [
+        {
+          "name": "sel_date_diff_case",
+          "description": "Compute years since a date and bucket by tenure.",
+          "sql": "DROP TABLE IF EXISTS sel_customers_d;\nCREATE TABLE sel_customers_d (id INTEGER, name VARCHAR, date_of_birth DATE, signup DATE);\nINSERT INTO sel_customers_d VALUES\n  (1,'Amy', DATE '1995-06-15', DATE '2022-01-10'),\n  (2,'Ben', DATE '1988-02-03', DATE '2020-07-01'),\n  (3,'Cid', DATE '1975-11-20', DATE '2019-12-31');\nSELECT id, name,\n  date_diff('year', date_of_birth, current_date) AS age_years,\n  date_diff('year', signup, current_date) AS years_as_customer,\n  CASE WHEN date_diff('year', signup, current_date) < 1 THEN 'new'\n       WHEN date_diff('year', signup, current_date) < 3 THEN 'established'\n       ELSE 'long-term' END AS tenure\nFROM sel_customers_d\nORDER BY id;\nDROP TABLE IF EXISTS sel_customers_d;",
+          "nerd_notes": "Prefer DATE literals (DATE 'YYYY-MM-DD'). DuckDB's date_diff(part, start, end) returns an integer count.",
+          "compat_examples": {
+            "postgres": "SELECT id, name, EXTRACT(year FROM AGE(current_date, date_of_birth))::int AS age_years FROM sel_customers_d;",
+            "mysql": "SELECT id, name, TIMESTAMPDIFF(YEAR, date_of_birth, CURDATE()) AS age_years FROM sel_customers_d;",
+            "oracle": "SELECT id, name, TRUNC(MONTHS_BETWEEN(SYSDATE, date_of_birth)/12) AS age_years FROM sel_customers_d;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "11) String functions (split_part, upper/lower)",
+  "description": "Question: how do I extract tokens like email domain and normalize text?",
+      "narrative": "Prefer split_part() to extract tokens (e.g., an email domain), and use standard string functions.",
+      "examples": [
+        {
+          "name": "sel_string_funcs",
+          "description": "Extract email domain and normalize strings.",
+          "sql": "DROP TABLE IF EXISTS sel_contacts_s;\nCREATE TABLE sel_contacts_s (id INTEGER, email VARCHAR);\nINSERT INTO sel_contacts_s VALUES (1,'alice@example.com'),(2,'bob@work.org'),(3,'carol@data.io');\nSELECT id, email, lower(split_part(email, '@', 1)) AS localpart, split_part(email, '@', 2) AS domain, upper(domain) AS domain_upper\nFROM sel_contacts_s\nORDER BY id;\nDROP TABLE IF EXISTS sel_contacts_s;",
+          "nerd_notes": "split_part(str, delim, index) is often easier than manual SUBSTR/INSTR chains and is supported by DuckDB.",
+          "compat_examples": {
+            "postgres": "SELECT id, email, lower(split_part(email,'@',1)) AS localpart, split_part(email,'@',2) AS domain, upper(split_part(email,'@',2)) AS domain_upper FROM sel_contacts_s;",
+            "mysql": "SELECT id, email, LOWER(SUBSTRING_INDEX(email,'@',1)) AS localpart, SUBSTRING_INDEX(email,'@',-1) AS domain, UPPER(SUBSTRING_INDEX(email,'@',-1)) AS domain_upper FROM sel_contacts_s;",
+            "oracle": "SELECT id, email, LOWER(REGEXP_SUBSTR(email,'[^@]+',1,1)) AS localpart, REGEXP_SUBSTR(email,'[^@]+',1,2) AS domain, UPPER(REGEXP_SUBSTR(email,'[^@]+',1,2)) AS domain_upper FROM sel_contacts_s;"
+          }
+        }
+      ]
+    }
+    ,
+    {
+      "title": "12) Pitfalls and best practices",
+  "description": "Question: what common SELECT pitfalls should I avoid and how do I fix them?",
+      "narrative": "Common SELECT gotchas and their safer alternatives. All demos are self-contained and DuckDB-compatible.",
+      "examples": [
+        {
+          "name": "sel_pitfalls",
+          "description": "Show non-deterministic LIMIT without ORDER BY, explicit casts, and replacing correlated subqueries with joins/CTEs.",
+          "sql": "-- 1) LIMIT without ORDER BY is non-deterministic\nDROP TABLE IF EXISTS sel_pit_a;\nCREATE TABLE sel_pit_a (id INTEGER, name VARCHAR);\nINSERT INTO sel_pit_a VALUES (3,'C'),(1,'A'),(2,'B');\n-- Avoid relying on insertion order:\nSELECT * FROM sel_pit_a LIMIT 2;\n-- Prefer explicit ordering for stability:\nSELECT * FROM sel_pit_a ORDER BY id ASC LIMIT 2;\nDROP TABLE IF EXISTS sel_pit_a;\n\n-- 2) Be explicit with casts to avoid surprises\nDROP TABLE IF EXISTS sel_pit_b;\nCREATE TABLE sel_pit_b (n_txt VARCHAR, n_int INTEGER);\nINSERT INTO sel_pit_b VALUES ('10', 10),('02', 2),('x', NULL);\n-- Implicit casts may differ across engines; be explicit where intent matters\nSELECT n_txt, n_int, CASE WHEN REGEXP_MATCHES(n_txt, '^[+-]?[0-9]+$') THEN CAST(n_txt AS INTEGER) ELSE NULL END AS n_txt_int FROM sel_pit_b ORDER BY n_txt;\nDROP TABLE IF EXISTS sel_pit_b;\n\n-- 3) Replace correlated subqueries with joins/CTEs when appropriate\nDROP TABLE IF EXISTS sel_pit_orders; DROP TABLE IF EXISTS sel_pit_items;\nCREATE TABLE sel_pit_orders (order_id INTEGER, customer VARCHAR);\nCREATE TABLE sel_pit_items  (order_id INTEGER, amount DOUBLE);\nINSERT INTO sel_pit_orders VALUES (1,'alice'),(2,'bob'),(3,'alice');\nINSERT INTO sel_pit_items  VALUES (1,100.0),(1,50.0),(2,20.0),(3,80.0);\n-- Correlated scalar subquery per row (ok for tiny sets)\nSELECT o.order_id, o.customer, (SELECT SUM(amount) FROM sel_pit_items i WHERE i.order_id = o.order_id) AS order_total\nFROM sel_pit_orders o ORDER BY o.order_id;\n-- Pre-aggregate via CTE then JOIN (often clearer/faster)\nWITH totals AS (SELECT order_id, SUM(amount) AS order_total FROM sel_pit_items GROUP BY order_id)\nSELECT o.order_id, o.customer, t.order_total\nFROM sel_pit_orders o LEFT JOIN totals t USING(order_id) ORDER BY o.order_id;\nDROP TABLE IF EXISTS sel_pit_items; DROP TABLE IF EXISTS sel_pit_orders;\n\n-- 4) NOT IN and NULLs: prefer NOT EXISTS\nDROP TABLE IF EXISTS sel_pit_left; DROP TABLE IF EXISTS sel_pit_right;\nCREATE TABLE sel_pit_left (id INTEGER);\nCREATE TABLE sel_pit_right(id INTEGER);\nINSERT INTO sel_pit_left VALUES (1),(2),(3);\nINSERT INTO sel_pit_right VALUES (2),(NULL);\n-- NOT IN with a NULL on the right can yield no rows\nSELECT id FROM sel_pit_left WHERE id NOT IN (SELECT id FROM sel_pit_right) ORDER BY id;\n-- Safer alternative using NOT EXISTS\nSELECT l.id FROM sel_pit_left l\nWHERE NOT EXISTS (SELECT 1 FROM sel_pit_right r WHERE r.id = l.id)\nORDER BY l.id;\nDROP TABLE IF EXISTS sel_pit_right; DROP TABLE IF EXISTS sel_pit_left;",
+          "nerd_notes": "Prefer ORDER BY for stability, explicit CAST for clarity, and pre-aggregation/joins over repeated correlated subqueries on large data. Use NOT EXISTS over NOT IN when NULLs can appear.",
+          "compat_examples": {
+            "postgres": "-- Use ~ for regex or SIMILAR TO; explicit CASTS behave similarly.",
+            "mysql": "-- Use REGEXP_LIKE or RLIKE depending on version; avoid implicit cast surprises.",
+            "oracle": "-- Use REGEXP_LIKE for regex checks; prefer NOT EXISTS for NULL-safe anti-joins."
+          }
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+      "id": "select-top-n-stable",
+      "prompt": "Return the top 3 highest scores from a table `scores(id, name, score)` with a deterministic tie-breaker on id.",
+      "answer_sql": "SELECT id, name, score FROM scores ORDER BY score DESC, id ASC LIMIT 3;"
+    },
+    {
+      "id": "distinct-vs-count",
+      "prompt": "Show unique cities from `people(city)` and also return counts per city ordered by count desc then city asc.",
+      "answer_sql": "SELECT DISTINCT city FROM people ORDER BY city; -- and\nSELECT city, COUNT(*) AS cnt FROM people GROUP BY city ORDER BY cnt DESC, city ASC;"
+    },
+    {
+      "id": "case-bucket",
+      "prompt": "Bucket ages from `people(age)` into 'minor' (<18), 'adult' (18-64), 'senior' (>=65).",
+      "answer_sql": "SELECT age, CASE WHEN age < 18 THEN 'minor' WHEN age < 65 THEN 'adult' ELSE 'senior' END AS band FROM people ORDER BY age;"
+    }
+  ]
+}

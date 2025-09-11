@@ -1,0 +1,251 @@
+{
+  "title": "ORDER BY and LIMIT",
+  "description": "Teach sorting and limiting results with DuckDB examples. Includes OFFSET pagination and keyset pagination patterns. Exercises included.",
+  "sections": [
+    {
+      "title": "0. Introduction: ORDER BY & LIMIT",
+      "description": "What does ordering and limiting do, and how to keep results deterministic?",
+      "examples": [
+        {
+          "name": "intro_orderby_limit_overview",
+          "sql": "",
+          "description": "Overview of ORDER BY (direction, expressions, NULLS placement) and LIMIT/OFFSET vs keyset pagination.",
+          "nerd_notes": "Always include a full ordering with tie-breakers; prefer keyset pagination over large OFFSETs."
+        }
+      ],
+      "narrative": "Learn stable sorting and pagination patterns: explicit ORDER BY with tie-breakers, safe LIMIT/OFFSET, and keyset pagination.",
+      "nerd_notes": "Use inline VALUES/CTEs for examples and add ORDER BY for deterministic outputs."
+    },
+    {
+      "title": "1.5 Cheat Sheet: Quick Sorting & Paging",
+      "description": "Four quick, self-contained patterns for ordering and pagination.",
+      "examples": [
+        {
+          "name": "cs_order_by_basic_quick",
+          "description": "Order small inline data with direction and NULLS placement.",
+          "sql": "WITH t(x) AS (VALUES (10),(NULL),(5)) SELECT x FROM t ORDER BY x DESC NULLS LAST;",
+          "nerd_notes": "NULLS FIRST/LAST controls null placement where supported."
+        },
+        {
+          "name": "cs_limit_offset_quick",
+          "description": "LIMIT + OFFSET over inline data with deterministic ordering.",
+          "sql": "WITH t(id,val) AS (VALUES (1,10),(2,10),(3,5),(4,1)) SELECT id,val FROM t ORDER BY val DESC, id ASC LIMIT 2 OFFSET 1;",
+          "nerd_notes": "Include a unique tie-breaker (id) to keep pages stable."
+        },
+        {
+          "name": "cs_keyset_pagination_quick",
+          "description": "Keyset pagination: resume after last seen key.",
+          "sql": "WITH t(id,val) AS (VALUES (1,100),(2,90),(3,75),(4,60)) SELECT id,val FROM t WHERE val < 90 ORDER BY val DESC, id ASC LIMIT 2;",
+          "nerd_notes": "Use WHERE on the ordering key(s) instead of large OFFSETs."
+        },
+        {
+          "name": "cs_row_number_topn_quick",
+          "description": "Top-N with deterministic tie-break via ROW_NUMBER().",
+          "sql": "WITH t(id,val) AS (VALUES (1,10),(2,10),(3,5)) SELECT id,val FROM (SELECT *, ROW_NUMBER() OVER (ORDER BY val DESC, id ASC) rn FROM t) s WHERE rn <= 2 ORDER BY rn;",
+          "nerd_notes": "ROW_NUMBER() yields a stable subset when ties exist."
+        }
+      ],
+      "narrative": "Use these small snippets to quickly sort and page results in a reproducible way.",
+      "nerd_notes": "All examples are deterministic thanks to explicit ordering."
+    },
+    {
+      "title": "1.6 Pitfalls, Tips, and Q&A",
+      "description": "Common gotchas with ordering and pagination.",
+      "examples": [
+        {
+          "name": "orderby_limit_pitfalls_notes",
+          "sql": "",
+          "description": "Notes: pagination drift from missing tie-breakers; large OFFSET costs; NULL ordering differences; collations affect order.",
+          "nerd_notes": "Prefer keyset pagination; define explicit collations when needed; always ORDER BY before LIMIT."
+        }
+      ],
+      "narrative": "Avoid nondeterministic pages and performance traps; be explicit about NULLs and tie-breakers.",
+      "nerd_notes": "Use EXPLAIN on large queries to understand sort and pagination costs."
+    },
+    {
+      "title": "1. Setup sample data",
+  "description": "Question: what compact dataset will we sort and paginate?",
+      "examples": [
+        {
+          "name": "create_scores",
+          "sql": "DROP TABLE IF EXISTS scores; CREATE TABLE scores (player TEXT, score INTEGER); INSERT INTO scores VALUES ('Alice',100),('Bob',150),('Carol',120);",
+          "description": "Create scores: a short demo.",
+          "nerd_notes": "Basic table used by ORDER BY/LIMIT demos."
+        }
+      ],
+      "narrative": "Create objects and small sample data used by subsequent examples. Keep these steps idempotent.",
+      "nerd_notes": "Simple schema to keep focus on ORDER BY/LIMIT semantics."
+    },
+    {
+      "title": "2. ORDER BY basics",
+  "description": "Question: how do we sort rows and control direction?",
+      "examples": [
+        {
+          "name": "order_by",
+          "sql": "SELECT * FROM scores ORDER BY score DESC;",
+          "description": "Order by: a short demo.",
+          "nerd_notes": "Use explicit ASC/DESC and add tie-breakers for determinism.",
+          "compat_examples": {
+            "postgres": "SELECT * FROM scores ORDER BY score DESC;",
+            "mysql": "SELECT * FROM scores ORDER BY score DESC;",
+            "oracle": "SELECT * FROM scores ORDER BY score DESC;"
+          }
+        }
+      ],
+      "narrative": "Basics of ORDER BY.",
+      "nerd_notes": "Sorting is undefined without a full ordering—add stable tie-breakers."
+    },
+    {
+      "title": "3. LIMIT and OFFSET",
+  "description": "Question: how do we page through results with OFFSET and why can it be unstable?",
+      "examples": [
+        {
+          "name": "limit_offset",
+          "sql": "SELECT * FROM scores ORDER BY score DESC, player ASC LIMIT 2 OFFSET 0;",
+          "description": "Limit offset: a short demo with deterministic tie-breaker.",
+          "nerd_notes": "Tie-breakers avoid non-deterministic pagination.",
+          "compat_examples": {
+            "postgres": "SELECT * FROM scores ORDER BY score DESC, player ASC LIMIT 2 OFFSET 0;",
+            "mysql": "SELECT * FROM scores ORDER BY score DESC, player ASC LIMIT 0, 2;",
+            "oracle": "SELECT * FROM (SELECT s.*, ROW_NUMBER() OVER (ORDER BY score DESC, player ASC) rn FROM scores s) WHERE rn BETWEEN 1 AND 2;"
+          }
+        },
+        {
+          "name": "dynamic_page_offset",
+          "description": "Compute OFFSET from page number and page size using a ROW_NUMBER() window; return a specific page deterministically.",
+          "sql": "WITH params(page_no, page_size) AS (VALUES (2, 2)),\nordered AS (\n  SELECT player, score, ROW_NUMBER() OVER (ORDER BY score DESC, player ASC) AS rn\n  FROM scores\n)\nSELECT player, score\nFROM ordered, params\nWHERE rn > (page_no - 1) * page_size\n  AND rn <= page_no * page_size\nORDER BY rn;",
+          "nerd_notes": "Some engines (including DuckDB) do not allow column references in LIMIT/OFFSET. Filter by ROW_NUMBER() for dynamic page windows."
+        },
+        {
+          "name": "offset_pitfall_and_fix",
+          "description": "Show why OFFSET can be unstable without total ordering, then fix with a stable composite order.",
+          "sql": "-- Unstable: ties make page contents drift between runs\nWITH t(player, score) AS (VALUES ('A',10),('B',10),('C',10))\nSELECT player, score FROM t ORDER BY score DESC LIMIT 2 OFFSET 1;\n\n-- Stable: add a deterministic tiebreaker\nWITH t(player, score) AS (VALUES ('A',10),('B',10),('C',10))\nSELECT player, score FROM t ORDER BY score DESC, player ASC LIMIT 2 OFFSET 1;",
+          "nerd_notes": "OFFSET is sensitive to unstable ordering—always add a unique tie-breaker column.",
+          "compat_examples": {
+            "postgres": "-- Same pattern applies; add stable tie-breakers.",
+            "mysql": "-- Same pattern applies; MySQL supports LIMIT offset,count syntax.",
+            "oracle": "-- Use ROW_NUMBER() window filtering to emulate OFFSET/LIMIT semantics."
+          } 
+        }
+      ],
+      "narrative": "Explain LIMIT and OFFSET for pagination. Include dynamic OFFSET calculation and stability pitfalls.",
+      "nerd_notes": "OFFSET can be costly at scale; consider keyset pagination for large datasets."
+    },
+    {
+      "title": "4. Tie-breaking and deterministic ordering",
+  "description": "Question: how do we make ordering and pagination stable across runs?",
+      "examples": [
+        {
+          "name": "tie_break",
+          "sql": "SELECT * FROM scores ORDER BY score DESC, player ASC;",
+          "description": "Tie break: a short demo.",
+          "nerd_notes": "Add a secondary key for repeatable results."
+        }
+      ],
+      "narrative": "Deterministic ordering matters for pagination and reproducibility.",
+      "nerd_notes": "Consider adding a surrogate key if no natural tiebreaker exists."
+    },
+    {
+      "title": "5. Cleanup",
+  "description": "Question: how do we remove the demo table to keep lessons idempotent?",
+      "examples": [
+        {
+          "name": "cleanup",
+          "sql": "DROP TABLE IF EXISTS scores;",
+          "description": "Cleanup: a short demo.",
+          "nerd_notes": "Drop teaching tables to keep lessons idempotent."
+        }
+      ],
+      "narrative": "Tear down objects created in this lesson so the examples are repeatable and safe to re-run.",
+      "nerd_notes": "Drop order is simple here (single table)."
+    },
+    {
+      "title": "ORDER BY, GROUP BY, and LIMIT Clauses",
+  "description": "Question: how does ORDER BY interact with GROUP BY for deterministic top-N?",
+      "narrative": "Show how ORDER BY interacts with GROUP BY and LIMIT: deterministic top-N, tie-breaking, and using ORDER BY on aggregate results.",
+      "nerd_notes": "When combining GROUP BY and LIMIT, order the aggregated result to get a deterministic subset. Use explicit tie-breakers to avoid non-determinism.",
+      "examples": [
+        {
+          "name": "order_by_group_by_limit",
+          "description": "Find top scoring players by count of entries and highest total score; show deterministic ordering and LIMIT.",
+          "sql": "WITH scores(player,score) AS (VALUES ('Alice',100),('Bob',150),('Carol',120),('Bob',140),('Alice',110))\nSELECT player, COUNT(*) AS plays, SUM(score) AS total_score\nFROM scores\nGROUP BY player\nORDER BY total_score DESC, player ASC\nLIMIT 2;",
+          "nerd_notes": "Use ORDER BY on aggregated columns. Adding a secondary key (player ASC) makes the LIMIT deterministic when totals tie."
+        },
+        {
+          "name": "limit_with_nulls_and_ties",
+          "description": "Show LIMIT behavior with NULLs and a tie-breaking pattern using ROW_NUMBER().",
+          "sql": "WITH t(val) AS (VALUES (NULL),(5),(10),(10))\nSELECT val FROM t ORDER BY val NULLS LAST LIMIT 2;\n-- Deterministic top-N with ties handled: use ROW_NUMBER() if you want a single tie-breaker\nWITH t2(id,val) AS (VALUES (1,10),(2,10),(3,5))\nSELECT id,val FROM (SELECT *, ROW_NUMBER() OVER (ORDER BY val DESC, id ASC) AS rn FROM t2) s WHERE rn <= 2;",
+          "nerd_notes": "NULLS FIRST/LAST controls where NULLs land in ORDER BY. Use window functions to control tie-breaking deterministically."
+        }
+      ]
+    },
+    {
+      "title": "1. ORDER BY Clause - Complete Sorting",
+  "description": "Question: can we order by expressions and control NULL placement?",
+      "narrative": "Ordering fundamentals: expressions, multiple columns, direction, and NULL placement. Show examples that are safe to run repeatedly.",
+      "nerd_notes": "ORDER BY can reference expressions and aliases. When ordering by alias in the same SELECT, some engines require repeating the expression; DuckDB supports aliases in ORDER BY.",
+      "examples": [
+        {
+          "name": "order_by_expressions",
+          "description": "Order by computed expressions and demonstrate ascending/descending and NULL placement.",
+          "sql": "WITH items(name, price) AS (VALUES ('a',10),(NULL,5),('c',10))\nSELECT name, price, price % 3 AS modulo FROM items ORDER BY modulo DESC, price ASC NULLS LAST;",
+          "nerd_notes": "Ordering by expressions lets you sort by derived metrics without creating extra columns. NULLS LAST keeps null names out of front.",
+          "compat_examples": {
+            "postgres": "SELECT ... ORDER BY modulo DESC, price ASC NULLS LAST; -- supported",
+            "mysql": "SELECT ... ORDER BY modulo DESC, price ASC; -- MySQL lacks NULLS LAST keyword; emulate with ORDER BY IS NULL, value",
+            "oracle": "SELECT ... ORDER BY modulo DESC, price ASC NULLS LAST; -- supported"
+          }
+        }
+      ]
+    },
+    {
+      "title": "3. LIMIT and OFFSET Clauses",
+  "description": "Question: what's a safer alternative to OFFSET for large datasets (keyset pagination)?",
+      "narrative": "Explain use of LIMIT and OFFSET for pagination and show safer patterns for stable pagination using keyset pagination.",
+      "nerd_notes": "OFFSET can be expensive on large tables; prefer keyset pagination (WHERE + ORDER BY) for large, shifting datasets.",
+      "examples": [
+        {
+          "name": "limit_offset_simple",
+          "description": "Simple LIMIT/OFFSET example using a small inline numbers table.",
+          "sql": "WITH numbers(n) AS (VALUES (1),(2),(3),(4),(5),(6)) SELECT * FROM numbers ORDER BY n LIMIT 3 OFFSET 1;",
+          "nerd_notes": "LIMIT+OFFSET for small datasets is fine; OFFSET is costly at scale."
+        },
+        {
+          "name": "keyset_pagination",
+          "description": "Keyset pagination (safer for large tables): use a WHERE filter on the ordering key.",
+          "sql": "WITH numbers(n) AS (VALUES (1),(2),(3),(4),(5),(6)) SELECT * FROM numbers WHERE n > 3 ORDER BY n LIMIT 3;",
+          "nerd_notes": "Keyset pagination avoids scanning/skipping many rows when offset grows large."
+        },
+        {
+          "name": "composite_keyset_pagination",
+          "description": "Keyset pagination on composite keys: resume from last (score, player).",
+          "sql": "-- Given last seen row (score=120, player='Bob'), fetch next page by (score DESC, player ASC)\nWITH scores(player,score) AS (VALUES ('Alice',150),('Bob',150),('Bob',120),('Carol',120),('Dave',100))\nSELECT player, score\nFROM scores\nWHERE (score < 120) OR (score = 120 AND player > 'Bob')\nORDER BY score DESC, player ASC\nLIMIT 2;",
+          "nerd_notes": "For DESC on first key and ASC on second, use (k1 < last_k1) OR (k1 = last_k1 AND k2 > last_k2)."
+        },
+        {
+          "name": "page_count_helper",
+          "description": "Return total rows and pages for a given page size using inline data.",
+          "sql": "WITH data(x) AS (VALUES (1),(2),(3),(4),(5),(6),(7)), cfg(page_size) AS (VALUES (3))\nSELECT (SELECT COUNT(*) FROM data) AS total_rows,\n       (SELECT page_size FROM cfg) AS page_size,\n       CAST(((SELECT COUNT(*) FROM data) + (SELECT page_size FROM cfg) - 1) / (SELECT page_size FROM cfg) AS INTEGER) AS total_pages;",
+          "nerd_notes": "Ceiling division formula yields page count without looping."
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+      "id": "basic-select",
+      "prompt": "Show the first 5 rows from `scores`.",
+      "answer_sql": "SELECT * FROM scores ORDER BY score DESC, player ASC LIMIT 5;"
+    },
+    {
+      "id": "aggregate-1",
+      "prompt": "Group by `player` and compute COUNT and SUM(score).",
+      "answer_sql": "SELECT player, COUNT(*) AS cnt, SUM(score) AS total_score FROM scores GROUP BY player ORDER BY cnt DESC, player ASC;"
+    },
+    {
+      "id": "filter-top",
+      "prompt": "Select the top 10 rows where `score` is positive (if numeric) or not null otherwise.",
+      "answer_sql": "SELECT * FROM scores WHERE score IS NOT NULL AND score > 0 ORDER BY score DESC, player ASC LIMIT 10;"
+    }
+  ]
+}

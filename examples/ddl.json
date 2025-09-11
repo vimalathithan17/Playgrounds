@@ -1,0 +1,377 @@
+{
+  "title": "Data Definition Language (DDL)",
+  "description": "Question-first, runnable DDL patterns for DuckDB: CREATE, CTAS, ALTER (basics), TRUNCATE equivalent, DROP, plus copy-structure and temporary-table techniques. All examples are idempotent and finish with a SELECT to show results. Each includes cross-engine compatibility notes.",
+  "sections": [
+    {
+      "title": "0. Introduction: DDL Basics in DuckDB",
+      "narrative": "This lesson covers practical, runnable DDL patterns for DuckDB: creating tables (plain and CTAS), adding columns safely, IF NOT EXISTS guards, temporary tables, copying structure (WHERE 1=0), and safe drops. All examples are idempotent and deterministic to pass validation.",
+      "nerd_notes": "DuckDB is embedded and file-backed. Prefer patterns that are re-runnable: DROP IF EXISTS before CREATE, or OR REPLACE CTAS for snapshots. End examples with a SELECT for stable output.",
+      "examples": []
+    },
+    {
+      "title": "1. Create tables safely",
+      "examples": [
+        {
+          "name": "create_tables",
+          "sql": "DROP TABLE IF EXISTS authors;\nCREATE TABLE authors (author_id INTEGER PRIMARY KEY, name TEXT);\nINSERT INTO authors VALUES (1,'Ana'),(2,'Ben');\nSELECT * FROM authors ORDER BY author_id;",
+          "description": "Question: How do I create a table idempotently and seed a few rows?",
+          "nerd_notes": "Use DROP TABLE IF EXISTS before CREATE to make examples re-runnable. Keep small seed data deterministic and include an ORDER BY for stable outputs.",
+          "compat_examples": {
+            "postgres": "CREATE TABLE authors (author_id INT PRIMARY KEY, name TEXT); INSERT INTO authors VALUES (1,'Ana'),(2,'Ben');",
+            "mysql": "CREATE TABLE authors (author_id INT PRIMARY KEY, name VARCHAR(255)); INSERT INTO authors VALUES (1,'Ana'),(2,'Ben');",
+            "sqlite": "CREATE TABLE authors (author_id INTEGER PRIMARY KEY, name TEXT); INSERT INTO authors VALUES (1,'Ana'),(2,'Ben');",
+            "oracle": "CREATE TABLE authors (author_id NUMBER PRIMARY KEY, name VARCHAR2(255)); INSERT INTO authors VALUES (1,'Ana'); INSERT INTO authors VALUES (2,'Ben');"
+          }
+        }
+      ],
+      "narrative": "Create objects and small sample data used by subsequent examples. Keep these steps idempotent.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "1.5 Cheat Sheet: Quick DDL Patterns",
+      "narrative": "Fast, copy‑pasteable DDL snippets. All examples are self-contained and idempotent.",
+      "examples": [
+        {
+          "name": "cs_or_replace_ctas_quick",
+          "description": "Create-or-replace a small snapshot table via CTAS (idempotent).",
+          "sql": "DROP TABLE IF EXISTS cs_snapshot;\nCREATE OR REPLACE TABLE cs_snapshot AS SELECT 1 AS id, 'ok' AS status;\nSELECT COUNT(*) AS n FROM cs_snapshot;",
+          "nerd_notes": "OR REPLACE makes CTAS re-runnable without a prior DROP in engines that support it. We still drop first for portability when copying the pattern elsewhere.",
+          "compat_examples": {
+            "postgres": "CREATE OR REPLACE VIEW cs_snapshot_v AS SELECT 1 AS id, 'ok' AS status; -- or use CREATE TABLE with DROP IF EXISTS for strict table semantics",
+            "mysql": "-- No CREATE OR REPLACE TABLE; use: DROP TABLE IF EXISTS cs_snapshot; CREATE TABLE cs_snapshot AS SELECT 1 id, 'ok' status;",
+            "sqlite": "DROP TABLE IF EXISTS cs_snapshot; CREATE TABLE cs_snapshot AS SELECT 1 AS id, 'ok' AS status;"
+          }
+        },
+        {
+          "name": "cs_add_column_with_default_quick",
+          "description": "Add a column with DEFAULT safely, then verify it exists.",
+          "sql": "DROP TABLE IF EXISTS cs_books;\nCREATE TABLE cs_books (book_id INTEGER, title TEXT);\nALTER TABLE cs_books ADD COLUMN in_stock BOOLEAN DEFAULT TRUE;\nSELECT COUNT(*) AS has_col FROM pragma_table_info('cs_books') WHERE name='in_stock';",
+          "nerd_notes": "Defaults keep legacy rows consistent. Use PRAGMA table_info or information_schema.columns to verify structure.",
+          "compat_examples": {
+            "postgres": "ALTER TABLE cs_books ADD COLUMN in_stock BOOLEAN DEFAULT TRUE;",
+            "mysql": "ALTER TABLE cs_books ADD COLUMN in_stock BOOLEAN DEFAULT TRUE;",
+            "oracle": "ALTER TABLE cs_books ADD (in_stock NUMBER(1) DEFAULT 1);"
+          }
+        },
+        {
+          "name": "cs_like_copy_shape_quick",
+          "description": "Copy only the structure of a table (no rows).",
+          "sql": "DROP TABLE IF EXISTS cs_src;\nCREATE TABLE cs_src (id INTEGER, v TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);\nDROP TABLE IF EXISTS cs_like;\nCREATE TABLE cs_like AS SELECT * FROM cs_src WHERE 1=0;\nSELECT COUNT(*) AS rows FROM cs_like;",
+          "nerd_notes": "DuckDB lacks CREATE TABLE LIKE; use CTAS with a false predicate to copy schema.",
+          "compat_examples": {
+            "postgres": "CREATE TABLE cs_like (LIKE cs_src INCLUDING ALL);",
+            "mysql": "CREATE TABLE cs_like LIKE cs_src;",
+            "sqlite": "CREATE TABLE cs_like AS SELECT * FROM cs_src WHERE 0;",
+            "oracle": "CREATE TABLE cs_like AS SELECT * FROM cs_src WHERE 1=0;"
+          }
+        },
+        {
+          "name": "cs_temp_table_count_quick",
+          "description": "Create a TEMP table and count rows.",
+          "sql": "CREATE TEMPORARY TABLE cs_temp AS SELECT * FROM range(3) AS t(i);\nSELECT COUNT(*) AS n FROM cs_temp;",
+          "nerd_notes": "Temporary tables are session-scoped; no explicit DROP needed.",
+          "compat_examples": {
+            "postgres": "CREATE TEMP TABLE cs_temp AS SELECT generate_series(0,2) AS i;",
+            "mysql": "CREATE TEMPORARY TABLE cs_temp (i INT); INSERT INTO cs_temp VALUES (0),(1),(2);",
+            "oracle": "CREATE GLOBAL TEMPORARY TABLE cs_temp (i NUMBER) ON COMMIT PRESERVE ROWS; INSERT INTO cs_temp SELECT LEVEL-1 FROM dual CONNECT BY LEVEL <= 3;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "1.6 Pitfalls, Tips, and Q&A",
+      "narrative": "Common DDL gotchas and best practices when working with DuckDB and portable SQL.",
+      "examples": [
+        {
+          "name": "pitfall_if_not_exists_can_hide_typos",
+          "description": "Using IF NOT EXISTS everywhere can hide mistakes; prefer DROP+CREATE in migrations and tests for determinism.",
+          "sql": ""
+        },
+        {
+          "name": "tip_or_replace_ctas_for_snapshots",
+          "description": "Use CREATE OR REPLACE TABLE ... AS SELECT for idempotent snapshot tables during demos.",
+          "sql": ""
+        },
+        {
+          "name": "question_pk_enforcement_in_duckdb",
+          "description": "DuckDB stores PRIMARY KEY/UNIQUE metadata but doesn't enforce all constraints like full FK; validate with separate checks.",
+          "sql": ""
+        },
+        {
+          "name": "tricky_drop_schema_dependencies",
+          "description": "Dropping a schema with CASCADE removes contained objects; preview with information_schema before destructive operations.",
+          "sql": ""
+        },
+        {
+          "name": "fundamental_copy_swap_for_type_changes",
+          "description": "For type changes and renames, use copy-swap staging tables (see altertable.json) for safer, reversible migrations.",
+          "sql": ""
+        }
+      ]
+    },
+    {
+      "title": "2. Create with constraints",
+      "examples": [
+        {
+          "name": "create_with_constraints",
+          "sql": "DROP TABLE IF EXISTS books;\nCREATE TABLE books (book_id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_id INTEGER, price DOUBLE CHECK (price >= 0));\nINSERT INTO books VALUES (1,'Book A',1,9.99),(2,'Book B',2,14.99);\nSELECT * FROM books ORDER BY book_id;",
+          "description": "Question: How do I add NOT NULL, CHECK, and PRIMARY KEY constraints when creating a table?",
+          "nerd_notes": "DuckDB records PRIMARY KEY metadata but doesn't enforce all FK semantics. Use CHECK for invariants like non-negative prices.",
+          "compat_examples": {
+            "postgres": "CREATE TABLE books (book_id INT PRIMARY KEY, title TEXT NOT NULL, author_id INT REFERENCES authors(author_id), price NUMERIC CHECK (price >= 0));",
+            "mysql": "CREATE TABLE books (book_id INT PRIMARY KEY, title VARCHAR(255) NOT NULL, author_id INT, price DECIMAL(10,2) CHECK (price >= 0), FOREIGN KEY (author_id) REFERENCES authors(author_id));",
+            "oracle": "CREATE TABLE books (book_id NUMBER PRIMARY KEY, title VARCHAR2(255) NOT NULL, author_id NUMBER, price NUMBER CHECK (price >= 0))"
+          }
+        }
+      ],
+      "narrative": "Define key integrity rules at creation time for clarity and better data quality.",
+      "nerd_notes": "DuckDB supports CHECK/NOT NULL and stores PK/UNIQUE metadata. For full FK enforcement, see notes in the constraints lessons."
+    },
+    {
+      "title": "3. ALTER best practices",
+      "examples": [
+        {
+          "name": "alter_best_practices",
+          "sql": "ALTER TABLE books ADD COLUMN in_stock BOOLEAN DEFAULT TRUE;\nSELECT * FROM books ORDER BY book_id;",
+          "description": "Question: How can I add a column safely without breaking existing queries?",
+          "nerd_notes": "Adding columns with DEFAULT keeps old rows consistent. For type changes or renames, prefer the copy pattern (see altertable.json).",
+          "compat_examples": {
+            "postgres": "ALTER TABLE books ADD COLUMN in_stock BOOLEAN DEFAULT TRUE;",
+            "mysql": "ALTER TABLE books ADD COLUMN in_stock BOOLEAN DEFAULT TRUE;",
+            "sqlite": "ALTER TABLE books ADD COLUMN in_stock BOOLEAN DEFAULT 1;",
+            "oracle": "ALTER TABLE books ADD (in_stock NUMBER(1) DEFAULT 1)"
+          }
+        }
+      ],
+      "narrative": "Use DEFAULTs and idempotent patterns. For complex changes, use staging tables and backfills.",
+      "nerd_notes": "See file altertable.json for more robust patterns (type change, rename, constraints)."
+    },
+    {
+      "title": "4. Mid-lesson cleanup (authors/books)",
+      "examples": [
+        {
+          "name": "drop_cleanup",
+          "sql": "DROP TABLE IF EXISTS books; DROP TABLE IF EXISTS authors;",
+          "description": "Question: What's the safest way to drop demo objects so I can re-run examples?",
+          "nerd_notes": "DROP IF EXISTS avoids errors on repeated runs. Consider backups before dropping in real systems.",
+          "compat_examples": {
+            "postgres": "DROP TABLE IF EXISTS books; DROP TABLE IF EXISTS authors;",
+            "mysql": "DROP TABLE IF EXISTS books; DROP TABLE IF EXISTS authors;",
+            "sqlite": "DROP TABLE IF EXISTS books; DROP TABLE IF EXISTS authors;",
+            "oracle": "BEGIN EXECUTE IMMEDIATE 'DROP TABLE books'; EXCEPTION WHEN OTHERS THEN NULL; END; BEGIN EXECUTE IMMEDIATE 'DROP TABLE authors'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+          }
+        }
+      ],
+      "narrative": "Tear down objects created in this lesson so the examples are repeatable and safe to re-run.",
+      "nerd_notes": "Prefer targeted cleanup to avoid interfering with other lessons."
+    },
+    {
+      "title": "5. Appendix: publishers demo",
+      "narrative": "A compact, runnable guide showing common DDL operations in DuckDB. Each example is idempotent (uses DROP IF EXISTS or IF NOT EXISTS).",
+      "nerd_notes": "These examples create small demo objects and are safe to run multiple times in the validation harness.",
+      "examples": [
+        {
+          "name": "publishers_table_example",
+          "description": "Create a small `publishers` table and insert demo rows (idempotent).",
+          "sql": "DROP TABLE IF EXISTS publishers;\nCREATE TABLE publishers (publisher_id INTEGER PRIMARY KEY, name TEXT, country TEXT);\nINSERT INTO publishers VALUES (1,'HarborPress','US'),(2,'MapleBooks','CA');\nSELECT * FROM publishers ORDER BY publisher_id;",
+          "nerd_notes": "Demonstrates DROP IF EXISTS + CREATE + INSERT pattern so the example can be re-run safely.",
+          "compat_examples": {
+            "postgres": "CREATE TABLE publishers (publisher_id INT PRIMARY KEY, name TEXT, country TEXT);",
+            "mysql": "CREATE TABLE publishers (publisher_id INT PRIMARY KEY, name VARCHAR(255), country VARCHAR(100));",
+            "oracle": "CREATE TABLE publishers (publisher_id NUMBER PRIMARY KEY, name VARCHAR2(255), country VARCHAR2(100));"
+          }
+        }
+      ]
+    },
+    {
+      "title": "6. Basic CREATE TABLE",
+      "narrative": "Show a minimal CREATE TABLE pattern that is safe to run repeatedly.",
+      "nerd_notes": "Keep CREATE examples idempotent using DROP IF EXISTS or CREATE TABLE IF NOT EXISTS.",
+      "examples": [
+        {
+          "name": "basic_create_table",
+          "description": "Create a basic `genres` table and insert sample rows.",
+          "sql": "DROP TABLE IF EXISTS genres;\nCREATE TABLE genres (genre_id INTEGER PRIMARY KEY, name TEXT NOT NULL);\nINSERT INTO genres VALUES (1,'Fiction'),(2,'Non-fiction');\nSELECT * FROM genres;",
+          "nerd_notes": "Use NOT NULL constraints where appropriate; choose types conservatively for small demos.",
+          "compat_examples": {
+            "postgres": "CREATE TABLE genres (genre_id INT PRIMARY KEY, name TEXT NOT NULL);",
+            "mysql": "CREATE TABLE genres (genre_id INT PRIMARY KEY, name VARCHAR(255) NOT NULL);",
+            "oracle": "CREATE TABLE genres (genre_id NUMBER PRIMARY KEY, name VARCHAR2(255) NOT NULL);"
+          }
+        }
+      ]
+    },
+    {
+      "title": "7. CREATE TABLE AS SELECT",
+      "narrative": "Create a derived table using `CREATE TABLE ... AS SELECT` from an inline VALUES table.",
+      "nerd_notes": "This pattern is useful to snapshot results of a query into a real table.",
+      "examples": [
+        {
+          "name": "create_table_as_select",
+          "description": "Create `top_publishers` from inline data using CTAS.",
+          "sql": "DROP TABLE IF EXISTS top_publishers;\nCREATE TABLE top_publishers AS\nSELECT * FROM (VALUES (1,'HarborPress',1000),(2,'MapleBooks',750)) AS t(publisher_id,name,sales);\nSELECT * FROM top_publishers;",
+          "nerd_notes": "CTAS copies query results into a persistent table; we used VALUES to keep the example self-contained.",
+          "compat_examples": {
+            "postgres": "CREATE TABLE top_publishers AS SELECT 1 AS publisher_id, 'HarborPress' AS name, 1000 AS sales UNION ALL SELECT 2, 'MapleBooks', 750;",
+            "mysql": "CREATE TABLE top_publishers AS SELECT 1 AS publisher_id, 'HarborPress' AS name, 1000 AS sales UNION ALL SELECT 2, 'MapleBooks', 750;",
+            "oracle": "CREATE TABLE top_publishers AS SELECT 1 AS publisher_id, 'HarborPress' AS name, 1000 AS sales FROM dual UNION ALL SELECT 2, 'MapleBooks', 750 FROM dual;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "8. CTAS with explicit types (CAST)",
+      "narrative": "Ensure desired column types when creating from a SELECT by casting in the projection.",
+      "nerd_notes": "CTAS infers types from the SELECT; add CASTs to control precision/scale and NULLability.",
+      "examples": [
+        {
+          "name": "ctas_with_types",
+          "description": "Question: How do I control column types in CTAS?",
+          "sql": "DROP TABLE IF EXISTS sales_ctas;\nCREATE TABLE sales_ctas AS\nSELECT CAST(1 AS INTEGER) AS id, CAST('Widget' AS TEXT) AS item, CAST(9.99 AS DECIMAL(10,2)) AS price;\nSELECT typeof(id), typeof(item), typeof(price) FROM sales_ctas;",
+          "nerd_notes": "Explicit casts in the SELECT ensure consistent types regardless of source expression defaults.",
+          "compat_examples": {
+            "postgres": "CREATE TABLE sales_ctas AS SELECT 1::int AS id, 'Widget'::text AS item, 9.99::numeric(10,2) AS price;",
+            "mysql": "CREATE TABLE sales_ctas AS SELECT CAST(1 AS SIGNED) id, CAST('Widget' AS CHAR(255)) item, CAST(9.99 AS DECIMAL(10,2)) price;",
+            "oracle": "CREATE TABLE sales_ctas AS SELECT CAST(1 AS NUMBER) id, CAST('Widget' AS VARCHAR2(255)) item, CAST(9.99 AS NUMBER(10,2)) price FROM dual;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "9. CREATE TABLE IF NOT EXISTS",
+      "narrative": "Create a table only if it doesn’t already exist.",
+      "nerd_notes": "In teaching code we usually prefer DROP IF EXISTS + CREATE for determinism; IF NOT EXISTS is useful in idempotent bootstraps.",
+      "examples": [
+        {
+          "name": "create_if_not_exists",
+          "description": "Question: How can I avoid errors when a table may already exist?",
+          "sql": "DROP TABLE IF EXISTS maybe_table;\nCREATE TABLE IF NOT EXISTS maybe_table (id INTEGER, note TEXT);\nINSERT INTO maybe_table VALUES (1,'created'),(2,'exists_ok');\nSELECT COUNT(*) AS n FROM maybe_table;",
+          "compat_examples": {
+            "postgres": "CREATE TABLE IF NOT EXISTS maybe_table (id int, note text);",
+            "mysql": "CREATE TABLE IF NOT EXISTS maybe_table (id INT, note VARCHAR(255));",
+            "oracle": "-- Use PL/SQL to create if not exists\n-- BEGIN EXECUTE IMMEDIATE 'CREATE TABLE maybe_table (id NUMBER, note VARCHAR2(255))'; EXCEPTION WHEN OTHERS THEN IF SQLCODE = -955 THEN NULL ELSE RAISE; END IF; END;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "10. DROP TABLE and Safe Deletion",
+      "narrative": "Demonstrate removing objects safely using IF EXISTS.",
+      "nerd_notes": "Prefer DROP IF EXISTS to make examples re-runnable.",
+      "examples": [
+        {
+          "name": "drop_table_safe",
+          "description": "Drop demo tables created earlier to keep the environment clean.",
+          "sql": "DROP TABLE IF EXISTS top_publishers;\nDROP TABLE IF EXISTS publishers;\nDROP TABLE IF EXISTS genres;\nSELECT 'cleanup_done' AS status;",
+          "nerd_notes": "Cleanup steps help the validator avoid cross-example interference.",
+          "compat_examples": {
+            "postgres": "DROP TABLE IF EXISTS top_publishers;",
+            "mysql": "DROP TABLE IF EXISTS top_publishers;",
+            "oracle": "BEGIN EXECUTE IMMEDIATE 'DROP TABLE top_publishers'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "11. TRUNCATE TABLE (DELETE Equivalent)",
+      "narrative": "DuckDB supports DELETE; use DELETE FROM to remove rows in examples.",
+      "nerd_notes": "TRUNCATE may not be available in all backends; DELETE is portable in DuckDB for demos.",
+      "examples": [
+        {
+          "name": "delete_equivalent",
+          "description": "Show using DELETE to clear a table and verify the rowcount.",
+          "sql": "DROP TABLE IF EXISTS demo_delete;\nCREATE TABLE demo_delete (id INTEGER, v TEXT);\nINSERT INTO demo_delete VALUES (1,'x'),(2,'y');\nDELETE FROM demo_delete;\nSELECT COUNT(*) AS rows_after_delete FROM demo_delete;",
+          "nerd_notes": "DELETE removes rows; for larger datasets consider partitioning or file-level operations.",
+          "compat_examples": {
+            "postgres": "TRUNCATE TABLE demo_delete;",
+            "mysql": "TRUNCATE TABLE demo_delete;",
+            "sqlite": "DELETE FROM demo_delete;",
+            "oracle": "TRUNCATE TABLE demo_delete"
+          }
+        }
+      ]
+    },
+    {
+      "title": "12. Copy structure only (LIKE pattern)",
+      "narrative": "Create an empty table with the same structure as another table.",
+      "nerd_notes": "DuckDB doesn't have CREATE TABLE LIKE; use CTAS with WHERE 1=0 to copy the shape.",
+      "examples": [
+        {
+          "name": "create_like_pattern",
+          "description": "Question: How can I create a new table with the same columns but no rows?",
+          "sql": "DROP TABLE IF EXISTS src_demo;\nCREATE TABLE src_demo (id INTEGER, name TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);\nDROP TABLE IF EXISTS src_demo_copy;\nCREATE TABLE src_demo_copy AS SELECT * FROM src_demo WHERE 1=0;\nSELECT COUNT(*) AS copied_rows FROM src_demo_copy;",
+          "nerd_notes": "The WHERE 1=0 trick returns zero rows but preserves columns and defaults when supported by CTAS.",
+          "compat_examples": {
+            "postgres": "CREATE TABLE src_demo_copy (LIKE src_demo INCLUDING ALL);",
+            "mysql": "CREATE TABLE src_demo_copy LIKE src_demo;",
+            "sqlite": "CREATE TABLE src_demo_copy AS SELECT * FROM src_demo WHERE 0;",
+            "oracle": "CREATE TABLE src_demo_copy AS SELECT * FROM src_demo WHERE 1=0"
+          }
+        }
+      ]
+    },
+    {
+      "title": "13. Temporary tables",
+      "narrative": "Use temporary tables for session-scoped scratch work.",
+      "nerd_notes": "Temporary tables live for the connection/session and don't require manual cleanup.",
+      "examples": [
+        {
+          "name": "temp_tables_demo",
+          "description": "Question: How do I create and use a temporary table?",
+          "sql": "CREATE TEMPORARY TABLE temp_nums AS SELECT * FROM range(5) AS t(i);\nSELECT COUNT(*) AS n FROM temp_nums;",
+          "compat_examples": {
+            "postgres": "CREATE TEMP TABLE temp_nums AS SELECT generate_series(0,4) AS i;",
+            "mysql": "CREATE TEMPORARY TABLE temp_nums (i INT); INSERT INTO temp_nums VALUES (0),(1),(2),(3),(4);",
+            "oracle": "CREATE GLOBAL TEMPORARY TABLE temp_nums (i NUMBER) ON COMMIT PRESERVE ROWS; INSERT INTO temp_nums SELECT LEVEL-1 FROM dual CONNECT BY LEVEL <= 5;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "14. Schemas and namespacing (DDL)",
+      "narrative": "Create a schema and a table within it, then clean up.",
+      "nerd_notes": "DuckDB supports schemas; qualify with schema.table. Default schema is main.",
+      "examples": [
+        {
+          "name": "schema_namespace",
+          "description": "Question: How do I create a schema and table within it?",
+          "sql": "DROP SCHEMA IF EXISTS s_demo CASCADE;\nCREATE SCHEMA s_demo;\nCREATE TABLE s_demo.metrics (k TEXT, v INTEGER);\nINSERT INTO s_demo.metrics VALUES ('x', 1), ('y', 2);\nSELECT * FROM s_demo.metrics ORDER BY k;\nDROP TABLE IF EXISTS s_demo.metrics;\nDROP SCHEMA IF EXISTS s_demo CASCADE;",
+          "compat_examples": {
+            "postgres": "CREATE SCHEMA s_demo; CREATE TABLE s_demo.metrics (k TEXT, v INT);",
+            "mysql": "CREATE DATABASE s_demo; CREATE TABLE s_demo.metrics (k VARCHAR(255), v INT);",
+            "oracle": "-- In Oracle, schema == user; qualify as user.table (requires user s_demo)."
+          }
+        }
+      ]
+    },
+    {
+      "title": "15. Final cleanup (lesson-wide)",
+      "narrative": "Drop any demo objects that may linger from previous sections to keep the environment clean.",
+      "examples": [
+        {
+          "name": "final_cleanup",
+          "description": "Ensure all objects created in this lesson are removed.",
+          "sql": "DROP TABLE IF EXISTS authors;\nDROP TABLE IF EXISTS books;\nDROP TABLE IF EXISTS publishers;\nDROP TABLE IF EXISTS genres;\nDROP TABLE IF EXISTS top_publishers;\nDROP TABLE IF EXISTS demo_delete;\nDROP TABLE IF EXISTS src_demo;\nDROP TABLE IF EXISTS src_demo_copy;\nDROP TABLE IF EXISTS sales_ctas;\nDROP TABLE IF EXISTS maybe_table;\n-- Cheat sheet artifacts\nDROP TABLE IF EXISTS cs_snapshot;\nDROP TABLE IF EXISTS cs_books;\nDROP TABLE IF EXISTS cs_src;\nDROP TABLE IF EXISTS cs_like;\n-- temp tables are session-scoped and do not require DROP",
+          "nerd_notes": "Keeping a final cleanup makes re-validation deterministic."
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+      "id": "basic-select",
+      "prompt": "Show the first 5 rows from `authors`.",
+      "answer_sql": "SELECT * FROM authors LIMIT 5;"
+    },
+    {
+      "id": "aggregate-1",
+      "prompt": "Count rows grouped by `author_id`.",
+      "answer_sql": "SELECT author_id, COUNT(*) AS cnt FROM authors GROUP BY author_id ORDER BY cnt DESC;"
+    },
+    {
+      "id": "filter-top",
+      "prompt": "Select the top 10 rows where `author_id` is positive (if numeric) or not null otherwise.",
+      "answer_sql": "SELECT * FROM authors WHERE author_id IS NOT NULL AND author_id > 0 LIMIT 10;"
+    }
+  ]
+}

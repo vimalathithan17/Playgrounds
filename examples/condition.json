@@ -1,0 +1,318 @@
+{
+  "title": "Conditional Logic in SQL",
+  "description": "Teach conditional expressions (CASE, COALESCE, NULL handling) with DuckDB-compatible, self-contained examples. Exercises are included for practice and reference the `employees` table where helpful.",
+  "sections": [
+    {
+      "title": "0. Introduction: Conditional Logic",
+      "description": "How SQL encodes branching logic: simple CASE vs searched CASE, COALESCE/NULLIF, and conditional aggregation. When to use each and why.",
+      "examples": [],
+      "narrative": "Conditional logic lets SQL answer 'if/else' questions directly in queries. Use simple CASE to map a value to labels, searched CASE for range or multi-predicate logic, COALESCE to provide defaults, NULLIF to normalize values, and CASE/FILTER inside aggregates for segmented metrics.",
+      "nerd_notes": "Mental model: expressions must yield compatible types across CASE branches. Aggregates ignore NULLs; use COALESCE to present clean results. FILTER reads well but isn't in all engines—CASE-in-aggregate is the portable fallback."
+    },
+    {
+      "title": "1. Setup: employees table",
+      "examples": [
+        {
+          "name": "create_employees",
+          "sql": "DROP TABLE IF EXISTS employees;\nCREATE TABLE employees (emp_id INTEGER, name TEXT, department TEXT, salary DOUBLE, manager_id INTEGER);\nINSERT INTO employees VALUES\n(1, 'Alice', 'Sales', 70000, NULL),\n(2, 'Bob', 'Sales', 50000, 1),\n(3, 'Carol', 'Engineering', 120000, NULL),\n(4, 'Dave', NULL, NULL, 3);",
+          "description": "Question: how do we create a small employees table for conditional logic demos?",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+          ,
+          "compat_examples": {
+            "postgres": "-- Postgres: same SQL works; use DOUBLE PRECISION or NUMERIC for precise decimals",
+            "mysql": "-- MySQL: use DOUBLE or DECIMAL; IFNULL is supported as an alias for COALESCE",
+            "oracle": "-- Oracle: use NUMBER for numeric types; NVL is an alias for COALESCE"
+          }
+        }
+      ],
+      "narrative": "Create objects and small sample data used by subsequent examples. Keep these steps idempotent.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "2. Simple CASE expression",
+      "examples": [
+        {
+          "name": "case_simple",
+          "sql": "SELECT emp_id, name, department,\n  CASE department WHEN 'Sales' THEN 'Sales Team' WHEN 'Engineering' THEN 'Eng Team' ELSE 'Other' END AS dept_label\nFROM employees;",
+          "description": "Question: how do we map departments to human-friendly labels with a simple CASE?",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+          ,
+          "compat_examples": {
+            "postgres": "-- Postgres: CASE expressions are fully supported",
+            "mysql": "-- MySQL: CASE expressions supported; older versions may differ with IFNULL",
+            "oracle": "-- Oracle: CASE supported; consider TO_CHAR/TO_DATE for formatting"
+          }
+        }
+      ],
+      "narrative": "Short explanations and examples about 2. Simple CASE expression.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "2.5 Cheat Sheet: Quick Conditional Patterns",
+      "description": "Copy-ready snippets showing common CASE/COALESCE/FILTER patterns.",
+      "examples": [
+        {
+          "name": "cs_label_by_department",
+          "description": "Map department to label with simple CASE.",
+          "sql": "WITH t(dept) AS (VALUES ('Sales'),('Engineering'),(NULL)) SELECT dept, CASE dept WHEN 'Sales' THEN 'Sales Team' WHEN 'Engineering' THEN 'Eng Team' ELSE 'Other' END AS label FROM t ORDER BY label;",
+          "nerd_notes": "Simple CASE compares one expression to constants; returns compatible text labels."
+        },
+        {
+          "name": "cs_bucket_numeric_ranges",
+          "description": "Bucket numeric values using searched CASE.",
+          "sql": "WITH t(val) AS (VALUES (50),(75000),(120000),(NULL)) SELECT val, CASE WHEN val IS NULL THEN 'Unknown' WHEN val < 60000 THEN 'Low' WHEN val < 100000 THEN 'Mid' ELSE 'High' END AS band FROM t ORDER BY band, val NULLS LAST;",
+          "nerd_notes": "Order of predicates matters; the first matching WHEN wins."
+        },
+        {
+          "name": "cs_coalesce_defaults",
+          "description": "Provide default values for NULLs via COALESCE.",
+          "sql": "WITH t(name,email) AS (VALUES ('Alice','alice@example.com'),('Bob',NULL)) SELECT name, COALESCE(email,'no-email@example.com') AS email_safe FROM t ORDER BY name;",
+          "nerd_notes": "COALESCE(arg1,arg2,...) returns the first non-NULL."
+        },
+        {
+          "name": "cs_conditional_agg_filter",
+          "description": "Conditional aggregation with FILTER (DuckDB) and portable CASE.",
+          "sql": "WITH t(category,val) AS (VALUES ('A',10),('A',200),('B',50),('B',300)) SELECT category, COUNT(*) AS cnt, SUM(val) FILTER (WHERE val > 100) AS sum_gt_100, SUM(CASE WHEN val > 100 THEN val ELSE 0 END) AS sum_gt_100_portable FROM t GROUP BY category ORDER BY category;",
+          "nerd_notes": "FILTER is readable; CASE version is portable."
+        }
+      ],
+      "narrative": "Fast reference for the most common conditional patterns you'll reuse frequently.",
+      "nerd_notes": "Keep CASE branches type-compatible; prefer explicit ordering when showing bucket outputs."
+    },
+    {
+      "title": "2.6 Pitfalls, Tips, and Q&A",
+      "description": "Common conditional-logic mistakes and quick answers.",
+      "examples": [
+        {
+          "name": "pitfall_case_type_mismatch",
+          "description": "Q: Why does my CASE produce unexpected types or errors?",
+          "sql": "",
+          "nerd_notes": "All CASE branches must be type-compatible. Cast branches explicitly (e.g., CAST(... AS VARCHAR)) when mixing types."
+        },
+        {
+          "name": "tip_nulls_in_aggregates",
+          "description": "Tip: Aggregates ignore NULLs; present defaults with COALESCE.",
+          "sql": "",
+          "nerd_notes": "COUNT(col) ignores NULLs; COUNT(*) counts rows. Use COALESCE inside SELECT for clean presentation values."
+        },
+        {
+          "name": "question_filter_vs_case",
+          "description": "Q: Should I use FILTER or CASE in aggregates?",
+          "sql": "",
+          "nerd_notes": "Use FILTER when available for clarity; prefer CASE in aggregates for maximum portability across engines."
+        },
+        {
+          "name": "tricky_order_of_when",
+          "description": "Q: My buckets look wrong—what's happening?",
+          "sql": "",
+          "nerd_notes": "Searched CASE evaluates WHEN clauses in order; the first match wins. Order predicates from most specific to least or vice versa intentionally."
+        },
+        {
+          "name": "fundamental_nullif_use",
+          "description": "Q: When should I use NULLIF?",
+          "sql": "",
+          "nerd_notes": "Use NULLIF(a,b) to turn sentinel values (like empty strings or 0) into NULLs before aggregation or COALESCE defaults."
+        }
+      ],
+      "narrative": "A compact guide to avoid common conditional pitfalls and choose the right construct for the job.",
+      "nerd_notes": "Prefer, where possible, table-driven rules for complex decision trees to keep SQL maintainable."
+    },
+    {
+      "title": "3. Searched CASE and ranges",
+      "examples": [
+        {
+          "name": "case_searched",
+          "sql": "SELECT emp_id, name, salary,\n  CASE WHEN salary IS NULL THEN 'Unknown' WHEN salary < 60000 THEN 'Low' WHEN salary < 100000 THEN 'Mid' ELSE 'High' END AS salary_band\nFROM employees;",
+          "description": "Question: how do we bucket salary ranges using a searched CASE expression?",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+          ,
+          "compat_examples": {
+            "postgres": "-- Postgres: same searched CASE syntax works",
+            "mysql": "-- MySQL: same searched CASE syntax works",
+            "oracle": "-- Oracle: same searched CASE syntax works"
+          }
+        }
+      ],
+      "narrative": "Short explanations and examples about 3. Searched CASE and ranges.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "4. COALESCE and NULLIF",
+      "examples": [
+        {
+          "name": "coalesce_nullif",
+          "sql": "SELECT emp_id, name, COALESCE(department, 'Unassigned') AS dept_or_default, NULLIF(name, '') AS name_safe FROM employees;",
+          "description": "Question: how do we provide safe defaults and normalize empty values with COALESCE / NULLIF?",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+          ,
+          "compat_examples": {
+            "postgres": "-- Postgres: COALESCE/NULLIF supported; use COALESCE for portability",
+            "mysql": "-- MySQL: COALESCE/NULLIF supported; IFNULL available as shorthand",
+            "oracle": "-- Oracle: NVL is similar to COALESCE; NULLIF available"
+          }
+        }
+      ],
+      "narrative": "Short explanations and examples about 4. COALESCE and NULLIF.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "5. Conditional aggregation",
+      "examples": [
+        {
+          "name": "conditional_agg",
+          "sql": "SELECT\n  SUM(CASE WHEN department = 'Sales' THEN salary ELSE 0 END) AS sales_payroll,\n  SUM(CASE WHEN department = 'Engineering' THEN salary ELSE 0 END) AS eng_payroll,\n  COUNT(CASE WHEN salary IS NULL THEN 1 END) AS unknown_salaries\nFROM employees;",
+          "description": "Question: how do we compute department-specific aggregates using conditional expressions?",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+          ,
+          "compat_examples": {
+            "postgres": "-- Postgres: conditional aggregation works; FILTER available",
+            "mysql": "-- MySQL: use SUM(CASE ...) for portability; FILTER supported in newer versions",
+            "oracle": "-- Oracle: use CASE inside aggregates; FILTER not supported in older versions"
+          }
+        }
+      ],
+      "narrative": "Short explanations and examples about 5. Conditional aggregation.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "6. Cleanup",
+      "examples": [
+        {
+          "name": "cleanup",
+          "sql": "DROP TABLE IF EXISTS employees;",
+          "description": "Question: how do we clean up demo artifacts when finished?",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+          ,
+          "compat_examples": {
+            "postgres": "-- Postgres: DROP TABLE IF EXISTS supported; LIMIT supported with FETCH",
+            "mysql": "-- MySQL: same DDL works; LIMIT supported",
+            "oracle": "-- Oracle: older versions don't support IF EXISTS; use PL/SQL guard or DROP TABLE and catch exception"
+          }
+        }
+      ],
+      "narrative": "Tear down objects created in this lesson so the examples are repeatable and safe to re-run.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "Conditional Logic & Case Statements",
+      "narrative": "Overview: Conditional expressions let you encode business rules directly in SQL. We'll start with simple CASE expressions and progress to conditional aggregation, pattern matching, and lightweight analytical conditionals. Each example is question-first and idempotent so you can run it repeatedly in DuckDB.",
+      "nerd_notes": "Why this matters: moving simple business logic into SQL often improves performance and centralizes rules. Watch out for NULLs and type differences across branches of CASE expressions.",
+      "examples": [
+        {
+          "name": "overview_conditional_logic",
+          "description": "Question: what conditional patterns exist (CASE, COALESCE, FILTER) and when to use each?",
+          "sql": "SELECT 'CASE / Searched CASE' AS pattern UNION ALL SELECT 'COALESCE / NULLIF' UNION ALL SELECT 'FILTER / CASE in aggregates' LIMIT 10;",
+          "nerd_notes": "This small selector lists common patterns we'll demonstrate: simple CASE for exact matches, searched CASE for ranges/conditions, COALESCE/NULLIF for null-safe defaults, and conditional aggregates via FILTER or CASE."
+        }
+      ]
+    },
+    {
+      "title": "1. Basic CASE Statements",
+      "narrative": "Question: now let's say we need to bucket prices into human-friendly categories (Budget/Mid/Premium) — how do we do that in SQL so results are readable in reports?",
+      "nerd_notes": "Use simple CASE when comparing a single expression to constants (CASE expr WHEN ...). Use searched CASE (CASE WHEN ...) when you need inequalities or complex predicates. Ensure all branches return compatible types.",
+      "examples": [
+        {
+          "name": "case_basic_products",
+          "description": "Question: how do we classify products into price tiers with CASE?",
+          "sql": "DROP TABLE IF EXISTS products_demo;\nCREATE TABLE products_demo (id INTEGER, name TEXT, price DOUBLE, stock INTEGER);\nINSERT INTO products_demo VALUES (1, 'Laptop', 999.99, 5),(2,'Mouse',25.99,20),(3,'Book',15.99,30),(4,'Notebook',5.99,50);\nSELECT id, name, price, CASE WHEN price < 20 THEN 'Budget' WHEN price < 200 THEN 'Mid-Range' WHEN price < 800 THEN 'Premium' ELSE 'Luxury' END AS price_category FROM products_demo ORDER BY price;\nDROP TABLE IF EXISTS products_demo;",
+          "nerd_notes": "Question-first: how do we classify rows? Alternatives: create a lookup table for tiers and join; use a UDF for complex logic. Pitfall: mixing numeric and text return types in CASE branches will force type coercion."
+        }
+      ]
+    },
+    {
+      "title": "2. CASE in Aggregations",
+      "narrative": "Question: how do we compute conditional counts and sums (for example, count 'expensive' products per category) without multiple queries? We use CASE or FILTER inside aggregates.",
+      "nerd_notes": "FILTER is concise and clear; CASE inside aggregates is portable across engines. On large datasets, pre-aggregating may be faster.",
+      "examples": [
+        {
+          "name": "case_in_aggregations_products",
+          "description": "Question: how do we count and sum conditionally per category using CASE inside aggregates?",
+          "sql": "DROP TABLE IF EXISTS products_ag;\nCREATE TABLE products_ag (category TEXT, price DOUBLE, qty INTEGER);\nINSERT INTO products_ag VALUES ('Electronics',999.99,5),('Electronics',25.99,20),('Books',15.99,30),('Education',5.99,50);\nSELECT category, COUNT(*) AS total_items, SUM(CASE WHEN price > 100 THEN 1 ELSE 0 END) AS expensive_count, SUM(price * qty) AS total_value FROM products_ag GROUP BY category;\nDROP TABLE IF EXISTS products_ag;",
+          "nerd_notes": "Alternative: SUM(CASE WHEN price > 100 THEN 1 ELSE 0 END) or COUNT(*) FILTER (WHERE price > 100). FILTER reads well but is less widely supported in older engines."
+        }
+      ]
+    },
+    {
+      "title": "3. NULL Handling",
+      "narrative": "Question: how do we provide sensible defaults and avoid surprising NULL results in reports? Use COALESCE to provide fallbacks and NULLIF to normalize values.",
+      "nerd_notes": "Aggregates ignore NULLs; COUNT(column) counts non-NULLs. COALESCE is your friend for default values in presentations.",
+      "examples": [
+        {
+          "name": "null_handling_demo",
+          "description": "Question: how do we replace NULLs with defaults and turn empty strings into NULLs?",
+          "sql": "DROP TABLE IF EXISTS users_null;\nCREATE TABLE users_null (id INTEGER, name TEXT, email TEXT);\nINSERT INTO users_null VALUES (1,'Alice','alice@example.com'),(2,'Bob',NULL),(3,'Carol','');\nSELECT id, name, COALESCE(email,'no-email@example.com') AS email_safe, NULLIF(email,'') AS email_or_null FROM users_null;\nDROP TABLE IF EXISTS users_null;",
+          "nerd_notes": "NULLIF(value, '') is useful to convert empty strings to NULLs. IFNULL is an alias in some dialects (COALESCE is standard)."
+        }
+      ]
+    },
+    {
+      "title": "4. Advanced Conditional Logic",
+      "narrative": "Question: how do we build multi-level decision trees in SQL (for example, customer segmentation) and keep them maintainable? We'll show nested CASE and a decision-tree style query.",
+      "nerd_notes": "Nested CASE expressions are expressive but can be hard to maintain. Consider moving complex logic to a table-driven approach or to an ETL step when it grows.",
+      "examples": [
+        {
+          "name": "advanced_decision_tree",
+          "description": "Question: how do we implement multi-level decision trees and segmentation with nested CASE?",
+          "sql": "DROP TABLE IF EXISTS customer_insights;\nCREATE TABLE customer_insights (customer_id INTEGER, total_spent DOUBLE, total_orders INTEGER, satisfaction INTEGER, last_order DATE);\nINSERT INTO customer_insights VALUES (1,2500,25,9,'2024-01-10'),(2,450,8,7,'2023-12-01'),(3,150,3,6,'2023-06-15');\nSELECT customer_id, total_spent, total_orders, satisfaction, CASE WHEN total_spent > 2000 THEN 'High' WHEN total_spent > 500 THEN 'Medium' ELSE 'Low' END AS spending_segment, CASE WHEN satisfaction >= 9 THEN 'Promoter' WHEN satisfaction >= 7 THEN 'Passive' ELSE 'Detractor' END AS nps_segment FROM customer_insights;\nDROP TABLE IF EXISTS customer_insights;",
+          "nerd_notes": "Alternative: express segmentation rules in a lookup table (rule_id, min_spend, max_spend, label) and join to classify. That approach centralizes rules and makes them data-driven."
+        }
+      ]
+    },
+    {
+      "title": "4a. Pattern Matching & Validation",
+      "narrative": "Question: how can we detect invalid emails or phone numbers using SQL for quick data-quality checks? We'll use LIKE and simple regex-like patterns where supported.",
+      "nerd_notes": "Pattern checks in SQL are best-effort; for robust validation use application-level checks or dedicated libraries. SQL checks are useful for lightweight profiling and cleaning.",
+      "examples": [
+        {
+          "name": "pattern_email_validation",
+          "description": "Question: how can we flag obviously invalid email addresses using SQL patterns?",
+          "sql": "DROP TABLE IF EXISTS users_validate;\nCREATE TABLE users_validate (id INTEGER, name TEXT, email TEXT);\nINSERT INTO users_validate VALUES (1,'Alice','alice@gmail.com'),(2,'Bob','bob_at_example.com'),(3,'Carol',NULL);\nSELECT id, name, email, CASE WHEN email IS NULL THEN 'MISSING' WHEN email LIKE '%_@_%._%' THEN 'OK' ELSE 'INVALID' END AS email_status FROM users_validate;\nDROP TABLE IF EXISTS users_validate;",
+          "nerd_notes": "The LIKE pattern '%_@_%._%' is a lightweight check; it will miss some invalid cases and may accept some invalid ones. For production, use proper regex validation outside SQL."
+        }
+      ]
+    },
+    {
+      "title": "4b. Statistical Analysis",
+      "narrative": "Question: how can conditional logic assist in simple statistical analysis (e.g., label above/below average)? We'll use windowed averages for deterministic small examples.",
+      "nerd_notes": "Window functions combined with CASE give expressive per-row statistical flags without additional subqueries.",
+      "examples": [
+        {
+          "name": "stat_conditional_over",
+          "description": "Question: how do we flag rows above/below average using window functions and CASE?",
+          "sql": "DROP TABLE IF EXISTS sales_analytics_demo;\nCREATE TABLE sales_analytics_demo (sale_id INTEGER, product_id INTEGER, quarter TEXT, sales_amount DOUBLE);\nINSERT INTO sales_analytics_demo VALUES (1,101,'Q1',150000),(2,101,'Q2',160000),(3,102,'Q1',120000),(4,102,'Q2',135000);\nSELECT sale_id, product_id, quarter, sales_amount, CASE WHEN sales_amount > AVG(sales_amount) OVER () THEN 'Above Average' ELSE 'Below or Equal' END AS relative_perf FROM sales_analytics_demo;\nDROP TABLE IF EXISTS sales_analytics_demo;",
+          "nerd_notes": "This pattern is resilient and avoids nested aggregation; for larger datasets compute aggregates once in a CTE or temporary table to avoid recomputing expensive metrics."
+        }
+      ]
+    },
+    {
+      "title": "4c. Performance Optimization",
+      "narrative": "Question: how do we keep conditional logic performant? We'll show two small patterns: use FILTER to avoid repeated expressions and pre-aggregate expensive calculations.",
+      "nerd_notes": "Avoid repeating expensive expressions inside aggregates; prefer FILTER or compute once in a CTE. For very large data, push conditional logic to ETL or use pre-aggregated materialized tables.",
+      "examples": [
+        {
+          "name": "performance_filter_vs_case",
+          "description": "Question: when should you use FILTER vs CASE and how to pre-aggregate expensive calculations?",
+          "sql": "DROP TABLE IF EXISTS perf_demo;\nCREATE TABLE perf_demo (category TEXT, value DOUBLE);\nINSERT INTO perf_demo VALUES ('A',100),( 'A',200),('B',50),('B',300);\n-- FILTER clause (DuckDB supports FILTER)\nSELECT category, COUNT(*) AS cnt, SUM(value) FILTER (WHERE value > 100) AS sum_gt_100 FROM perf_demo GROUP BY category;\n-- Pre-aggregate pattern (compute once then reuse)\nWITH agg AS (SELECT category, SUM(value) AS total FROM perf_demo GROUP BY category) SELECT * FROM agg;\nDROP TABLE IF EXISTS perf_demo;",
+          "nerd_notes": "FILTER keeps predicates adjacent to aggregates and avoids expression duplication. Pre-aggregation reduces repeated work if you need the same aggregate multiple times."
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+      "id": "basic-select",
+      "prompt": "Show the first 5 rows from `employees`.",
+      "answer_sql": "SELECT * FROM employees LIMIT 5;"
+    },
+    {
+      "id": "aggregate-1",
+      "prompt": "Count rows grouped by `emp_id`.",
+      "answer_sql": "SELECT emp_id, COUNT(*) AS cnt FROM employees GROUP BY emp_id ORDER BY cnt DESC;"
+    },
+    {
+      "id": "filter-top",
+      "prompt": "Select the top 10 rows where `emp_id` is positive (if numeric) or not null otherwise.",
+      "answer_sql": "SELECT * FROM employees WHERE emp_id IS NOT NULL AND emp_id > 0 LIMIT 10;"
+    }
+  ]
+}

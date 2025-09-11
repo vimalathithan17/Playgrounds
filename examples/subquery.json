@@ -1,0 +1,571 @@
+{
+  "title": "Subqueries",
+  "description": "Question-first guide to scalar, IN/EXISTS, correlated, and derived table subqueries. Everything is DuckDB/WASM-ready, idempotent, and deterministic.",
+  "sections": [
+    {
+      "title": "0) Introduction: Subqueries",
+      "description": "What are subqueries and when to use scalar, IN/EXISTS, correlated, and derived forms?",
+      "examples": [
+        {
+          "name": "intro_subqueries_overview",
+          "sql": "",
+          "description": "Overview of subquery types: scalar, IN/EXISTS, correlated, and derived (FROM). Keep outputs deterministic and snippets idempotent.",
+          "nerd_notes": "Prefer inline VALUES/CTEs for portable demos; add ORDER BY and tie-breakers; use NOT EXISTS over NOT IN when NULLs may appear."
+        }
+      ],
+      "narrative": "This lesson shows how to nest queries to compute values, filter sets, and stage intermediate results without temporary tables.",
+      "nerd_notes": "On large data, window functions or joins can be faster; start with readable subqueries, then optimize."
+    },
+    {
+      "title": "1.5) Cheat Sheet: Subquery Essentials",
+      "description": "Four compact, deterministic patterns using inline VALUES and ORDER BY for stability.",
+      "examples": [
+        {
+          "name": "cs_scalar_avg_compare_quick",
+          "description": "Scalar subquery in WHERE: keep values above the average.",
+          "sql": "WITH t(x) AS (VALUES (10),(25),(15))\nSELECT x\nFROM t\nWHERE x > (SELECT AVG(x) FROM t)\nORDER BY x;",
+          "nerd_notes": "Scalar subqueries must return exactly one row; AVG() satisfies that."
+        },
+        {
+          "name": "cs_exists_semi_join_quick",
+          "description": "EXISTS as a semi-join: keep rows that have a matching key.",
+          "sql": "WITH products(p) AS (VALUES (1),(2),(3)), orders(p) AS (VALUES (1),(2))\nSELECT p.p\nFROM products p\nWHERE EXISTS (SELECT 1 FROM orders o WHERE o.p = p.p)\nORDER BY p.p;",
+          "nerd_notes": "EXISTS short-circuits on the first match; planners often rewrite IN to EXISTS."
+        },
+        {
+          "name": "cs_tuple_in_multi_col_quick",
+          "description": "Tuple IN over two columns.",
+          "sql": "WITH pairs(a,b) AS (VALUES (1,'x'),(1,'y'),(2,'z')), wanted(a,b) AS (VALUES (1,'y'))\nSELECT a,b\nFROM pairs\nWHERE (a,b) IN (SELECT a,b FROM wanted)\nORDER BY a,b;",
+          "nerd_notes": "Tuple IN compares row values; column counts and types must match."
+        },
+        {
+          "name": "cs_correlated_flag_quick",
+          "description": "Correlated EXISTS to compute a per-key flag.",
+          "sql": "WITH orders(product, qty) AS (VALUES ('A',2),('A',3),('B',1))\nSELECT DISTINCT o.product,\n  EXISTS (SELECT 1 FROM orders o2 WHERE o2.product = o.product AND o2.qty >= 3) AS has_big\nFROM orders o\nORDER BY o.product;",
+          "nerd_notes": "Correlated subqueries run once per outer row; DISTINCT collapses duplicates deterministically."
+        }
+      ],
+      "narrative": "Use these quick snippets as building blocks for larger subquery problems.",
+      "nerd_notes": "Always add ORDER BY for stable examples; prefer VALUES/CTEs for tiny, portable datasets."
+    },
+    {
+      "title": "1.6) Pitfalls, Tips, and Q&A",
+      "description": "Common subquery gotchas and best practices.",
+      "examples": [
+        {
+          "name": "pitfall_not_in_with_nulls",
+          "sql": "",
+          "description": "NOT IN returns no rows if the subquery yields any NULLs; prefer NOT EXISTS with an IS NOT NULL guard on the left-hand side.",
+          "nerd_notes": "Three-valued logic makes x NOT IN (…NULL…) evaluate UNKNOWN and thus filter out everything."
+        },
+        {
+          "name": "tip_prefer_not_exists_for_anti_join",
+          "sql": "",
+          "description": "Use NOT EXISTS for anti-joins; it is robust to NULLs and often optimizes well.",
+          "nerd_notes": "Anti-joins are a core pattern: filter outer rows with no matches in the inner set."
+        },
+        {
+          "name": "question_scalar_vs_join_perf",
+          "sql": "",
+          "description": "When is a scalar subquery slower than a JOIN?",
+          "nerd_notes": "On large datasets, planners may decorrelate, but explicit JOIN + GROUP BY or window functions can be clearer and faster."
+        },
+        {
+          "name": "tricky_scalar_returns_multiple_rows",
+          "sql": "",
+          "description": "A scalar subquery must return exactly one row; ensure proper aggregation or filtering.",
+          "nerd_notes": "Use MAX(), LIMIT 1 with deterministic ORDER BY, or tighten predicates."
+        },
+        {
+          "name": "fundamental_stage_with_cte",
+          "sql": "",
+          "description": "Stage intermediate results with CTEs when subqueries get deeply nested.",
+          "nerd_notes": "CTEs improve readability and reusability; they can also be referenced multiple times."
+        }
+      ],
+      "narrative": "Prefer EXISTS over NOT IN with potential NULLs; keep scalar subqueries truly scalar; use CTEs for clarity.",
+      "nerd_notes": "Add ORDER BY with tie-breakers in demo outputs to keep them deterministic."
+    },
+    {
+      "title": "1. Setup: products and orders",
+      "narrative": "How do we set up compact tables we can reuse across subquery demos?",
+      "nerd_notes": "Keep setup idempotent and tiny for fast re-runs.",
+      "examples": [
+        {
+          "name": "create_tables",
+          "sql": "DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS products;\nCREATE TABLE products (product_id INTEGER, name TEXT, price DOUBLE);\nCREATE TABLE orders (order_id INTEGER, product_id INTEGER, quantity INTEGER);\nINSERT INTO products VALUES (1,'Widget',10.0),(2,'Gadget',25.0);\nINSERT INTO orders VALUES (1,1,2),(2,2,1);",
+          "description": "Question: how do we create tiny tables for subquery practice?",
+          "nerd_notes": "Use small, explicit inserts; add columns later only when needed.",
+          "compat_examples": {
+            "postgres": "-- Same DDL/INSERTs; use numeric instead of DOUBLE if preferred.",
+            "mysql": "-- Use DOUBLE or DECIMAL; DDL/INSERTs are the same.",
+            "oracle": "-- Use NUMBER instead of DOUBLE; VARCHAR2 for text."
+          }
+        }
+      ]
+    },
+    {
+      "title": "2b. Subqueries in SELECT (scalar and correlated)",
+      "narrative": "How can we project per-row metrics and flags using subqueries in the SELECT list?",
+      "nerd_notes": "SELECT-list subqueries are evaluated per output row; ensure they are scalar and consider performance.",
+      "examples": [
+        {
+          "name": "select_list_counts_and_flags",
+          "sql": "SELECT p.product_id, p.name, p.price,\n  (SELECT COUNT(*) FROM orders o WHERE o.product_id = p.product_id) AS order_count,\n  EXISTS (SELECT 1 FROM orders o WHERE o.product_id = p.product_id) AS has_orders\nFROM products p\nORDER BY p.product_id;",
+          "description": "Question: how do we add an order count and a has_orders flag to each product?",
+          "compat_examples": {
+            "postgres": "-- Same; EXISTS returns boolean.",
+            "mysql": "-- Same; returns 0/1 for boolean in SELECT.",
+            "oracle": "-- Same; returns '1'/'0' semantics in some tools."
+          }
+        }
+      ]
+    },
+    {
+      "title": "3e. WHERE with scalar subquery",
+      "narrative": "How do we filter rows based on a comparison to a scalar subquery value?",
+      "nerd_notes": "Classic pattern: compare to an aggregate over the table or a partition of it.",
+      "examples": [
+        {
+          "name": "where_price_above_avg",
+          "sql": "SELECT product_id, name, price\nFROM products\nWHERE price > (SELECT AVG(price) FROM products)\nORDER BY product_id;",
+          "description": "Question: how do we keep only products priced above the overall average?",
+          "compat_examples": {
+            "postgres": "-- Same pattern; scalar subquery returns a single value.",
+            "mysql": "-- Same; beware integer division in some engines (not here).",
+            "oracle": "-- Same; AVG returns NUMBER."
+          }
+        }
+      ]
+    },
+    {
+      "title": "4b. Correlated patterns: top-per-group and running totals",
+      "narrative": "How do we solve top-per-group and running totals without window functions using correlated subqueries?",
+      "nerd_notes": "These are clear but may be slower than analytic functions on large data.",
+      "examples": [
+        {
+          "name": "top_per_group_correlated_max",
+          "sql": "WITH orders(order_id, product_id, quantity) AS (VALUES (1,1,2),(2,1,5),(3,2,1),(4,2,1),(5,3,7))\nSELECT o1.product_id, o1.order_id, o1.quantity\nFROM orders o1\nWHERE o1.quantity = (SELECT MAX(o2.quantity) FROM orders o2 WHERE o2.product_id = o1.product_id)\nORDER BY o1.product_id, o1.order_id;",
+          "description": "Question: how do we return the max-quantity order per product using a correlated subquery?",
+          "compat_examples": {
+            "postgres": "-- Same; compare with DISTINCT ON or window functions.",
+            "mysql": "-- Same; compare with window functions (8+).",
+            "oracle": "-- Same; compare with KEEP (DENSE_RANK LAST ORDER BY ...) or analytic."
+          }
+        },
+        {
+          "name": "running_total_correlated",
+          "sql": "WITH orders(order_id, order_date, amount) AS (VALUES (1,'2024-01-01',10.0),(2,'2024-01-02',5.0),(3,'2024-01-03',7.5))\nSELECT o1.order_id, o1.order_date, o1.amount,\n  (SELECT SUM(o2.amount) FROM orders o2 WHERE o2.order_date <= o1.order_date) AS running_total\nFROM orders o1\nORDER BY o1.order_date;",
+          "description": "Question: how do we compute a running total using a correlated subquery?",
+          "compat_examples": {
+            "postgres": "-- Same; compare with SUM(amount) OVER (ORDER BY order_date).",
+            "mysql": "-- Same; window function alternative in 8+.",
+            "oracle": "-- Same; analytic SUM OVER is preferred for performance."
+          }
+        }
+      ]
+    },
+    {
+      "title": "3b. ANY and ALL (multi-row comparators)",
+      "narrative": "How do ANY and ALL compare a value against many values returned by a subquery?",
+      "nerd_notes": "ANY is like 'at least one'; ALL is like 'every value'. Use with caution when subquery can be empty.",
+      "examples": [
+        {
+          "name": "any_all_demo",
+          "sql": "WITH prices(p) AS (VALUES (10), (25), (5))\nSELECT 12 > ANY (SELECT p FROM prices) AS gt_any,\n       12 > ALL (SELECT p FROM prices) AS gt_all;",
+          "description": "Question: how do we test a value against a set with ANY and ALL?",
+          "compat_examples": {
+            "postgres": "-- Same syntax: 12 > ANY(SELECT p ...) and 12 > ALL(...).",
+            "mysql": "-- ANY/SOME and ALL supported; ensure subquery returns one column.",
+            "oracle": "-- ANY/ALL supported; also written as > SOME(...)."
+          }
+        }
+      ]
+    },
+    {
+      "title": "3c. Multi-column subqueries (tuple IN)",
+      "narrative": "How do we match pairs of columns using a multi-column IN subquery?",
+      "nerd_notes": "Tuple IN compares row values; all columns must match. Great for 'argmax per group' row selection.",
+      "examples": [
+        {
+          "name": "tuple_in_max_per_group",
+          "sql": "WITH orders(order_id, product_id, quantity) AS (VALUES (1,1,2),(2,1,5),(3,2,1),(4,2,1),(5,3,7)),\nmaxq AS (SELECT product_id, MAX(quantity) AS mq FROM orders GROUP BY product_id)\nSELECT o.product_id, o.quantity\nFROM orders o\nWHERE (o.product_id, o.quantity) IN (SELECT product_id, mq FROM maxq)\nORDER BY o.product_id;",
+          "description": "Question: how do we pick the row(s) with max quantity per product without window functions?",
+          "compat_examples": {
+            "postgres": "-- Tuple IN supported: (a,b) IN (SELECT ...).",
+            "mysql": "-- Row constructors supported in IN; ensure col counts match.",
+            "oracle": "-- Use (col1, col2) IN (SELECT ...)."
+          }
+        }
+      ]
+    },
+    {
+      "title": "3d. Nested subqueries",
+      "narrative": "How do we nest subqueries to stage intermediate filters and aggregates?",
+      "nerd_notes": "Keep nesting shallow and readable. Consider CTEs when the nesting grows complex.",
+      "examples": [
+        {
+          "name": "nested_avg_over_filtered_set",
+          "sql": "WITH t(x) AS (VALUES (1),(2),(3),(4),(10))\nSELECT x\nFROM t\nWHERE x > (\n  SELECT AVG(x)\n  FROM (SELECT x FROM t WHERE x < (SELECT MAX(x) FROM t)) s\n)\nORDER BY x;",
+          "description": "Question: how do we filter values greater than the average of all but the max value?",
+          "compat_examples": {
+            "postgres": "-- Same nesting; CTEs can improve readability.",
+            "mysql": "-- Same; derived tables require aliases (as shown).",
+            "oracle": "-- Same; use subquery factoring (WITH) for clarity."
+          }
+        }
+      ]
+    },
+    {
+      "title": "2. Scalar subquery",
+      "narrative": "How can a scalar subquery add an overall aggregate to each row?",
+      "nerd_notes": "Scalar subqueries return exactly one value; pair with ORDER BY for determinism.",
+      "examples": [
+        {
+          "name": "scalar_avg_price",
+          "sql": "SELECT p.product_id, p.name, p.price, (SELECT AVG(price) FROM products) AS avg_price FROM products p ORDER BY p.product_id;",
+          "description": "Question: how do we mix per-row values with an overall average?",
+          "compat_examples": {
+            "postgres": "-- Same pattern; AVG(price) scalar subquery.",
+            "mysql": "-- Same pattern; add ORDER BY for stable output.",
+            "oracle": "-- Same pattern; ensure subquery returns a single value."
+          }
+        }
+      ]
+    },
+    {
+      "title": "5b. Subqueries in HAVING and ORDER BY",
+      "narrative": "How can subqueries drive group filtering and custom sort keys?",
+      "nerd_notes": "Use scalar subqueries in HAVING/ORDER BY; COALESCE to avoid NULL sort surprises.",
+      "examples": [
+        {
+          "name": "having_and_orderby_subqueries",
+          "sql": "WITH orders(cust, amount) AS (VALUES ('A',100),('A',50),('B',30),('B',70),('C',90))\nSELECT cust, SUM(amount) AS total\nFROM orders\nGROUP BY cust\nHAVING SUM(amount) > (SELECT AVG(amount) FROM orders)\nORDER BY (SELECT COUNT(*) FROM orders o WHERE o.cust = cust) DESC, cust;",
+          "description": "Question: how do we keep only above-average customers and sort by their order counts?",
+          "compat_examples": {
+            "postgres": "-- Same; can also use JOINs or window functions.",
+            "mysql": "-- Same; scalar subqueries allowed in HAVING/ORDER BY.",
+            "oracle": "-- Same; consider analytic COUNT(*) OVER (PARTITION BY ...) for sorting."
+          }
+        }
+      ]
+    },
+    {
+      "title": "5c. NOT IN with NULLs: pitfalls and fix",
+      "narrative": "Why can NOT IN return no rows when the subquery has NULLs, and how do we fix it?",
+      "nerd_notes": "NOT IN with a NULL in the subquery yields UNKNOWN for comparisons; prefer NOT EXISTS with a correlated predicate and guard IS NOT NULL on the left side.",
+      "examples": [
+        {
+          "name": "not_in_null_trap_and_fix",
+          "sql": "WITH vals(x) AS (VALUES (1),(2),(NULL)), filter(x) AS (VALUES (2))\n-- Problematic: NOT IN with potential NULLs in subquery\nSELECT x AS not_in_result\nFROM vals\nWHERE x NOT IN (SELECT x FROM filter)\nORDER BY x;\n\n-- Recommended: NOT EXISTS + IS NOT NULL guard\nWITH vals(x) AS (VALUES (1),(2),(NULL)), filter(x) AS (VALUES (2))\nSELECT v.x AS not_exists_result\nFROM vals v\nWHERE v.x IS NOT NULL\n  AND NOT EXISTS (SELECT 1 FROM filter f WHERE f.x = v.x)\nORDER BY v.x;",
+          "description": "Question: how do we avoid NOT IN surprises when NULLs are present?",
+          "compat_examples": {
+            "postgres": "-- Same behaviors; NOT EXISTS avoids NULL logic traps.",
+            "mysql": "-- Same; beware NULL in subquery. Use NOT EXISTS.",
+            "oracle": "-- Same; NVL can also help but NOT EXISTS is clearer."
+          }
+        }
+      ]
+    },
+    {
+      "title": "3. IN and EXISTS",
+      "narrative": "How do IN and EXISTS filter rows using subquery results?",
+      "nerd_notes": "IN is set membership; EXISTS is often preferred for correlated checks and avoids NOT IN vs NULL pitfalls.",
+      "examples": [
+        {
+          "name": "in_example",
+          "sql": "SELECT * FROM products WHERE product_id IN (SELECT product_id FROM orders) ORDER BY product_id;",
+          "description": "Question: how do we keep only products that appear in orders?",
+          "compat_examples": {
+            "postgres": "-- Same; consider EXISTS for correlated checks.",
+            "mysql": "-- Same; beware NOT IN with NULLs.",
+            "oracle": "-- Same; IN subquery must be single column."
+          }
+        },
+        {
+          "name": "exists_example",
+          "sql": "SELECT * FROM products p WHERE EXISTS (SELECT 1 FROM orders o WHERE o.product_id = p.product_id) ORDER BY p.product_id;",
+          "description": "Question: how do we express the same filter using EXISTS?",
+          "compat_examples": {
+            "postgres": "-- EXISTS short-circuits; NOT EXISTS for anti-joins.",
+            "mysql": "-- EXISTS is supported and often efficient.",
+            "oracle": "-- EXISTS/NOT EXISTS widely used for semi/anti joins."
+          }
+        }
+      ]
+    },
+    {
+      "title": "4. Correlated subquery",
+      "narrative": "How do we compute a per-row aggregate that depends on the outer row?",
+      "nerd_notes": "Correlated subqueries run once per outer row; for performance, test vs joins.",
+      "examples": [
+        {
+          "name": "correlated_total_qty",
+          "sql": "SELECT p.product_id, p.name, (SELECT SUM(quantity) FROM orders o WHERE o.product_id = p.product_id) AS total_qty FROM products p ORDER BY p.product_id;",
+          "description": "Question: how do we compute total quantity ordered per product without a JOIN?",
+          "compat_examples": {
+            "postgres": "-- Same pattern; COALESCE for NULL handling.",
+            "mysql": "-- Same; compare with LEFT JOIN + GROUP BY.",
+            "oracle": "-- Same; consider analytic functions for alternatives."
+          }
+        }
+      ]
+    },
+    {
+      "title": "5. Derived tables (subquery in FROM)",
+      "narrative": "How do we pre-aggregate in a subquery and then join for labels?",
+      "nerd_notes": "Name the derived table, expose only needed columns, and ORDER BY for stable output.",
+      "examples": [
+        {
+          "name": "derived_orders_by_product",
+          "sql": "SELECT dt.product_id, dt.total_qty, p.name FROM (SELECT product_id, SUM(quantity) AS total_qty FROM orders GROUP BY product_id) dt JOIN products p ON p.product_id = dt.product_id ORDER BY dt.product_id;",
+          "description": "Question: how do we join aggregated order totals back to product names?",
+          "compat_examples": {
+            "postgres": "-- Same; CTEs can improve readability.",
+            "mysql": "-- Same; ensure derived subquery is scalar or grouped properly.",
+            "oracle": "-- Same; use inline views or WITH."
+          }
+        }
+      ]
+    },
+    {
+      "title": "6. EXISTS vs IN: performance and semantics",
+      "narrative": "How do IN and EXISTS compare, and how do we find rows with no matches?",
+      "nerd_notes": "NOT EXISTS is the recommended anti-join because NOT IN with NULLs can surprise.",
+      "examples": [
+        {
+          "name": "exists_vs_in_demo",
+          "description": "Question: how do IN, EXISTS, and NOT EXISTS differ in practice?",
+          "sql": "DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS products;\nCREATE TABLE products (product_id INTEGER, name TEXT);\nCREATE TABLE orders (order_id INTEGER, product_id INTEGER, qty INTEGER);\nINSERT INTO products VALUES (1,'Widget'),(2,'Gadget'),(3,'Doodad');\nINSERT INTO orders VALUES (1,1,2),(2,2,1);\n\n-- IN returns products that have matching product_id in orders\nSELECT * FROM products WHERE product_id IN (SELECT product_id FROM orders) ORDER BY product_id;\n\n-- EXISTS equivalent\nSELECT * FROM products p WHERE EXISTS (SELECT 1 FROM orders o WHERE o.product_id = p.product_id) ORDER BY product_id;\n\n-- Anti-join: products with no orders\nSELECT * FROM products p WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.product_id = p.product_id) ORDER BY product_id;",
+          "nerd_notes": "For large data, test both; planners may rewrite IN to EXISTS.",
+          "compat_examples": {
+            "postgres": "-- Same; NOT EXISTS preferred over NOT IN when NULLs exist.",
+            "mysql": "-- Same; IN/EXISTS both supported.",
+            "oracle": "-- Same; use NOT EXISTS for anti-joins."
+          }
+        }
+      ]
+    },
+    {
+      "title": "7. Scalar subqueries: complete demo",
+      "narrative": "How can we answer richer questions using multiple scalar subqueries on a small retail dataset?",
+      "nerd_notes": "Use explicit IDs instead of AUTOINCREMENT; keep data minimal and ORDER BY outputs.",
+      "examples": [
+        {
+          "name": "scalar_setup",
+          "sql": "DROP TABLE IF EXISTS order_items; DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS products; DROP TABLE IF EXISTS customers;\nCREATE TABLE customers (customer_id INTEGER, first_name TEXT, last_name TEXT, email TEXT, city TEXT, country TEXT, registration_date DATE);\nCREATE TABLE products (product_id INTEGER, name TEXT, sku TEXT, price DOUBLE, category TEXT);\nCREATE TABLE orders (order_id INTEGER, customer_id INTEGER, order_date DATE, total_amount DOUBLE, status TEXT);\nCREATE TABLE order_items (order_item_id INTEGER, order_id INTEGER, product_id INTEGER, quantity INTEGER, unit_price DOUBLE);\nINSERT INTO customers VALUES\n  (1,'John','Smith','john.smith@email.com','New York','USA','2023-01-15'),\n  (2,'Jane','Doe','jane.doe@email.com','London','UK','2023-02-20'),\n  (3,'Bob','Johnson','bob.johnson@email.com','Toronto','Canada','2023-03-10'),\n  (4,'Alice','Brown','alice.brown@email.com','Sydney','Australia','2023-04-05'),\n  (5,'Charlie','Wilson','charlie.wilson@email.com','Berlin','Germany','2023-05-12');\nINSERT INTO products VALUES\n  (1,'Laptop','LAP001',999.99,'Electronics'),\n  (2,'Mouse','MSE001',29.99,'Electronics'),\n  (3,'Keyboard','KBD001',79.99,'Electronics'),\n  (4,'Monitor','MON001',299.99,'Electronics'),\n  (5,'Headphones','HPH001',149.99,'Electronics');\nINSERT INTO orders VALUES\n  (1,1,'2024-01-15',1129.98,'completed'),\n  (2,2,'2024-01-20',179.98,'completed'),\n  (3,3,'2024-01-25',329.98,'completed'),\n  (4,1,'2024-02-01',149.99,'pending'),\n  (5,4,'2024-02-05',79.99,'completed');\nINSERT INTO order_items VALUES\n  (1,1,1,1,999.99),\n  (2,1,2,1,29.99),\n  (3,1,3,1,79.99),\n  (4,1,4,1,299.99),\n  (5,2,2,2,29.99),\n  (6,2,3,1,79.99),\n  (7,2,5,1,149.99),\n  (8,3,4,1,299.99),\n  (9,3,5,1,149.99),\n  (10,4,5,1,149.99),\n  (11,5,3,1,79.99);",
+          "description": "Question: how do we set up a compact retail dataset for scalar subquery demos?",
+          "compat_examples": {
+            "postgres": "-- Use NUMERIC(10,2) if you want fixed-precision money values.",
+            "mysql": "-- Use DECIMAL(10,2) for money; otherwise same DDL.",
+            "oracle": "-- Use NUMBER(10,2) for money; VARCHAR2 for text."
+          }
+        },
+        {
+          "name": "customers_spent_more_than_average",
+          "sql": "SELECT 'Customers who spent more than average' AS query_type;\nSELECT c.customer_id, c.first_name, c.last_name,\n  (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE customer_id = c.customer_id) AS total_spent,\n  (SELECT AVG(total_amount) FROM orders) AS average_order_value\nFROM customers c\nWHERE (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE customer_id = c.customer_id) >\n      (SELECT AVG(total_amount) FROM orders)\nORDER BY total_spent DESC, c.customer_id;",
+          "description": "Question: which customers spent more than the average order amount?",
+          "compat_examples": {
+            "postgres": "-- Same; COALESCE guards NULLs.",
+            "mysql": "-- Same; consider window functions for alternatives.",
+            "oracle": "-- Same; AVG in scalar subqueries is supported."
+          }
+        },
+        {
+          "name": "product_sales_analysis",
+          "sql": "SELECT 'Product sales analysis with subqueries' AS query_type;\nSELECT p.product_id, p.name, p.price,\n  (SELECT COUNT(*) FROM order_items WHERE product_id = p.product_id) AS times_ordered,\n  (SELECT MAX(o.order_date) FROM orders o JOIN order_items oi ON o.order_id = oi.order_id WHERE oi.product_id = p.product_id) AS last_ordered_date,\n  p.price - (SELECT AVG(price) FROM products WHERE category = p.category) AS price_vs_category_avg\nFROM products p\nORDER BY times_ordered DESC, p.product_id;",
+          "description": "Question: how popular is each product and when was it last ordered?",
+          "compat_examples": {
+            "postgres": "-- Same; use FILTER or window functions for variants.",
+            "mysql": "-- Same; ensure appropriate indexes in production.",
+            "oracle": "-- Same; analytic functions can replace some subqueries."
+          }
+        },
+        {
+          "name": "order_value_categorization",
+          "sql": "SELECT 'Order value categorization' AS query_type;\nSELECT order_id, customer_id, total_amount,\n  CASE\n    WHEN total_amount > (SELECT AVG(total_amount) FROM orders) THEN 'Above Average'\n    WHEN total_amount = (SELECT AVG(total_amount) FROM orders) THEN 'Average'\n    ELSE 'Below Average'\n  END AS order_category,\n  total_amount - (SELECT MIN(total_amount) FROM orders) AS above_minimum,\n  (SELECT MAX(total_amount) FROM orders) - total_amount AS below_maximum\nFROM orders\nORDER BY total_amount DESC, order_id;",
+          "description": "Question: how do we bucket orders relative to the global average?",
+          "compat_examples": {
+            "postgres": "-- Same; also try percentile_disc for richer buckets.",
+            "mysql": "-- Same; watch floating-point vs DECIMAL.",
+            "oracle": "-- Same; use NUMBER for money."
+          }
+        },
+        {
+          "name": "customer_spending_ranking",
+          "sql": "SELECT 'Customer spending ranking' AS query_type;\nSELECT c1.customer_id, c1.first_name, c1.last_name,\n  (SELECT COUNT(*) FROM customers c2\n   WHERE (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE customer_id = c2.customer_id) >\n         (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE customer_id = c1.customer_id)) + 1 AS spending_rank\nFROM customers c1\nORDER BY spending_rank, c1.customer_id;",
+          "description": "Question: where does each customer rank by total spending, without window functions?",
+          "compat_examples": {
+            "postgres": "-- Same; compare with RANK() OVER for clarity.",
+            "mysql": "-- Same; window functions may be faster.",
+            "oracle": "-- Same; analytic RANK/DENSE_RANK are alternatives."
+          }
+        },
+        {
+          "name": "scalar_cleanup",
+          "sql": "DROP TABLE IF EXISTS order_items; DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS customers;",
+          "description": "Question: how do we clean up demo tables but keep `products` for later?",
+          "nerd_notes": "Leave `products` to keep later quick queries working.",
+          "compat_examples": {
+            "postgres": "-- DROP TABLE IF EXISTS order_items; DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS customers;",
+            "mysql": "-- DROP TABLE IF EXISTS order_items; DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS customers;",
+            "oracle": "-- BEGIN EXECUTE IMMEDIATE 'DROP TABLE order_items'; EXCEPTION WHEN OTHERS THEN NULL; END; -- repeat for orders/customers"
+          }
+        }
+      ]
+    },
+    {
+      "title": "2b. Subqueries in SELECT (correlated)",
+      "narrative": "How do correlated subqueries in the SELECT list compute per-row metrics and shares?",
+      "nerd_notes": "Mix correlated and uncorrelated scalar subqueries; guard divide-by-zero with NULLIF or CASE.",
+      "examples": [
+        {
+          "name": "select_list_correlated_metrics",
+          "sql": "WITH orders(product, qty) AS (VALUES ('Widget',2),('Widget',3),('Gadget',1),('Gadget',4),('Doodad',5))\nSELECT DISTINCT o.product,\n  (SELECT SUM(qty) FROM orders o2 WHERE o2.product = o.product) AS product_qty,\n  (SELECT SUM(qty) FROM orders) AS total_qty,\n  ROUND(100.0 * (SELECT SUM(qty) FROM orders o2 WHERE o2.product = o.product) / NULLIF((SELECT SUM(qty) FROM orders),0), 1) AS share_pct\nFROM orders o\nORDER BY product;",
+          "description": "Question: how do we compute per-product totals and their share of the overall total via subqueries?",
+          "compat_examples": {
+            "postgres": "-- Same; use NULLIF to avoid division by zero.",
+            "mysql": "-- Same; beware integer division if columns are INT.",
+            "oracle": "-- Same; use NULLIF or CASE WHEN total=0 THEN NULL END."
+          }
+        }
+      ]
+    },
+    {
+      "title": "3e. Multi-column EXISTS vs multi-column IN",
+      "narrative": "When should we use tuple IN vs EXISTS for matching on multiple columns?",
+      "nerd_notes": "Tuple IN is concise; EXISTS is flexible for additional predicates and can short-circuit.",
+      "examples": [
+        {
+          "name": "tuple_in_vs_exists",
+          "sql": "WITH pairs(a,b) AS (VALUES (1,'x'),(1,'y'),(2,'z'),(3,'x')),\nwanted(a,b) AS (VALUES (1,'y'),(3,'x'))\n-- Tuple IN\nSELECT a,b, 'tuple_in' AS how\nFROM pairs\nWHERE (a,b) IN (SELECT a,b FROM wanted)\nORDER BY a,b;\n\n-- EXISTS equivalent\nWITH pairs(a,b) AS (VALUES (1,'x'),(1,'y'),(2,'z'),(3,'x')),\nwanted(a,b) AS (VALUES (1,'y'),(3,'x'))\nSELECT p.a, p.b, 'exists' AS how\nFROM pairs p\nWHERE EXISTS (SELECT 1 FROM wanted w WHERE w.a = p.a AND w.b = p.b)\nORDER BY p.a, p.b;",
+          "description": "Question: how do tuple IN and EXISTS compare when matching two columns?",
+          "compat_examples": {
+            "postgres": "-- Both supported; EXISTS allows extra conditions easily.",
+            "mysql": "-- Row constructors in IN supported; EXISTS is universally supported.",
+            "oracle": "-- Both patterns are idiomatic."
+          }
+        }
+      ]
+    },
+    {
+      "title": "4b. More correlated subqueries",
+      "narrative": "How do we filter rows to the top per group using a correlated subquery?",
+      "nerd_notes": "This pattern emulates argmax per group; compare with window functions (ROW_NUMBER).",
+      "examples": [
+        {
+          "name": "correlated_top_per_group",
+          "sql": "WITH orders(cust, amount) AS (VALUES ('A',100),('A',50),('B',30),('B',70),('C',90))\nSELECT cust, amount\nFROM orders o\nWHERE amount = (SELECT MAX(amount) FROM orders o2 WHERE o2.cust = o.cust)\nORDER BY cust;",
+          "description": "Question: how do we keep only the maximum order per customer without windows?",
+          "compat_examples": {
+            "postgres": "-- Same; also try ORDER BY ... LIMIT 1 WITH TIES via window functions.",
+            "mysql": "-- Same; window functions may be faster on large data.",
+            "oracle": "-- Same; DENSE_RANK() OVER (PARTITION BY cust ORDER BY amount DESC) = 1."
+          }
+        }
+      ]
+    },
+    {
+      "title": "5d. WHERE subqueries patterns",
+      "narrative": "What are common WHERE subquery forms beyond IN/EXISTS?",
+      "nerd_notes": "Scalar comparisons against aggregates are concise and fast on small sets.",
+      "examples": [
+        {
+          "name": "where_scalar_comparison",
+          "sql": "WITH products(product_id, name, price) AS (VALUES (1,'A',10.0),(2,'B',25.0),(3,'C',15.0))\nSELECT *\nFROM products\nWHERE price > (SELECT AVG(price) FROM products)\nORDER BY price DESC;",
+          "description": "Question: how do we select rows above the average using a scalar subquery in WHERE?",
+          "compat_examples": {
+            "postgres": "-- Same pattern.",
+            "mysql": "-- Same; ensure types avoid integer division.",
+            "oracle": "-- Same; AVG returns NUMBER."
+          }
+        }
+      ]
+    },
+    {
+      "title": "5e. Advanced filtering with EXISTS",
+      "narrative": "How do we use EXISTS with extra predicates for targeted filters?",
+      "nerd_notes": "Correlated EXISTS can include thresholds without extra joins.",
+      "examples": [
+        {
+          "name": "exists_with_threshold",
+          "sql": "WITH customers(cust, city) AS (VALUES ('A','NY'),('B','SF'),('C','NY')),\norders(order_id, cust, total) AS (VALUES (1,'A',120),(2,'A',50),(3,'B',40),(4,'C',300))\nSELECT c.cust, c.city\nFROM customers c\nWHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust = c.cust AND o.total > 100)\nORDER BY c.cust;",
+          "description": "Question: how do we keep customers who have at least one order over $100?",
+          "compat_examples": {
+            "postgres": "-- Same; planners can decorrelate this.",
+            "mysql": "-- Same; add indexes in production for o.cust, o.total.",
+            "oracle": "-- Same; EXISTS short-circuits when predicate is met."
+          }
+        }
+      ]
+    },
+    {
+      "title": "6b. Pagination via subquery (top-N, page-N)",
+      "narrative": "How do we emulate top-N and pagination using subqueries and LIMIT/OFFSET?",
+      "nerd_notes": "Always include a deterministic ORDER BY before LIMIT/OFFSET.",
+      "examples": [
+        {
+          "name": "topn_and_pagination",
+          "sql": "WITH orders(product, qty) AS (VALUES ('Widget',2),('Widget',3),('Gadget',1),('Gadget',4),('Doodad',5))\n-- Top 2 products by total qty\nSELECT * FROM (\n  SELECT product, SUM(qty) AS total_qty\n  FROM orders\n  GROUP BY product\n  ORDER BY total_qty DESC, product\n) t\nLIMIT 2;\n\n-- Page 2 (size 2) of the same ranking\nWITH orders(product, qty) AS (VALUES ('Widget',2),('Widget',3),('Gadget',1),('Gadget',4),('Doodad',5))\nSELECT * FROM (\n  SELECT product, SUM(qty) AS total_qty\n  FROM orders\n  GROUP BY product\n  ORDER BY total_qty DESC, product\n) t\nLIMIT 2 OFFSET 2;",
+          "description": "Question: how do we get top-N and then the next page deterministically?",
+          "compat_examples": {
+            "postgres": "-- Same; also consider FETCH FIRST n ROWS ONLY.",
+            "mysql": "-- Same; LIMIT n OFFSET m is standard.",
+            "oracle": "-- Use FETCH FIRST n ROWS ONLY / OFFSET m ROWS; or subquery + ROWNUM in older versions."
+          }
+        }
+      ]
+    },
+    {
+      "title": "6c. NOT IN without NULLs (expected behavior)",
+      "narrative": "How does NOT IN behave when the subquery has no NULLs?",
+      "nerd_notes": "Contrast with the earlier NULL trap; here it filters as expected.",
+      "examples": [
+        {
+          "name": "not_in_no_nulls",
+          "sql": "WITH vals(x) AS (VALUES (1),(2),(3)), filter(x) AS (VALUES (2))\nSELECT x\nFROM vals\nWHERE x NOT IN (SELECT x FROM filter)\nORDER BY x;",
+          "description": "Question: what does NOT IN return when the set contains no NULLs?",
+          "compat_examples": {
+            "postgres": "-- Same; behaves as expected when subquery has no NULLs.",
+            "mysql": "-- Same; ensure subquery column is comparable and non-NULL.",
+            "oracle": "-- Same; compare with NOT EXISTS pattern."
+          }
+        }
+      ]
+    },
+    {
+      "title": "8. Cleanup: base tables",
+      "narrative": "How do we reset the tiny base tables to make the lesson rerunnable end-to-end?",
+      "nerd_notes": "Keep cleanup explicit; rebuild in the next run as needed.",
+      "examples": [
+        {
+          "name": "cleanup",
+          "sql": "DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS products;",
+          "description": "Question: how do we drop base tables at the very end?",
+          "compat_examples": {
+            "postgres": "-- DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS products;",
+            "mysql": "-- DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS products;",
+            "oracle": "-- BEGIN EXECUTE IMMEDIATE 'DROP TABLE orders'; EXECUTE IMMEDIATE 'DROP TABLE products'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+          }
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+      "id": "basic-select",
+      "prompt": "Show the first 5 rows from `products`.",
+      "answer_sql": "SELECT * FROM products LIMIT 5;"
+    },
+    {
+      "id": "aggregate-1",
+      "prompt": "Count rows grouped by `product_id`.",
+      "answer_sql": "SELECT product_id, COUNT(*) AS cnt FROM products GROUP BY product_id ORDER BY cnt DESC;"
+    },
+    {
+      "id": "filter-top",
+      "prompt": "Select the top 10 rows where `product_id` is positive (if numeric) or not null otherwise.",
+      "answer_sql": "SELECT * FROM products WHERE product_id IS NOT NULL AND product_id > 0 LIMIT 10;"
+    }
+  ]
+}

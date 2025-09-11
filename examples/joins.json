@@ -1,0 +1,662 @@
+{
+  "title": "Joins - From Basics to Advanced",
+  "description": "Incremental guide covering INNER, LEFT, RIGHT, FULL, CROSS joins and common patterns in DuckDB. Exercises are included for practice; several prompts reference the `customers` table for continuity.",
+  "sections": [
+    {
+      "title": "0. Introduction: Joins",
+      "description": "What are JOINs and how do we use them safely and deterministically in small examples?",
+      "examples": [
+        {
+          "name": "intro_joins_overview",
+          "sql": "",
+          "description": "Overview of INNER, LEFT, FULL, CROSS, SELF joins. Keep examples tiny, ordered, and idempotent.",
+          "nerd_notes": "Prefer inline VALUES/CTEs for demos; add ORDER BY for deterministic outputs; drop temporary objects if created."
+        }
+      ],
+      "narrative": "JOINs combine rows from two or more tables based on related columns. Use INNER for matches only, LEFT to keep all left rows, FULL to keep unmatched from both sides, CROSS for combinations, and SELF for intra-table relations.",
+      "nerd_notes": "In production, consider data distribution, predicate pushdown, and avoiding accidental fanout from duplicate keys."
+    },
+    {
+      "title": "1.5 Cheat Sheet: Quick Join Patterns",
+      "description": "Four compact, self-contained join patterns with deterministic outputs.",
+      "examples": [
+        {
+          "name": "cs_inner_join_values_quick",
+          "description": "INNER JOIN two tiny inline tables using USING and deterministic ordering.",
+          "sql": "WITH a(id, v) AS (VALUES (1,'A'),(2,'B')), b(id, w) AS (VALUES (1,'ax'),(3,'cz'))\nSELECT a.id, a.v, b.w\nFROM a JOIN b USING (id)\nORDER BY id;",
+          "nerd_notes": "USING removes duplicate join keys from the output."
+        },
+        {
+          "name": "cs_left_join_presence_flag_quick",
+          "description": "LEFT JOIN with a 0/1 presence flag using aggregation.",
+          "sql": "WITH l(id) AS (VALUES (1),(2),(3)), r(id) AS (VALUES (1),(1),(4))\nSELECT l.id, CASE WHEN MAX(CASE WHEN r.id IS NULL THEN 0 ELSE 1 END)=1 THEN 1 ELSE 0 END AS has_match\nFROM l LEFT JOIN r ON l.id = r.id\nGROUP BY l.id\nORDER BY l.id;",
+          "nerd_notes": "Aggregate after LEFT JOIN to collapse duplicates and produce a stable indicator."
+        },
+        {
+          "name": "cs_anti_join_not_exists_quick",
+          "description": "Anti-join via NOT EXISTS to find left rows without a match on the right.",
+          "sql": "WITH customers(id) AS (VALUES (1),(2),(3)), orders(cid) AS (VALUES (1),(1))\nSELECT c.id\nFROM customers c\nWHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.cid = c.id)\nORDER BY c.id;",
+          "nerd_notes": "NOT EXISTS is NULL-safe and often clearer than NOT IN for anti-joins."
+        },
+        {
+          "name": "cs_full_join_coalesce_quick",
+          "description": "FULL JOIN with key coalescing to present a unified identifier.",
+          "sql": "WITH l(id, v) AS (VALUES (1,'L1')), r(id, w) AS (VALUES (2,'R2'))\nSELECT COALESCE(l.id, r.id) AS uid, l.v, r.w\nFROM l FULL JOIN r USING (id)\nORDER BY uid;",
+          "nerd_notes": "DuckDB supports FULL JOIN; COALESCE the join key for downstream grouping."
+        }
+      ],
+      "narrative": "These quick patterns cover the most common join use-cases in a compact, runnable form.",
+      "nerd_notes": "All examples use inline VALUES/CTEs with ORDER BY to remain deterministic and validator-safe."
+    },
+    {
+      "title": "1.6 Pitfalls, Tips, and Q&A",
+      "description": "Common gotchas and best practices when writing joins.",
+      "examples": [
+        {
+          "name": "joins_pitfalls_notes",
+          "sql": "",
+          "description": "Notes: avoid turning LEFT into INNER by filtering right-side columns in WHERE; prefer NOT EXISTS over NOT IN with NULLs; deduplicate dimensions to prevent fanout; use USING for concise equi-joins; beware NATURAL JOIN brittleness.",
+          "nerd_notes": "Push filters before joins when possible, pre-aggregate large fact tables, and always sanity-check row counts before/after joins."
+        }
+      ],
+      "narrative": "Pitfalls include unintended fanout, NULL semantics, and filters that change join semantics. Keep examples small and ordered for consistent behavior.",
+      "nerd_notes": "Use EXPLAIN to understand join strategies on large datasets."
+    },
+    {
+      "title": "1. Setup: customers and orders",
+  "description": "Question: what tiny dataset will we use to demonstrate join types safely and repeatably?",
+      "examples": [
+        {
+          "name": "create_tables",
+          "sql": "DROP TABLE IF EXISTS order_items; DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS customers;\nCREATE TABLE customers (customer_id INTEGER, name TEXT);\nCREATE TABLE orders (order_id INTEGER, customer_id INTEGER, amount DOUBLE);\nINSERT INTO customers VALUES (1,'Alice'),(2,'Bob');\nINSERT INTO orders VALUES (1,1,100),(2,1,50),(3,3,25);",
+          "description": "Create tables: a short demo.",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+        }
+      ],
+      "narrative": "Create objects and small sample data used by subsequent examples. Keep these steps idempotent.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "2b. INNER JOIN with prefilter",
+      "description": "Question: how can prefiltering reduce join work while keeping results the same?",
+      "examples": [
+        {
+          "name": "inner_join_prefilter",
+          "description": "Prefilter orders above a threshold before joining to customers.",
+          "sql": "WITH customers AS (SELECT 1 AS id, 'Alice' AS name UNION ALL SELECT 2,'Bob'),\norders AS (SELECT 1 AS order_id, 1 AS customer_id, 100 AS amount UNION ALL SELECT 2,1,50 UNION ALL SELECT 3,2,25)\nSELECT c.name, o.order_id, o.amount\nFROM customers c\nJOIN (SELECT * FROM orders WHERE amount >= 50) o ON c.id = o.customer_id\nORDER BY c.name, o.order_id;",
+          "nerd_notes": "Filtering the larger side early can cut join volume without changing semantics."
+        }
+      ],
+      "narrative": "Prefilter large tables in a CTE/subquery to reduce rows before the join.",
+      "nerd_notes": "In real pipelines, push predicates as close to the data source as possible."
+    },
+    {
+      "title": "2. INNER JOIN",
+  "description": "Question: how do we return only rows with matching keys on both sides?",
+      "examples": [
+        {
+          "name": "inner_join",
+          "sql": "SELECT c.name, o.order_id, o.amount FROM customers c INNER JOIN orders o ON c.customer_id = o.customer_id;",
+          "description": "Inner join: a short demo.",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs.",
+          "compat_examples": {
+            "postgres": "SELECT c.name, o.order_id, o.amount FROM customers c INNER JOIN orders o ON c.customer_id = o.customer_id;",
+            "mysql": "SELECT c.name, o.order_id, o.amount FROM customers c INNER JOIN orders o ON c.customer_id = o.customer_id;",
+            "oracle": "SELECT c.name, o.order_id, o.amount FROM customers c INNER JOIN orders o ON c.customer_id = o.customer_id;"
+          }
+        },
+        {
+          "name": "inner_join_composite_key",
+          "sql": "WITH a(k1,k2,v) AS (VALUES (1,'x','A'),(1,'y','B'),(2,'x','C')), b(k1,k2,w) AS (VALUES (1,'x','ax'),(1,'y','ay'),(3,'z','bz'))\nSELECT a.k1, a.k2, a.v, b.w\nFROM a JOIN b ON a.k1=b.k1 AND a.k2=b.k2\nORDER BY a.k1, a.k2;",
+          "description": "Composite-key INNER JOIN with deterministic ordering.",
+          "nerd_notes": "Join on all parts of the composite key to avoid spurious matches."
+        }
+      ],
+      "narrative": "Show different join patterns and when to use them.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "3. LEFT JOIN (keep all customers)",
+  "description": "Question: how do we keep all rows from the left table while attaching matches from the right?",
+      "examples": [
+        {
+          "name": "left_join",
+          "sql": "SELECT c.name, o.order_id, o.amount FROM customers c LEFT JOIN orders o ON c.customer_id = o.customer_id;",
+          "description": "Left join: a short demo.",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs.",
+          "compat_examples": {
+            "postgres": "SELECT c.name, o.order_id, o.amount FROM customers c LEFT JOIN orders o ON c.customer_id = o.customer_id;",
+            "mysql": "SELECT c.name, o.order_id, o.amount FROM customers c LEFT JOIN orders o ON c.customer_id = o.customer_id;",
+            "oracle": "SELECT c.name, o.order_id, o.amount FROM customers c LEFT JOIN orders o ON c.customer_id = o.customer_id;"
+          }
+        },
+        {
+          "name": "left_join_count_matches",
+          "sql": "WITH customers(id,name) AS (VALUES (1,'Alice'),(2,'Bob'),(3,'Cara')), orders(oid,customer_id) AS (VALUES (10,1),(11,1),(12,1),(13,2))\nSELECT c.id, c.name, COUNT(o.oid) AS order_count\nFROM customers c LEFT JOIN orders o ON c.id = o.customer_id\nGROUP BY c.id, c.name\nORDER BY c.id;",
+          "description": "LEFT JOIN with aggregation to count matches while keeping non-matching left rows.",
+          "nerd_notes": "Aggregate after the LEFT JOIN to include left rows with zero matches."
+        },
+        {
+          "name": "left_join_presence_flag",
+          "sql": "WITH l(id) AS (VALUES (1),(2),(3)), r(id) AS (VALUES (1),(1),(4))\nSELECT l.id, CASE WHEN MAX(CASE WHEN r.id IS NULL THEN 0 ELSE 1 END)=1 THEN 1 ELSE 0 END AS has_match\nFROM l LEFT JOIN r ON l.id = r.id\nGROUP BY l.id\nORDER BY l.id;",
+          "description": "Produce a 0/1 indicator for whether a left row has any match on the right.",
+          "nerd_notes": "Use a LEFT JOIN and aggregate to a stable flag."
+        }
+      ],
+      "narrative": "Show different join patterns and when to use them.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "4. RIGHT / FULL / CROSS (DuckDB supports FULL JOIN)",
+  "description": "Question: what happens when we use FULL JOIN to keep unmatched rows from both sides?",
+      "examples": [
+        {
+          "name": "full_join",
+          "sql": "SELECT c.name, o.order_id, o.amount FROM customers c FULL JOIN orders o ON c.customer_id = o.customer_id;",
+          "description": "Full join: a short demo.",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs.",
+          "compat_examples": {
+            "postgres": "SELECT c.name, o.order_id, o.amount FROM customers c FULL JOIN orders o ON c.customer_id = o.customer_id;",
+            "mysql": "-- MySQL has no FULL OUTER JOIN; emulate with UNION of LEFT and RIGHT minus overlaps\n(SELECT c.name, o.order_id, o.amount FROM customers c LEFT JOIN orders o ON c.customer_id = o.customer_id)\nUNION\n(SELECT c.name, o.order_id, o.amount FROM customers c RIGHT JOIN orders o ON c.customer_id = o.customer_id WHERE c.customer_id IS NULL);",
+            "oracle": "SELECT c.name, o.order_id, o.amount FROM customers c FULL OUTER JOIN orders o ON c.customer_id = o.customer_id;"
+          }
+        },
+        {
+          "name": "right_join_quick",
+          "sql": "WITH a(id,v) AS (VALUES (1,'a')), b(id,w) AS (VALUES (1,'b'),(2,'bb'))\nSELECT a.v, b.w FROM a RIGHT JOIN b ON a.id=b.id ORDER BY b.id;",
+          "description": "RIGHT JOIN keeps all rows from the right table, matching left when available.",
+          "nerd_notes": "Often clearer to swap tables and use LEFT JOIN instead."
+        },
+        {
+          "name": "cross_join_overview",
+          "sql": "WITH colors(c) AS (VALUES ('red'),('blue')), sizes(s) AS (VALUES ('S'),('M'))\nSELECT c, s FROM colors CROSS JOIN sizes ORDER BY c, s;",
+          "description": "CROSS JOIN (Cartesian product) on two tiny enumerations.",
+          "nerd_notes": "Keep inputs tiny; CROSS JOIN multiplies row counts."
+        }
+      ],
+      "narrative": "Show different join patterns and when to use them.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "5. Self-join and anti-join patterns",
+  "description": "Question: how do we find rows with no matches (anti-join) and compare rows within the same table (self-join)?",
+      "examples": [
+        {
+          "name": "anti_join",
+          "sql": "-- Find customers with no orders\nSELECT c.* FROM customers c WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.customer_id);",
+          "description": "Anti join: a short demo.",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs.",
+          "compat_examples": {
+            "postgres": "SELECT c.* FROM customers c WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.customer_id);",
+            "mysql": "SELECT c.* FROM customers c WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.customer_id);",
+            "oracle": "SELECT c.* FROM customers c WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.customer_id);"
+          }
+        },
+        {
+          "name": "anti_join_left_is_null",
+          "sql": "-- Anti-join via LEFT JOIN where right side is NULL\nWITH customers(id) AS (VALUES (1),(2),(3)), orders(cid) AS (VALUES (1),(1))\nSELECT c.id FROM customers c LEFT JOIN orders o ON o.cid = c.id\nWHERE o.cid IS NULL\nORDER BY c.id;",
+          "description": "Anti-join using LEFT JOIN ... WHERE right.key IS NULL.",
+          "nerd_notes": "Equivalent to NOT EXISTS; performance can differ by engine."
+        }
+      ],
+      "narrative": "Show different join patterns and when to use them.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "5b. Self-join predecessor within group",
+      "description": "Question: how do we pair each row with its immediate predecessor using a self-join?",
+      "examples": [
+        {
+          "name": "self_join_predecessor",
+          "description": "Join each row to the previous timestamp within the same id.",
+          "sql": "WITH t(id, ts, v) AS (VALUES (1, 1, 10),(1, 2, 15),(1, 4, 12),(2, 1, 5))\nSELECT cur.id, cur.ts, cur.v, prev.ts AS prev_ts, prev.v AS prev_v\nFROM t cur\nLEFT JOIN t prev ON prev.id = cur.id AND prev.ts = (SELECT MAX(ts) FROM t x WHERE x.id = cur.id AND x.ts < cur.ts)\nORDER BY cur.id, cur.ts;",
+          "nerd_notes": "Windows (LAG) are simpler for this, but self-join shows the logic portably."
+        }
+      ],
+      "narrative": "Self-join predecessor pairing is a classic pattern; prefer window LAG when available.",
+      "nerd_notes": "Use a correlated subquery in ON to locate the predecessor safely."
+    },
+    {
+      "title": "6. Cleanup",
+  "description": "Question: how do we reset the database to avoid cross-lesson collisions?",
+      "examples": [
+        {
+          "name": "cleanup",
+          "sql": "DROP TABLE IF EXISTS order_items; DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS customers;",
+          "description": "Cleanup: a short demo.",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+        }
+      ],
+      "narrative": "Tear down objects created in this lesson so the examples are repeatable and safe to re-run.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "JOIN Operations - Complete Guide",
+  "description": "Question: can we see INNER, LEFT, and FULL joins side-by-side on the same demo?",
+      "narrative": "Comprehensive overview of JOIN types, performance considerations, and common pitfalls when joining tables.",
+      "nerd_notes": "Prefer joining on indexed or partitioned keys where possible; watch out for cartesian products from CROSS JOINs.",
+      "examples": [
+        {
+          "name": "join_overview",
+          "description": "Create demo tables and show basic join types and their results side-by-side.",
+          "sql": "DROP TABLE IF EXISTS people_j; DROP TABLE IF EXISTS visits;\nCREATE TABLE people_j (id INTEGER, name TEXT);\nCREATE TABLE visits (visit_id INTEGER, person_id INTEGER, page TEXT);\nINSERT INTO people_j VALUES (1,'Alice'),(2,'Bob');\nINSERT INTO visits VALUES (10,1,'home'),(11,1,'shop'),(12,3,'home');\n-- inner join\nSELECT p.name, v.page FROM people_j p INNER JOIN visits v ON p.id = v.person_id ORDER BY p.name;\n-- left join\nSELECT p.name, v.page FROM people_j p LEFT JOIN visits v ON p.id = v.person_id ORDER BY p.name;\n-- full join (note extra row for unmatched visit)\nSELECT p.name, v.page FROM people_j p FULL JOIN visits v ON p.id = v.person_id ORDER BY p.name NULLS LAST;\nDROP TABLE IF EXISTS people_j; DROP TABLE IF EXISTS visits;",
+          "nerd_notes": "Check join cardinality with COUNT() before running expensive joins on large tables."
+        }
+      ]
+    },
+    {
+      "title": "1. INNER JOIN",
+  "description": "Question: what's the simplest INNER JOIN pattern with deterministic output?",
+      "narrative": "INNER JOIN returns rows with matching keys on both sides; it's the most common join type in analytical queries.",
+      "nerd_notes": "If join keys differ in nullability or type, use explicit CASTs and filters to avoid unexpected mismatches.",
+      "examples": [
+        {
+          "name": "inner_join_example",
+          "description": "A focused inner join example using customers and orders tables.",
+          "sql": "DROP TABLE IF EXISTS customers_j; DROP TABLE IF EXISTS orders_j;\nCREATE TABLE customers_j (customer_id INTEGER, name TEXT);\nCREATE TABLE orders_j (order_id INTEGER, customer_id INTEGER, amount DOUBLE);\nINSERT INTO customers_j VALUES (1,'Alice'),(2,'Bob');\nINSERT INTO orders_j VALUES (1,1,100),(2,1,50),(3,2,25);\nSELECT c.name, o.order_id, o.amount FROM customers_j c INNER JOIN orders_j o ON c.customer_id = o.customer_id ORDER BY c.name;\nDROP TABLE IF EXISTS customers_j; DROP TABLE IF EXISTS orders_j;",
+          "nerd_notes": "Prefilter the larger table before joining when possible to reduce work."
+        }
+      ]
+    },
+    {
+      "title": "2. LEFT JOIN (LEFT OUTER JOIN)",
+  "description": "Question: how do we safely handle NULLs introduced by outer joins?",
+      "narrative": "LEFT JOIN keeps all rows from the left table and attaches matched rows from the right, filling with NULL when missing.",
+      "nerd_notes": "Beware that LEFT JOIN with additional WHERE filters on the right table can turn it effectively into an INNER JOIN unless you account for NULLs.",
+      "examples": [
+        {
+          "name": "left_join_example",
+          "description": "Demonstrate LEFT JOIN and handling NULLs produced from unmatched rows.",
+          "sql": "DROP TABLE IF EXISTS cust_l; DROP TABLE IF EXISTS ord_l;\nCREATE TABLE cust_l (id INTEGER, name TEXT);\nCREATE TABLE ord_l (id INTEGER, cust_id INTEGER, amt DOUBLE);\nINSERT INTO cust_l VALUES (1,'Alice'),(2,'Bob');\nINSERT INTO ord_l VALUES (10,1,100);\nSELECT c.name, o.amt FROM cust_l c LEFT JOIN ord_l o ON c.id = o.cust_id;\n-- filter safely to include unmatched left rows\nSELECT c.name, COALESCE(o.amt,0) AS amt FROM cust_l c LEFT JOIN ord_l o ON c.id = o.cust_id;\nDROP TABLE IF EXISTS cust_l; DROP TABLE IF EXISTS ord_l;",
+          "nerd_notes": "COALESCE is useful to provide defaults for NULLs introduced by outer joins."
+        }
+      ]
+    },
+    {
+      "title": "3. RIGHT JOIN (RIGHT OUTER JOIN)",
+  "description": "Question: when would RIGHT JOIN be used, and what's the left-join equivalent?",
+      "narrative": "RIGHT JOIN is symmetric to LEFT JOIN; DuckDB supports FULL JOIN and RIGHT JOIN, but LEFT JOIN is often clearer if you swap table order.",
+      "nerd_notes": "Prefer LEFT JOIN by swapping table order to avoid RIGHT JOIN confusion. Right joins are the same but reversed semantics.",
+      "examples": [
+        {
+          "name": "right_join_example",
+          "description": "Show RIGHT JOIN behavior using a small demo and the equivalent LEFT JOIN by swapping tables.",
+          "sql": "DROP TABLE IF EXISTS a_r; DROP TABLE IF EXISTS b_r;\nCREATE TABLE a_r (id INTEGER, v TEXT);\nCREATE TABLE b_r (id INTEGER, v TEXT);\nINSERT INTO a_r VALUES (1,'a');\nINSERT INTO b_r VALUES (2,'b');\nSELECT a_r.v AS a, b_r.v AS b FROM a_r RIGHT JOIN b_r ON a_r.id = b_r.id;\n-- equivalent left join by swapping\nSELECT b_r.v AS b, a_r.v AS a FROM b_r LEFT JOIN a_r ON b_r.id = a_r.id;\nDROP TABLE IF EXISTS a_r; DROP TABLE IF EXISTS b_r;",
+          "nerd_notes": "RIGHT JOIN is less commonly used; swapping tables and using LEFT JOIN improves readability.",
+          "compat_examples": {
+            "postgres": "SELECT a_r.v AS a, b_r.v AS b FROM a_r RIGHT JOIN b_r ON a_r.id = b_r.id;",
+            "mysql": "SELECT a_r.v AS a, b_r.v AS b FROM a_r RIGHT JOIN b_r ON a_r.id = b_r.id;",
+            "oracle": "SELECT a_r.v AS a, b_r.v AS b FROM a_r RIGHT JOIN b_r ON a_r.id = b_r.id;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "4. FULL OUTER JOIN",
+  "description": "Question: how do we retain unmatched rows from both sides and reason about keys?",
+      "narrative": "FULL OUTER JOIN returns matched rows plus unmatched from both sides (with NULLs). Useful when you need union-like behavior with alignment.",
+      "nerd_notes": "FULL JOIN can expose mismatched keys; use COALESCE to coalesce the join key for downstream grouping when appropriate.",
+      "examples": [
+        {
+          "name": "full_join_example",
+          "description": "Demonstrate full outer join where each side has unique keys.",
+          "sql": "DROP TABLE IF EXISTS left_f; DROP TABLE IF EXISTS right_f;\nCREATE TABLE left_f (id INTEGER, a TEXT);\nCREATE TABLE right_f (id INTEGER, b TEXT);\nINSERT INTO left_f VALUES (1,'L1');\nINSERT INTO right_f VALUES (2,'R2');\nSELECT l.id AS l_id, r.id AS r_id, l.a, r.b FROM left_f l FULL JOIN right_f r ON l.id = r.id;\nDROP TABLE IF EXISTS left_f; DROP TABLE IF EXISTS right_f;",
+          "nerd_notes": "FULL JOIN result often needs additional logic to merge keys (COALESCE) before aggregation."
+        },
+        {
+          "name": "full_join_matched_and_unmatched",
+          "description": "FULL JOIN with matched and unmatched rows; coalesce key for ordering.",
+          "sql": "WITH l(id,val) AS (VALUES (1,'L1'),(2,'L2')), r(id,val) AS (VALUES (1,'R1'),(3,'R3'))\nSELECT COALESCE(l.id,r.id) AS uid, l.val AS lval, r.val AS rval\nFROM l FULL JOIN r USING (id)\nORDER BY uid;",
+          "nerd_notes": "COALESCE the key to create a unified identifier across sides."
+        }
+      ]
+    },
+    {
+      "title": "5. CROSS JOIN",
+  "description": "Question: how can we generate combinations safely without blowing up row counts?",
+      "narrative": "CROSS JOIN computes the Cartesian product. Use with care — it can explode combinatorially. Useful for generating combinations.",
+      "nerd_notes": "When using CROSS JOIN for combinatorics, consider filtering early or using lateral joins with limits to control result size.",
+      "examples": [
+        {
+          "name": "cross_join_example",
+          "description": "Show Cartesian product and a safe use-case: pairing two small lists.",
+          "sql": "WITH a(x) AS (SELECT 'red' UNION ALL SELECT 'green'), b(y) AS (SELECT 'S' UNION ALL SELECT 'M') SELECT * FROM a CROSS JOIN b;",
+          "nerd_notes": "CROSS JOIN on large tables is dangerous; always estimate size before running."
+        },
+        {
+          "name": "cross_join_filtered",
+          "description": "Generate combinations but filter to a subset to control size.",
+          "sql": "WITH a(x) AS (VALUES ('red'),('green'),('blue')), b(y) AS (VALUES ('S'),('M'),('L'))\nSELECT x, y FROM a CROSS JOIN b WHERE y IN ('S','M') ORDER BY x, y;",
+          "nerd_notes": "Always bound the search space when using CROSS JOIN."
+        }
+      ]
+    },
+    {
+      "title": "6. SELF JOIN",
+  "description": "Question: how do we self-join to compare rows within one table (e.g., pairs in the same group)?",
+      "narrative": "Self-joins let you compare rows within the same table, e.g., finding parent/child or predecessor/successor relationships.",
+      "nerd_notes": "Alias each instance of the table clearly to avoid confusion. Self-joins can often be replaced with window functions for ordering problems.",
+      "examples": [
+        {
+          "name": "self_join_example",
+          "description": "Find pairs of products in the same category using a self-join.",
+          "sql": "DROP TABLE IF EXISTS prod_s;\nCREATE TABLE prod_s (id INTEGER, name TEXT, category TEXT);\nINSERT INTO prod_s VALUES (1,'A','X'),(2,'B','X'),(3,'C','Y');\nSELECT p1.name AS a, p2.name AS b FROM prod_s p1 JOIN prod_s p2 ON p1.category = p2.category AND p1.id < p2.id;\nDROP TABLE IF EXISTS prod_s;",
+          "nerd_notes": "Use p1.id < p2.id to avoid duplicate pairings in undirected pair queries."
+        },
+        {
+          "name": "self_join_same_group_pairs",
+          "description": "Pair items within the same group while avoiding duplicates.",
+          "sql": "WITH t(id, grp) AS (VALUES (1,'A'),(2,'A'),(3,'A'),(4,'B'))\nSELECT a.id AS a, b.id AS b, a.grp\nFROM t a JOIN t b ON a.grp=b.grp AND a.id < b.id\nORDER BY a, b;",
+          "nerd_notes": "Classic undirected pair generation within a group."
+        }
+      ]
+    },
+    {
+      "title": "Advanced JOIN Types and UPSERT Operations",
+  "description": "Question: how can we simulate upsert behavior with joins and updates when ON CONFLICT/MERGE isn't available?",
+      "narrative": "Show advanced join use-cases and simulate UPSERT (INSERT ... ON CONFLICT) patterns in DuckDB where appropriate.",
+      "nerd_notes": "DuckDB's upsert patterns depend on version; using MERGE or client-side logic can help. Test constraints during upserts carefully.",
+      "examples": [
+        {
+          "name": "upsert_sim",
+          "description": "Simulate an upsert in a DuckDB-compatible way using staging values and explicit steps (no explicit transactions).",
+          "sql": "DROP TABLE IF EXISTS inventory;\nCREATE TABLE inventory (sku TEXT, qty INTEGER);\nINSERT INTO inventory VALUES ('s1',10);\n-- staging values\nWITH staging(sku,qty) AS (VALUES ('s1',5),('s2',7))\n-- try insert new rows that don't exist yet\nINSERT INTO inventory (sku,qty) SELECT s.sku,s.qty FROM staging s LEFT JOIN inventory i ON i.sku = s.sku WHERE i.sku IS NULL;\n-- update rows that already exist by joining staging to inventory\nUPDATE inventory SET qty = inventory.qty + s.qty FROM (SELECT * FROM (VALUES ('s1',5),('s2',7)) AS s(sku,qty)) s WHERE inventory.sku = s.sku;\nSELECT * FROM inventory ORDER BY sku;\nDROP TABLE IF EXISTS inventory;",
+          "nerd_notes": "This pattern inserts missing rows then updates existing ones; keeping steps explicit avoids nested transaction control in the validator harness."
+        }
+      ]
+    },
+    {
+      "title": "1. Advanced JOIN Types",
+  "description": "Question: what's the cleanest way to express semi-joins and anti-joins?",
+      "narrative": "Examples of semi-joins, anti-joins and lateral patterns used in multi-step queries.",
+      "nerd_notes": "Semi/anti joins can be written with EXISTS/NOT EXISTS for clarity and often better performance than DISTINCT filters.",
+      "examples": [
+        {
+          "name": "semi_join_example",
+          "description": "Semi-join: return customers that have at least one order using EXISTS with a self-contained CTE.",
+          "sql": "WITH cust(cust_id) AS (VALUES (1),(2),(3)), ord(o_id,cust_id) AS (VALUES (10,1),(11,1),(12,3))\nSELECT c.cust_id FROM cust c WHERE EXISTS (SELECT 1 FROM ord o WHERE o.cust_id = c.cust_id);",
+          "nerd_notes": "EXISTS expresses semi-join semantics without creating a joined intermediate result."
+        },
+        {
+          "name": "anti_join_example",
+          "description": "Anti-join: return customers that have no orders using NOT EXISTS with its own self-contained CTE.",
+          "sql": "WITH cust(cust_id) AS (VALUES (1),(2),(3)), ord(o_id,cust_id) AS (VALUES (10,1),(11,1),(12,3))\nSELECT c.cust_id FROM cust c WHERE NOT EXISTS (SELECT 1 FROM ord o WHERE o.cust_id = c.cust_id);",
+          "nerd_notes": "NOT EXISTS expresses anti-join semantics succinctly and often efficiently."
+        },
+        {
+          "name": "semi_join_via_inner_distinct",
+          "description": "Semi-join alternative: INNER JOIN then DISTINCT on the left key.",
+          "sql": "WITH c(id) AS (VALUES (1),(2),(3)), o(cid) AS (VALUES (1),(1),(3))\nSELECT DISTINCT c.id\nFROM c JOIN o ON c.id = o.cid\nORDER BY c.id;",
+          "nerd_notes": "Equivalent to EXISTS; DISTINCT can be heavier than EXISTS on large data."
+        }
+      ]
+    },
+    {
+      "title": "2. UPSERT Operations",
+  "description": "Question: what are portable patterns for insert-or-update flows?",
+      "narrative": "Patterns to safely insert-or-update data: transactional staging, MERGE (if available), and client-driven upserts.",
+      "nerd_notes": "Test upsert patterns in a transaction and be mindful of primary key constraints and concurrent writers.",
+      "examples": [
+        {
+          "name": "upsert_pattern_notes",
+          "description": "Notes and example showing transactional staging pattern for upserts (see upsert_sim example earlier).",
+          "sql": "SELECT 'Use staging tables and transactional INSERT+UPDATE patterns to simulate upsert in DuckDB' AS note LIMIT 1;",
+          "nerd_notes": "MERGE/ON CONFLICT availability depends on DuckDB version; transactional insert+update is portable."
+        }
+      ]
+    },
+    {
+      "title": "Advanced JOIN Patterns and Multi-Table Operations",
+  "description": "Question: how do we reduce join volume with pre-aggregation and keep queries readable?",
+      "narrative": "Examples showing multi-table joins, using CTEs to break down complex joins, and performance notes.",
+      "nerd_notes": "Break complex joins into CTEs to improve readability and allow the planner to optimize intermediate steps.",
+      "examples": [
+        {
+          "name": "three_table_join_cte",
+          "description": "Join three tables with a CTE that pre-aggregates the middle table to reduce work.",
+          "sql": "WITH orders_agg AS (SELECT customer_id, SUM(amount) AS total FROM (VALUES (1,100),(1,50),(2,25)) t(customer_id,amount) GROUP BY customer_id)\nSELECT c.customer_id, c.name, oa.total FROM (VALUES (1,'Alice'),(2,'Bob')) c(customer_id,name) LEFT JOIN orders_agg oa ON c.customer_id = oa.customer_id;",
+          "nerd_notes": "Pre-aggregating large detail tables before joining can drastically reduce join volume."
+        }
+      ]
+    },
+    {
+      "title": "1. Multi-Table JOINs (3+ Tables)",
+  "description": "Question: how do we structure a 3-table join with VALUES/CTEs so it's deterministic and self-contained?",
+      "narrative": "Concrete example joining three tables in a controlled way using small inlined VALUES to keep the example self-contained.",
+      "nerd_notes": "When joining many tables, verify intermediate row counts and consider join ordering. Use EXPLAIN for expensive queries.",
+      "examples": [
+        {
+          "name": "three_way_join_example",
+          "description": "Join three small tables using explicit VALUES to keep example self-contained and deterministic.",
+          "sql": "WITH a(id,val) AS (VALUES (1,'x'),(2,'y')) , b(id,aid,amt) AS (VALUES (10,1,100),(11,1,50),(12,2,25)), c(bid,tag) AS (VALUES (10,'t1'),(12,'t2'))\nSELECT a.id, a.val, b.amt, c.tag FROM a JOIN b ON a.id = b.aid LEFT JOIN c ON b.id = c.bid ORDER BY a.id, b.id;",
+          "nerd_notes": "Use LEFT JOIN when downstream tables may miss matches; CTEs with VALUES keep examples isolated."
+        }
+      ]
+    },
+    {
+      "title": "Table Relationships & Joins",
+  "description": "Question: how does join cardinality reflect relationship types like many-to-many?",
+      "narrative": "Discuss common relationship types (one-to-many, many-to-many) and show how join cardinality reflects relationship types.",
+      "nerd_notes": "Many-to-many relationships usually require a mapping table; ensure join keys are properly indexed or partitioned in production.",
+      "examples": [
+        {
+          "name": "many_to_many_example",
+          "description": "Model a many-to-many relationship with an association table using inline VALUES.",
+          "sql": "WITH products(pid,name) AS (VALUES (1,'P1'),(2,'P2')) , orders(oid,pid) AS (VALUES (10,1),(11,1),(12,2))\nSELECT p.name, COUNT(o.oid) AS order_count FROM products p LEFT JOIN orders o ON p.pid = o.pid GROUP BY p.name;",
+          "nerd_notes": "Association tables capture many-to-many relationships; aggregate on the master side for summaries."
+        }
+      ]
+    },
+    {
+      "title": "2. LEFT JOIN",
+  "description": "Question: can we show a compact VALUES-based LEFT JOIN that handles NULLs via COALESCE?",
+      "narrative": "Demonstrate LEFT JOIN semantics and how outer joins produce NULLs for unmatched rows, and how to safely filter or coalesce those NULLs.",
+      "nerd_notes": "Use COALESCE to provide defaults for NULLs introduced by outer joins; swapping sides can change results when applying WHERE filters.",
+      "examples": [
+        {
+          "name": "left_join_values_coalesce_demo",
+          "description": "Illustrate LEFT JOIN with inline data and COALESCE handling.",
+          "sql": "WITH lefts(id,name) AS (VALUES (1,'Alice'),(2,'Bob')) , rights(id,amt) AS (VALUES (1,100))\nSELECT l.id, l.name, r.amt, COALESCE(r.amt,0) AS amt_default FROM lefts l LEFT JOIN rights r ON l.id = r.id ORDER BY l.id;",
+          "nerd_notes": "This example is self-contained using VALUES so it is deterministic and safe for the validator."
+        }
+      ]
+    },
+    {
+      "title": "3. Multi-Table Joins",
+  "description": "Question: how do we join three tables with a mix of inner/left joins while controlling result size?",
+      "narrative": "Show a controlled example joining three small tables using CTEs/VALUES to keep the demo isolated and deterministic.",
+      "nerd_notes": "Pre-aggregate when possible and use CTEs to break complex joins into readable steps.",
+      "examples": [
+        {
+          "name": "multi_table_values_join",
+          "description": "Join three in-memory tables using VALUES to demonstrate join order and left/inner behavior.",
+          "sql": "WITH a(id,name) AS (VALUES (1,'x'),(2,'y')) , b(id,aid,amt) AS (VALUES (10,1,100),(11,1,50),(12,2,25)), c(bid,tag) AS (VALUES (10,'t1'),(12,'t2'))\nSELECT a.id, a.name, b.amt, c.tag FROM a JOIN b ON a.id = b.aid LEFT JOIN c ON b.id = c.bid ORDER BY a.id, b.id;",
+          "nerd_notes": "Using VALUES and CTEs keeps the example self-contained so the validator can run it in isolation."
+        }
+      ]
+    },
+    {
+      "title": "4. Other Join Types",
+  "description": "Question: when is USING preferable to ON in equi-joins?",
+      "narrative": "Show USING clause and small JOIN variants that are useful in practice.",
+      "nerd_notes": "USING is syntactic sugar for equi-joins and can make SQL more concise when the join key has the same name on both sides.",
+      "examples": [
+        {
+          "name": "using_clause_example",
+          "description": "Demonstrate JOIN USING with two inline tables.",
+          "sql": "SELECT * FROM (VALUES (1,'a')) t1(id,x) JOIN (VALUES (1,'b')) t2(id,y) USING (id);",
+          "nerd_notes": "USING removes duplicate join columns from the result and improves readability.",
+          "compat_examples": {
+            "postgres": "SELECT * FROM t1 JOIN t2 USING (id);",
+            "mysql": "SELECT * FROM t1 JOIN t2 USING (id);",
+            "oracle": "SELECT * FROM t1 JOIN t2 USING (id);"
+          }
+        }
+      ]
+    }
+    ,
+    {
+      "title": "7. NATURAL JOIN (use with caution)",
+  "description": "Question: why avoid NATURAL JOIN and prefer explicit keys?",
+      "narrative": "NATURAL JOIN automatically matches columns by name. It's concise but brittle if schemas change.",
+      "nerd_notes": "Prefer explicit ON/USING to avoid accidental column matches when new columns are added.",
+      "examples": [
+        {
+          "name": "natural_join_caution",
+          "description": "Show NATURAL JOIN vs explicit USING on same dataset.",
+          "sql": "WITH a(id,val) AS (VALUES (1,'A'),(2,'B')), b(id,val2) AS (VALUES (1,'x'),(3,'y'))\n-- NATURAL JOIN matches on id only here\nSELECT 'natural' AS kind, * FROM a NATURAL JOIN b\nUNION ALL\nSELECT 'using', a.id, a.val, b.val2 FROM a JOIN b USING (id)\nORDER BY kind;",
+          "nerd_notes": "If both sides had a column named val, NATURAL JOIN would also match it, changing results unexpectedly.",
+          "compat_examples": {
+            "postgres": "SELECT * FROM a NATURAL JOIN b; -- supported but brittle",
+            "mysql": "SELECT * FROM a NATURAL JOIN b; -- supported; prefer USING/ON",
+            "oracle": "SELECT * FROM a NATURAL JOIN b; -- supported; prefer USING/ON"
+          }
+        }
+      ]
+    }
+    ,
+    {
+      "title": "8. Outer join filtering pitfalls",
+  "description": "Question: why can a WHERE filter on the right side turn a LEFT JOIN into an INNER JOIN?",
+      "narrative": "WHERE clauses on right-side columns can turn a LEFT JOIN into an INNER JOIN unless you account for NULLs.",
+      "nerd_notes": "Move predicates on the right table into the ON clause or explicitly keep NULLs with OR r.col IS NULL.",
+      "examples": [
+        {
+          "name": "left_join_filter_pitfall",
+          "description": "Contrast filtering in WHERE vs ON with LEFT JOIN.",
+          "sql": "WITH l(id,name) AS (VALUES (1,'Alice'),(2,'Bob')), r(id,amt) AS (VALUES (1,100),(1,50))\n-- Wrong: WHERE r.amt > 60 removes Bob entirely (becomes inner-ish)\nSELECT 'where_filter' AS variant, l.id, l.name, r.amt\nFROM l LEFT JOIN r ON l.id=r.id\nWHERE r.amt > 60\nUNION ALL\n-- Right: put filter in ON and keep unmatched via OR r.id IS NULL or coalesce\nSELECT 'on_filter' AS variant, l.id, l.name, r.amt\nFROM l LEFT JOIN r ON l.id=r.id AND r.amt > 60\nORDER BY variant, id, amt NULLS LAST;",
+          "nerd_notes": "Filters on the nullable side belong in the ON clause to preserve unmatched left rows."
+        }
+      ]
+    }
+    ,
+    {
+      "title": "9. NOT IN vs NOT EXISTS (NULL trap)",
+  "description": "Question: why is NOT EXISTS safer than NOT IN when NULLs appear?",
+      "narrative": "NOT IN behaves differently in the presence of NULLs; prefer NOT EXISTS for anti-joins.",
+      "nerd_notes": "NOT IN with a NULL anywhere in the subquery returns no rows because comparisons become UNKNOWN.",
+      "examples": [
+        {
+          "name": "not_in_null_pitfall",
+          "description": "Demonstrate NOT IN vs NOT EXISTS when subquery contains NULL.",
+          "sql": "WITH cust(id) AS (VALUES (1),(2),(3)), ord(cid) AS (VALUES (1),(NULL))\n-- NOT IN suppresses all due to NULL in ord\nSELECT 'NOT IN' AS kind, id FROM cust WHERE id NOT IN (SELECT cid FROM ord)\nUNION ALL\n-- NOT EXISTS correctly returns only those without a matching order id\nSELECT 'NOT EXISTS' AS kind, c.id FROM cust c WHERE NOT EXISTS (SELECT 1 FROM ord o WHERE o.cid = c.id)\nORDER BY kind, id;",
+          "nerd_notes": "Use NOT EXISTS or filter out NULLs explicitly in the NOT IN subquery (WHERE cid IS NOT NULL).",
+          "compat_examples": {
+            "postgres": "-- Prefer NOT EXISTS for NULL-safe anti-joins.",
+            "mysql": "-- Prefer NOT EXISTS for NULL-safe anti-joins.",
+            "oracle": "-- Prefer NOT EXISTS for NULL-safe anti-joins."
+          }
+        }
+      ]
+    }
+    ,
+    {
+      "title": "10. Range and inequality joins",
+  "description": "Question: how do we express non-equi joins while avoiding duplicate pairs?",
+      "narrative": "Non-equi joins match on ranges or inequalities instead of equality.",
+      "nerd_notes": "These joins can be expensive; pre-filter and ensure predicates are sargable when possible.",
+      "examples": [
+        {
+          "name": "price_band_similarity_join",
+          "description": "Pair products in same category with small price difference.",
+          "sql": "WITH p(pid,category,price) AS (VALUES (1,'E',100),(2,'E',105),(3,'E',160),(4,'C',50),(5,'C',55))\nSELECT p1.pid AS a, p2.pid AS b, p1.category, ABS(p1.price-p2.price) AS diff\nFROM p p1 JOIN p p2\n  ON p1.category=p2.category AND p1.pid<p2.pid AND ABS(p1.price-p2.price) <= 10\nORDER BY p1.category, a, b;",
+          "nerd_notes": "Use p1.pid < p2.pid to avoid duplicate pairs; consider bucketing prices to prune candidates."
+        },
+        {
+          "name": "effective_date_join",
+          "description": "Join facts to a dimension with validity ranges (start/end).",
+          "sql": "WITH dim(id, start_dt, end_dt, attr) AS (\n  VALUES (1, DATE '2024-01-01', DATE '2024-01-31', 'A'),\n         (1, DATE '2024-02-01', DATE '2024-12-31', 'B')\n), facts(id, dt, val) AS (\n  VALUES (1, DATE '2024-01-15', 10),\n         (1, DATE '2024-02-15', 20)\n)\nSELECT f.id, f.dt, f.val, d.attr\nFROM facts f JOIN dim d\n  ON f.id = d.id AND f.dt BETWEEN d.start_dt AND d.end_dt\nORDER BY f.dt;",
+          "nerd_notes": "Range join on effective dates is common in slowly-changing dimensions."
+        }
+      ]
+    }
+    ,
+    {
+      "title": "11. FULL JOIN with key coalescing",
+  "description": "Question: after FULL JOIN, how do we produce a unified key for grouping?",
+      "narrative": "After FULL JOIN, coalesce keys for downstream grouping or comparison.",
+      "nerd_notes": "COALESCE(left.key, right.key) produces a unified key for unmatched rows.",
+      "examples": [
+        {
+          "name": "full_join_coalesce_keys",
+          "description": "Full outer join where sides have disjoint keys and coalesced id.",
+          "sql": "WITH l(id,val) AS (VALUES (1,'L1')), r(id,val) AS (VALUES (2,'R2'))\nSELECT COALESCE(l.id,r.id) AS uid, l.val AS lval, r.val AS rval\nFROM l FULL JOIN r USING (id)\nORDER BY uid;",
+          "nerd_notes": "DuckDB supports FULL JOIN; coalescing keys simplifies post-join processing.",
+          "compat_examples": {
+            "postgres": "WITH l(id,val) AS (VALUES (1,'L1')), r(id,val) AS (VALUES (2,'R2')) SELECT COALESCE(l.id,r.id) AS uid, l.val AS lval, r.val AS rval FROM l FULL JOIN r USING (id) ORDER BY uid;",
+            "mysql": "-- Emulate FULL OUTER JOIN in MySQL\nWITH l(id,val) AS (SELECT 1,'L1'), r(id,val) AS (SELECT 2,'R2')\n(SELECT COALESCE(l.id,r.id) AS uid, l.val AS lval, r.val AS rval FROM l LEFT JOIN r USING (id))\nUNION\n(SELECT COALESCE(l.id,r.id) AS uid, l.val AS lval, r.val AS rval FROM r LEFT JOIN l USING (id) WHERE l.id IS NULL)\nORDER BY uid;",
+            "oracle": "WITH l(id,val) AS (SELECT 1,'L1' FROM dual), r(id,val) AS (SELECT 2,'R2' FROM dual) SELECT COALESCE(l.id,r.id) AS uid, l.val AS lval, r.val AS rval FROM l FULL OUTER JOIN r USING (id) ORDER BY uid;"
+          }
+        }
+      ]
+    }
+    ,
+    {
+      "title": "12. CROSS JOIN combinations",
+  "description": "Question: how can we generate combinations from tiny lookup tables in a deterministic order?",
+      "narrative": "Use CROSS JOIN to generate combinations, keeping inputs small and ordered.",
+      "nerd_notes": "Combine small enumerations (sizes/colors) or time buckets; avoid large Cartesian products.",
+      "examples": [
+        {
+          "name": "sizes_colors_variants",
+          "description": "Generate product variants from sizes and colors.",
+          "sql": "WITH sizes(sz, ord) AS (VALUES ('S',1),('M',2),('L',3)), colors(clr, ord) AS (VALUES ('Red',1),('Blue',2))\nSELECT clr, sz, clr||' '||sz AS variant\nFROM colors CROSS JOIN sizes\nORDER BY colors.ord, sizes.ord;",
+          "nerd_notes": "This mirrors common ecommerce variant generation with tiny lookup tables."
+        }
+      ]
+    }
+    ,
+    {
+      "title": "13. SELF JOIN: employee-manager hierarchy",
+  "description": "Question: how do we show employee and manager on the same row using a self-join?",
+      "narrative": "Self-join a hierarchy to show employee and their manager side-by-side.",
+      "nerd_notes": "Use LEFT JOIN so top-level employees (no manager) still appear.",
+      "examples": [
+        {
+          "name": "employee_manager_self_join",
+          "description": "Create a tiny employee table and join to itself for manager names.",
+          "sql": "DROP TABLE IF EXISTS j_emps;\nCREATE TEMP TABLE j_emps(emp_id INTEGER, name TEXT, manager_id INTEGER);\nINSERT INTO j_emps VALUES (1,'CEO',NULL),(2,'Mgr',1),(3,'Dev',2);\nSELECT e.emp_id, e.name, m.name AS manager\nFROM j_emps e LEFT JOIN j_emps m ON e.manager_id = m.emp_id\nORDER BY e.emp_id;\nDROP TABLE IF EXISTS j_emps;",
+          "nerd_notes": "TEMP table keeps the example isolated; explicit DROP avoids leakage across runs."
+        }
+      ]
+    }
+    ,
+    {
+      "title": "14. Handling duplicate dimension rows",
+  "description": "Question: how do we de-duplicate a dimension before joining to prevent fanout?",
+      "narrative": "Duplicate keys in a dimension cause fanout. De-duplicate before joining.",
+      "nerd_notes": "GROUP BY or QUALIFY row_number()=1 to create a one-row-per-key dimension before joining facts.",
+      "examples": [
+        {
+          "name": "dedup_before_join",
+          "description": "Join facts to a de-duplicated dimension snapshot.",
+          "sql": "WITH dim_raw(id,attr) AS (VALUES (1,'A1'),(1,'A2'),(2,'B')), fact(fid,dim_id,amt) AS (VALUES (10,1,100),(11,2,50))\n, dim_1row AS (\n  SELECT id, ANY_VALUE(attr) AS attr FROM dim_raw GROUP BY id\n)\nSELECT f.fid, f.amt, d.attr\nFROM fact f LEFT JOIN dim_1row d ON f.dim_id=d.id\nORDER BY f.fid;",
+          "nerd_notes": "DuckDB's ANY_VALUE returns an arbitrary value; for deterministic choice, use MIN/MAX or a tie-breaker."
+        },
+        {
+          "name": "dedup_with_row_number",
+          "description": "Use ROW_NUMBER to select a deterministic representative per key before joining.",
+          "sql": "WITH dim_raw(id,attr,rank_key) AS (VALUES (1,'A1',2),(1,'A2',1),(2,'B',1)), fact(fid,dim_id,amt) AS (VALUES (10,1,100),(11,2,50)),\nranked AS (\n  SELECT id, attr, ROW_NUMBER() OVER (PARTITION BY id ORDER BY rank_key) AS rn\n  FROM dim_raw\n)\nSELECT f.fid, f.amt, d.attr\nFROM fact f LEFT JOIN (SELECT id, attr FROM ranked WHERE rn=1) d ON f.dim_id=d.id\nORDER BY f.fid;",
+          "nerd_notes": "Tie-break with an ORDER BY to pick a stable representative."
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+  "id": "basic-select",
+  "prompt": "Show the first 5 rows from `customers`.",
+  "answer_sql": "SELECT * FROM customers LIMIT 5;"
+    },
+    {
+      "id": "aggregate-1",
+      "prompt": "Count rows grouped by `customer_id`.",
+      "answer_sql": "SELECT customer_id, COUNT(*) AS cnt FROM customers GROUP BY customer_id ORDER BY cnt DESC;"
+    },
+    {
+      "id": "filter-top",
+      "prompt": "Select the top 10 rows where `customer_id` is positive (if numeric) or not null otherwise.",
+      "answer_sql": "SELECT * FROM customers WHERE customer_id IS NOT NULL AND customer_id > 0 LIMIT 10;"
+    }
+  ]
+}

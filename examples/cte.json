@@ -1,0 +1,183 @@
+{
+  "title": "Common Table Expressions (CTE)",
+  "description": "Step-by-step CTE usage: simple CTEs, recursive CTEs, materialization patterns — all DuckDB-compatible and self-contained. Exercises are included; some prompts reference the `customers` table for continuity.",
+  "sections": [
+    {
+      "title": "0. Introduction: CTEs (WITH)",
+      "narrative": "CTEs (WITH clauses) let you name subqueries, chain multi-step transformations, and build recursive traversals. They improve readability, testability, and reuse without persisting intermediate tables.",
+      "nerd_notes": "Think of each CTE as a logical stage. Keep them small and purposeful; prefer ORDER BY in final selects for deterministic outputs during demos and tests."
+    },
+    {
+      "title": "1. Setup: orders and customers",
+      "examples": [
+        {
+          "name": "create_tables",
+          "sql": "DROP TABLE IF EXISTS order_items;\nDROP TABLE IF EXISTS orders;\nDROP TABLE IF EXISTS customers;\nCREATE TABLE customers (customer_id INTEGER, name TEXT);\nCREATE TABLE orders (order_id INTEGER, customer_id INTEGER, order_date DATE, amount DOUBLE);\nINSERT INTO customers VALUES (1,'Alice'),(2,'Bob'),(3,'Carol');\nINSERT INTO orders VALUES (1,1,'2024-01-01',100.0),(2,1,'2024-01-15',50.0),(3,2,'2024-01-10',75.0);",
+          "description": "Question: what minimal dataset powers our CTE demonstrations?",
+          "nerd_notes": "Seed only columns needed by downstream examples; this keeps focus on the CTE shapes.",
+          "compat_examples": {"postgres": "-- Same DDL works; optionally add PRIMARY KEY constraints.", "mysql": "-- Use INT/DATE; watch sql_mode for strict inserts.", "oracle": "-- Replace DOUBLE with NUMBER; sequences for surrogate keys if required."}
+        }
+      ],
+      "narrative": "Create objects and small sample data used by subsequent examples. Keep these steps idempotent.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "2. Simple CTE for readability",
+      "examples": [
+        {
+          "name": "simple_cte",
+          "sql": "WITH cust_total AS (\n  SELECT customer_id, SUM(amount) AS total_spent\n  FROM orders\n  GROUP BY customer_id\n)\nSELECT c.name, ct.total_spent\nFROM customers c\nLEFT JOIN cust_total ct ON c.customer_id = ct.customer_id;",
+      "description": "Question: how does naming an intermediate aggregate improve readability?",
+      "nerd_notes": "Equivalent to an inline subquery but easier to debug or extend.",
+      "compat_examples": {"postgres": "-- Identical syntax.", "mysql": "-- MySQL 8+ supports CTEs.", "oracle": "-- Identical; optimizer may inline the CTE."}
+        }
+      ],
+    "narrative": "A single CTE isolates a concept: compute totals first, then join for labels.",
+    "nerd_notes": "Prefer clear names over terse aliases; aids code review." 
+    },
+    {
+      "title": "2.5 Cheat Sheet: Common CTE Patterns",
+      "examples": [
+        {
+          "name": "cs_aggregate_then_join",
+          "sql": "WITH cust_total AS (\n  SELECT customer_id, SUM(amount) AS total_spent\n  FROM orders\n  GROUP BY customer_id\n)\nSELECT c.name, COALESCE(ct.total_spent, 0) AS total_spent\nFROM customers c\nLEFT JOIN cust_total ct ON c.customer_id = ct.customer_id\nORDER BY c.name;",
+          "description": "Compute totals in a CTE, then join for labels.",
+          "nerd_notes": "Same result as a derived table; CTE is easier to extend and debug.",
+          "compat_examples": {"postgres": "-- Identical syntax.", "mysql": "-- Requires MySQL 8+.", "oracle": "-- Identical shape; optimizer may inline."}
+        },
+        {
+          "name": "cs_multi_stage_filter_and_rank",
+          "sql": "WITH filtered AS (\n  SELECT * FROM orders WHERE amount >= 50\n), rollup AS (\n  SELECT customer_id, COUNT(*) AS order_count, SUM(amount) AS total\n  FROM filtered\n  GROUP BY customer_id\n), ranked AS (\n  SELECT *, RANK() OVER (ORDER BY total DESC) AS rnk FROM rollup\n)\nSELECT customer_id, order_count, total, rnk\nFROM ranked\nORDER BY rnk, customer_id;",
+          "description": "Chain filter → aggregate → rank as discrete steps.",
+          "nerd_notes": "Each stage is testable; ORDER BY ensures deterministic rows.",
+          "compat_examples": {"postgres": "-- Identical.", "mysql": "-- Window functions required.", "oracle": "-- Analytic functions supported."}
+        },
+        {
+          "name": "cs_recursive_sum_1_to_10",
+          "sql": "WITH RECURSIVE seq(n) AS (\n  SELECT 1\n  UNION ALL\n  SELECT n + 1 FROM seq WHERE n < 10\n)\nSELECT MAX(n) AS max_n, SUM(n) AS total\nFROM seq;",
+          "description": "Recursive CTE producing a sequence and summarizing it.",
+          "nerd_notes": "Bound the recursion to avoid runaway growth.",
+          "compat_examples": {"postgres": "-- Or use generate_series for the sequence.", "mysql": "-- Requires 8+.", "oracle": "-- CONNECT BY alternative."}
+        },
+        {
+          "name": "cs_reuse_cte_multiple_times",
+          "sql": "WITH filtered AS (\n  SELECT * FROM orders WHERE amount >= 50\n)\nSELECT 'count' AS metric, CAST(COUNT(*) AS DOUBLE) AS value FROM filtered\nUNION ALL\nSELECT 'sum', CAST(SUM(amount) AS DOUBLE) FROM filtered\nORDER BY metric;",
+          "description": "Define once, reference multiple times.",
+          "nerd_notes": "Good for keeping filter logic centralized.",
+          "compat_examples": {"postgres": "-- Identical; MATERIALIZED hint available in PG12+.", "mysql": "-- Identical in 8+.", "oracle": "-- Identical shape."}
+        }
+      ],
+      "narrative": "Drop-in patterns you can adapt: name a subquery, chain stages, recurse safely, and reuse logic.",
+      "nerd_notes": "Ensure deterministic ORDER BY in final outputs for demos/tests. Avoid destructive DDL in cheat sheets."
+    },
+    {
+      "title": "2.6 Pitfalls, Tips, and Q&A",
+      "examples": [
+        {
+          "name": "pitfall_non_deterministic_order",
+          "sql": "",
+          "description": "CTE outputs without ORDER BY are not guaranteed to be ordered. Always add ORDER BY in final SELECTs for demos/tests."
+        },
+        {
+          "name": "tip_split_complex_steps",
+          "sql": "",
+          "description": "When a subquery grows complex, split into CTE stages with meaningful names. Easier to profile and unit test each stage."
+        },
+        {
+          "name": "question_cte_vs_view",
+          "sql": "",
+          "description": "When should I use a CTE vs a view? CTEs are per-query logical staging; views are named reusable query definitions for broader reuse."
+        },
+        {
+          "name": "tricky_recursive_bounds",
+          "sql": "",
+          "description": "Always bound recursion with a clear termination condition to avoid runaway queries."
+        },
+        {
+          "name": "fundamental_reuse_and_readability",
+          "sql": "",
+          "description": "CTEs are primarily about readability and reuse. They’re not materialized by default; the optimizer can inline them."
+        }
+      ],
+      "narrative": "Common gotchas and best practices to keep your CTEs robust and readable.",
+      "nerd_notes": "In engines that support it, materialization hints may change performance; measure rather than assume."
+    },
+    {
+      "title": "3. CTE for multi-step transformations",
+      "examples": [
+        {
+          "name": "multi_step",
+          "sql": "WITH filtered_orders AS (\n  SELECT * FROM orders WHERE amount >= 50\n),\ncustomer_activity AS (\n  SELECT customer_id, COUNT(*) AS order_count, SUM(amount) AS total\n  FROM filtered_orders\n  GROUP BY customer_id\n)\nSELECT c.name, ca.order_count, ca.total\nFROM customer_activity ca\nJOIN customers c ON c.customer_id = ca.customer_id;",
+      "description": "Question: how do chained CTEs create a readable transformation pipeline?",
+      "nerd_notes": "Logical phases: filter then aggregate then join. Each phase testable alone.",
+      "compat_examples": {"postgres": "-- May inline when beneficial unless referenced multiple times.", "mysql": "-- Readability is the big win; performance similar to nested subqueries.", "oracle": "-- Each CTE forms a query block; monitor plans for reuse."}
+        }
+      ],
+    "narrative": "Multi-CTE chains make intent explicit versus deeply nested parentheses.",
+    "nerd_notes": "Avoid micro-CTEs for trivial column renames—noise hurts clarity." 
+    },
+    {
+      "title": "4. Recursive CTE: simple numbers generator",
+      "examples": [
+        {
+          "name": "recursive_numbers",
+          "sql": "WITH RECURSIVE seq(n) AS (\n  SELECT 1\n  UNION ALL\n  SELECT n+1 FROM seq WHERE n < 10\n)\nSELECT * FROM seq;",
+      "description": "Question: how does a recursive CTE build an incremental series?",
+      "nerd_notes": "Anchor member seeds; recursive member appends until termination predicate fails.",
+      "compat_examples": {"postgres": "-- Same; generate_series() is shorter for simple sequences.", "mysql": "-- Requires 8+; ensure termination condition to prevent infinite recursion.", "oracle": "-- Either recursive WITH or CONNECT BY LEVEL."}
+        }
+      ],
+    "narrative": "Minimal recursion example to introduce anchor vs recursive branches.",
+    "nerd_notes": "Guard rails: add an upper LIMIT if user-supplied bounds enter the pattern." 
+    },
+    {
+      "title": "5. Recursive CTE: hierarchical data",
+      "examples": [
+        {
+          "name": "hierarchy",
+          "sql": "DROP TABLE IF EXISTS org;\nCREATE TABLE org(employee_id INTEGER, manager_id INTEGER, name TEXT);\nINSERT INTO org VALUES (1,NULL,'CEO'),(2,1,'VP1'),(3,1,'VP2'),(4,2,'Mgr1'),(5,4,'IC1');\nWITH RECURSIVE reports(employee_id, manager_id, name, level) AS (\n  SELECT employee_id, manager_id, name, 1 FROM org WHERE manager_id IS NULL\n  UNION ALL\n  SELECT o.employee_id, o.manager_id, o.name, r.level+1 FROM org o JOIN reports r ON o.manager_id = r.employee_id\n)\nSELECT * FROM reports ORDER BY level;",
+      "description": "Question: how do we traverse an org chart recursively?",
+      "nerd_notes": "Add path accumulation STRING_AGG for cycle checks in larger trees.",
+      "compat_examples": {"postgres": "-- Add SEARCH / CYCLE for ordering/cycle detection.", "mysql": "-- Works in 8+; create index on manager_id for performance.", "oracle": "-- CONNECT BY PRIOR manager_id = employee_id alternative."}
+        }
+      ],
+    "narrative": "Hierarchical traversal reveals depth and lineage using a level column.",
+    "nerd_notes": "Consider materialized path columns for frequent hierarchy queries." 
+    },
+    {
+      "title": "6. Cleanup",
+      "examples": [
+        {
+          "name": "cleanup",
+          "sql": "DROP TABLE IF EXISTS order_items; DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS customers; DROP TABLE IF EXISTS org;",
+      "description": "Question: how do we reset objects to re-run lessons cleanly?",
+      "nerd_notes": "Keep cleanup centralized for idempotence.",
+      "compat_examples": {"postgres": "-- Add CASCADE if dependencies exist.", "mysql": "-- Idempotent drops fine.", "oracle": "-- PURGE optionally to skip recycle bin."}
+        }
+      ],
+      "narrative": "Tear down objects created in this lesson so the examples are repeatable and safe to re-run.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {"title": "7. Multi-CTE analytical pipeline","description": "Question: how do multiple CTEs build a staged analytical report?","examples": [{"name": "pipeline_demo","sql": "DROP TABLE IF EXISTS mini_sales;\nCREATE TABLE mini_sales(customer_id INTEGER, product TEXT, qty INTEGER, amount DOUBLE, sale_date DATE);\nINSERT INTO mini_sales VALUES (1,'A',2,20.0,'2024-01-01'),(1,'B',1,50.0,'2024-01-10'),(2,'A',3,30.0,'2024-01-05'),(3,'C',1,99.0,'2024-01-07');\nWITH recent AS (SELECT * FROM mini_sales WHERE sale_date >= '2024-01-01'), cust_rollup AS (SELECT customer_id, COUNT(*) AS txn_ct, SUM(amount) AS revenue FROM recent GROUP BY customer_id), ranked AS (SELECT *, RANK() OVER (ORDER BY revenue DESC) AS rnk FROM cust_rollup) SELECT * FROM ranked ORDER BY rnk;","description": "Question: how do we layer filtering, aggregation, and ranking?","nerd_notes": "Each stage is swappable or testable.","compat_examples": {"postgres": "-- MATERIALIZED hint optional.","mysql": "-- Similar readability benefit.","oracle": "-- Query blocks optimize independently."}}],"narrative": "Pipeline thinking: each CTE is a semantic phase.","nerd_notes": "Avoid splitting into too many stages; group related transforms."},
+    {"title": "8. Recursive date series (calendar)","description": "Question: how do we generate a short calendar without a dates table?","examples": [{"name": "recursive_calendar","sql": "WITH RECURSIVE cal(d) AS (SELECT DATE '2024-01-01' UNION ALL SELECT d + INTERVAL 1 DAY FROM cal WHERE d < DATE '2024-01-07') SELECT d, STRFTIME('%w', d) AS dow FROM cal ORDER BY d;","description": "Question: how does recursion expand a bounded date range?","nerd_notes": "Great for prototypes; replace with a proper date dimension later.","compat_examples": {"postgres": "-- Use generate_series for brevity.","mysql": "-- Recursive CTE required; ensure upper bound.","oracle": "-- CONNECT BY LEVEL <= 7 pattern alternative."}}],"narrative": "On-the-fly calendars power gap and aggregation checks.","nerd_notes": "Always guard with an upper bound condition."},
+    {"title": "9. Simplified BOM recursion","description": "Question: how do we explode a Bill of Materials with cumulative quantity?","examples": [{"name": "bom_recursive","sql": "DROP TABLE IF EXISTS bom_parts;\nCREATE TABLE bom_parts(part_id INTEGER, parent_id INTEGER, part TEXT, qty INTEGER);\nINSERT INTO bom_parts VALUES (1,NULL,'Assembly',1),(2,1,'Frame',1),(3,1,'Panel',2),(4,2,'Screw',4),(5,3,'Clip',3);\nWITH RECURSIVE expl(part_id,parent_id,part,qty,level,path,total_qty) AS (SELECT part_id,parent_id,part,qty,0,part,qty FROM bom_parts WHERE parent_id IS NULL UNION ALL SELECT b.part_id,b.parent_id,b.part,b.qty,e.level+1,e.path || '>' || b.part,e.total_qty * b.qty FROM bom_parts b JOIN expl e ON b.parent_id = e.part_id) SELECT part, level, total_qty FROM expl ORDER BY level, part;","description": "Question: how does quantity multiplication propagate?","nerd_notes": "Multiply cumulative path quantity at each expansion.","compat_examples": {"postgres": "-- Add CYCLE clause if needed.","mysql": "-- Depth control via predicate.","oracle": "-- CONNECT BY with LEVEL and SYS_CONNECT_BY_PATH."}}],"narrative": "Classic hierarchical explosion for components.","nerd_notes": "Be alert for cycles; enforce parent-child uniqueness."},
+    {"title": "10. Performance & pagination pattern","description": "Question: how do we paginate and compute percentiles with a CTE?","examples": [{"name": "pagination_cte","sql": "DROP TABLE IF EXISTS tiny_metrics;\nCREATE TABLE tiny_metrics(id INTEGER, val INTEGER);\nINSERT INTO tiny_metrics VALUES (1,10),(2,20),(3,30),(4,40),(5,50),(6,60);\nWITH ranked AS (SELECT id,val, ROW_NUMBER() OVER (ORDER BY val DESC) AS rn, COUNT(*) OVER() AS total FROM tiny_metrics), page AS (SELECT * FROM ranked WHERE rn BETWEEN 2 AND 4) SELECT id,val,rn, ROUND(rn*100.0/total,2) AS pct FROM page ORDER BY rn;","description": "Question: how do row numbers define a page slice?","nerd_notes": "Single pass ranking + total count reused for page slice.","compat_examples": {"postgres": "-- Keyset pagination more scalable for large tables.","mysql": "-- Window functions enable richer paging than LIMIT alone.","oracle": "-- FETCH FIRST vs analytic row_number for flexible slices."}}],"narrative": "Centralize ranking + totals then slice rows.","nerd_notes": "Prefer keyset (val,id) > last_seen for large offsets."}
+  ],
+  "exercises": [
+    {
+      "id": "basic-select",
+      "prompt": "Show the first 5 rows from `customers`.",
+      "answer_sql": "SELECT * FROM customers LIMIT 5;"
+    },
+    {
+      "id": "aggregate-1",
+      "prompt": "Count rows grouped by `customer_id`.",
+      "answer_sql": "SELECT customer_id, COUNT(*) AS cnt FROM customers GROUP BY customer_id ORDER BY cnt DESC;"
+    },
+    {
+      "id": "filter-top",
+      "prompt": "Select the top 10 rows where `customer_id` is positive (if numeric) or not null otherwise.",
+      "answer_sql": "SELECT * FROM customers WHERE customer_id IS NOT NULL AND customer_id > 0 LIMIT 10;"
+    }
+  ]
+}

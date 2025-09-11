@@ -1,0 +1,642 @@
+{
+  "title": "Views",
+  "description": "A question-first guide to creating and using views in DuckDB. Each section asks a practical question, then answers it with self-contained, deterministic examples. All SQL runs in DuckDB/WASM. Where useful, we include compat_examples for Postgres/MySQL/Oracle.",
+  "sections": [
+    {
+      "title": "1) Setup: tiny customers + sales",
+      "description": "Create minimal, idempotent tables used by the view examples.",
+      "examples": [
+        {
+          "name": "setup_customers_sales",
+          "description": "Question: how do we seed small tables that all view examples can reuse?",
+          "sql": "DROP VIEW IF EXISTS vw_high_sales;\nDROP VIEW IF EXISTS vw_customer_public;\nDROP VIEW IF EXISTS vw_customer_total_spend;\nDROP VIEW IF EXISTS vw_sales_enriched;\nDROP VIEW IF EXISTS vw_monthly_sales;\nDROP VIEW IF EXISTS vw_us_customers;\nDROP VIEW IF EXISTS vw_top_customers;\nDROP TABLE IF EXISTS sales;\nDROP TABLE IF EXISTS customers;\n\nCREATE TABLE customers (\n  customer_id INTEGER,\n  name TEXT,\n  email TEXT,\n  country TEXT\n);\n\nCREATE TABLE sales (\n  sale_id INTEGER,\n  customer_id INTEGER,\n  sale_date DATE,\n  product TEXT,\n  amount DOUBLE\n);\n\nINSERT INTO customers VALUES\n  (101,'Alice','alice@example.com','USA'),\n  (102,'Bob','bob@example.com','UK'),\n  (103,'Carol','carol@example.com','USA');\n\nINSERT INTO sales VALUES\n  (1,101,DATE '2024-01-05','Widget',100.00),\n  (2,102,DATE '2024-01-06','Gadget',50.00),\n  (3,101,DATE '2024-02-01','Widget',25.00),\n  (4,103,DATE '2024-02-10','Doodad',200.00);",
+          "nerd_notes": "Small normalized schema: customers (PII we can mask) + sales (transactions for aggregation). Idempotent via DROP IF EXISTS."
+        }
+      ],
+      "narrative": "We create two small tables so every example runs from a known state. This mirrors how you'd set up test fixtures in a notebook.",
+      "nerd_notes": "For production, add constraints (PRIMARY KEY/FOREIGN KEY) and consider DECIMAL for currency."
+    },
+    {
+      "title": "0) Introduction: Views",
+      "description": "What is a view and why use it? A view is a named SELECT that expands at query-time. It centralizes logic (DRY), provides a stable contract to tools, and helps with security (masking and row filters).",
+      "examples": [
+        {
+          "name": "intro_views_overview",
+          "description": "Views are virtual tables. Define once, reuse everywhere. They don't store data; they run the underlying SELECT each time.",
+          "sql": "",
+          "nerd_notes": "Prefer explicit column lists instead of SELECT * inside views to avoid schema drift. Apply ORDER BY at query time, not inside the view.",
+          "compat_examples": {
+            "postgres": "-- CREATE VIEW vw AS SELECT ...;",
+            "mysql": "-- CREATE VIEW vw AS SELECT ...;",
+            "oracle": "-- CREATE VIEW vw AS SELECT ...;"
+          }
+        }
+      ],
+      "narrative": "We'll start with a tiny setup, then show patterns: filtered views, join views, BI views, TEMP views, and how to manage/inspect them.",
+      "nerd_notes": "For performance-sensitive pipelines, snapshot view results into tables and refresh on a schedule."
+    },
+    {
+      "title": "1.5) Cheat Sheet: Quick Views",
+      "description": "Four tiny, self-contained patterns using TEMP views. Each example is idempotent and deterministic.",
+      "examples": [
+        {
+          "name": "cs_create_select_drop_quick",
+          "description": "Create a TEMP view, select from it, and drop it.",
+          "sql": "DROP VIEW IF EXISTS vq_demo;\nCREATE TEMP VIEW vq_demo AS SELECT 1 AS id, 'A' AS label;\nSELECT id, label FROM vq_demo ORDER BY id;\nDROP VIEW IF EXISTS vq_demo;",
+          "nerd_notes": "TEMP views are session-scoped. Dropping at the end keeps the session clean.",
+          "compat_examples": {
+            "postgres": "-- CREATE TEMP VIEW vq_demo AS SELECT 1 AS id, 'A' AS label;",
+            "mysql": "-- Use CREATE OR REPLACE VIEW or a TEMPORARY TABLE in older versions; TEMP VIEW support varies.",
+            "oracle": "-- Use a normal VIEW for quick demos; TEMP VIEW syntax varies by environment."
+          }
+        },
+        {
+          "name": "cs_create_or_replace_quick",
+          "description": "Evolve a view definition with CREATE OR REPLACE.",
+          "sql": "DROP VIEW IF EXISTS vq_replace;\nCREATE TEMP VIEW vq_replace AS SELECT 'v1' AS ver;\nCREATE OR REPLACE TEMP VIEW vq_replace AS SELECT 'v2' AS ver;\nSELECT ver FROM vq_replace;\nDROP VIEW IF EXISTS vq_replace;",
+          "nerd_notes": "CREATE OR REPLACE lets you evolve internals without changing consumers.",
+          "compat_examples": {
+            "postgres": "-- CREATE OR REPLACE VIEW vq_replace AS SELECT 'v2' AS ver;",
+            "mysql": "-- CREATE OR REPLACE VIEW vq_replace AS SELECT 'v2' AS ver;",
+            "oracle": "-- CREATE OR REPLACE VIEW vq_replace AS SELECT 'v2' AS ver;"
+          }
+        },
+        {
+          "name": "cs_list_views_quick",
+          "description": "List views matching a prefix via information_schema.",
+          "sql": "DROP VIEW IF EXISTS vq_list_a;\nDROP VIEW IF EXISTS vq_list_b;\nCREATE TEMP VIEW vq_list_a AS SELECT 1 AS id;\nCREATE TEMP VIEW vq_list_b AS SELECT 2 AS id;\nSELECT table_name\nFROM information_schema.tables\nWHERE table_type = 'VIEW' AND table_name LIKE 'vq_list_%'\nORDER BY table_name;\nDROP VIEW IF EXISTS vq_list_a;\nDROP VIEW IF EXISTS vq_list_b;",
+          "nerd_notes": "information_schema is portable across engines for discovery.",
+          "compat_examples": {
+            "postgres": "-- SELECT table_name FROM information_schema.views WHERE table_name LIKE 'vq_list_%';",
+            "mysql": "-- SELECT table_name FROM information_schema.views WHERE table_schema = DATABASE() AND table_name LIKE 'vq_list_%';",
+            "oracle": "-- SELECT view_name FROM user_views WHERE view_name LIKE 'VQ_LIST_%';"
+          }
+        },
+        {
+          "name": "cs_mask_columns_view_quick",
+          "description": "Mask PII in a TEMP view over inline VALUES.",
+          "sql": "DROP VIEW IF EXISTS vq_public_users;\nCREATE TEMP VIEW vq_public_users AS\nWITH users(id, email) AS (\n  VALUES (1,'alice@example.com'),\n         (2,'bob@acme.org')\n)\nSELECT\n  id,\n  LEFT(email, 3) || '***@' || SUBSTR(email, INSTR(email,'@')+1) AS email_masked\nFROM users;\n\nSELECT * FROM vq_public_users ORDER BY id;\nDROP VIEW IF EXISTS vq_public_users;",
+          "nerd_notes": "Avoid exposing full emails. LEFT/SUBSTR/INSTR are supported in DuckDB.",
+          "compat_examples": {
+            "postgres": "-- Use LEFT(email,3) || '***@' || SPLIT_PART(email,'@',2) AS email_masked",
+            "mysql": "-- Use CONCAT(LEFT(email,3),'***@',SUBSTRING_INDEX(email,'@',-1)) AS email_masked",
+            "oracle": "-- Use SUBSTR(email,1,3) || '***@' || SUBSTR(email,INSTR(email,'@')+1) AS email_masked"
+          }
+        }
+      ],
+      "narrative": "Copy/paste-friendly snippets that cover the most common view operations without relying on prior setup.",
+      "nerd_notes": "Cheat sheet examples use TEMP views and inline data to remain isolated and re-runnable."
+    },
+    {
+      "title": "1.6) Pitfalls, Tips, and Q&A",
+      "description": "Common gotchas and best practices when working with views.",
+      "examples": [
+        {
+          "name": "pt_select_star_drift",
+          "description": "Why avoid SELECT * inside views? Column order and presence can change, breaking downstream consumers.",
+          "sql": "",
+          "nerd_notes": "Prefer explicit column lists inside the view and in consumers to freeze the contract."
+        },
+        {
+          "name": "pt_dependency_order",
+          "description": "Dropping a base table breaks dependent views. Manage dependency order in migrations.",
+          "sql": "",
+          "nerd_notes": "In engines without dependency guards, DROP children first (views), then parents (tables)."
+        },
+        {
+          "name": "pt_natural_join_caution",
+          "description": "Avoid NATURAL joins in views — implicit column matching can change silently as schemas evolve.",
+          "sql": "",
+          "nerd_notes": "Be explicit with JOIN keys (USING/ON) for stability."
+        },
+        {
+          "name": "pt_session_params",
+          "description": "How to parameterize? Prefer session variables/CTEs over dynamic SQL inside views.",
+          "sql": "",
+          "nerd_notes": "Views are static. To ‘parameterize’, bind variables in the consuming query (e.g., WHERE country = 'USA')."
+        },
+        {
+          "name": "pt_snapshot_vs_view",
+          "description": "When to snapshot vs use a view? Snapshot heavy, stable aggregates; use views for fresh, light queries.",
+          "sql": "",
+          "nerd_notes": "DuckDB has no materialized views; use tables for snapshots and refresh as needed."
+        }
+      ],
+      "narrative": "Treat views as contracts. Be explicit, prefer small composable views, and snapshot when performance demands.",
+      "nerd_notes": "Govern views like code: review, version, and document consumers."
+    },
+    {
+      "title": "Create a simple filtered view",
+      "description": "Capture business rules once (DRY) and reuse everywhere; views give you a stable, shareable contract.",
+      "examples": [
+        {
+          "name": "create_vw_high_sales",
+          "description": "Question: how do we capture 'high-value sales' (amount >= 50) as a reusable virtual table?",
+          "sql": "DROP VIEW IF EXISTS vw_high_sales;\nCREATE VIEW vw_high_sales AS\nSELECT sale_id, customer_id, sale_date, product, amount\nFROM sales\nWHERE amount >= 50;\n\n-- Use the view (ORDER BY for deterministic output)\nSELECT * FROM vw_high_sales ORDER BY sale_id;",
+          "nerd_notes": "Avoid ORDER BY in the view definition; apply ORDER BY at query time for predictability.",
+          "compat_examples": {
+            "postgres": "-- Portable: CREATE VIEW vw_high_sales AS SELECT ... WHERE amount >= 50;",
+            "mysql": "-- Portable: CREATE VIEW vw_high_sales AS SELECT ... WHERE amount >= 50;",
+            "oracle": "-- Portable: CREATE VIEW vw_high_sales AS SELECT ... WHERE amount >= 50;"
+          }
+        },
+        {
+          "name": "create_vw_recent_high_sales",
+          "description": "Question: how do we capture only recent high-value sales (>= 2024-02 and amount >= 50)?",
+          "sql": "DROP VIEW IF EXISTS vw_recent_high_sales;\nCREATE VIEW vw_recent_high_sales AS\nSELECT sale_id, customer_id, sale_date, product, amount\nFROM sales\nWHERE sale_date >= DATE '2024-02-01' AND amount >= 50;\n\nSELECT * FROM vw_recent_high_sales ORDER BY sale_id;",
+          "nerd_notes": "Narrower filtered views are useful for scope-limited dashboards.",
+          "compat_examples": {
+            "postgres": "-- Portable date literal: DATE '2024-02-01'",
+            "mysql": "-- Use DATE '2024-02-01' or '2024-02-01' depending on mode",
+            "oracle": "-- Use DATE '2024-02-01'"
+          }
+        },
+        {
+          "name": "create_vw_customer_total_spend",
+          "description": "Question: how do we publish per-customer total spend as a reusable view?",
+          "sql": "DROP VIEW IF EXISTS vw_customer_total_spend;\nCREATE VIEW vw_customer_total_spend AS\nSELECT customer_id, SUM(amount) AS total_spent\nFROM sales\nGROUP BY customer_id;\n\nSELECT * FROM vw_customer_total_spend ORDER BY customer_id;",
+          "nerd_notes": "Simple aggregated view; often used as a building block for leaderboards.",
+          "compat_examples": {
+            "postgres": "-- Portable aggregation view per customer.",
+            "mysql": "-- Portable aggregation view per customer.",
+            "oracle": "-- Portable aggregation view per customer."
+          }
+        }
+      ],
+      "narrative": "Views let you name a query and reuse it like a table. Encapsulating filters keeps downstream SQL clean and consistent.",
+      "nerd_notes": "Why views: centralize logic (DRY), stabilize interfaces for tools, and reduce copy/paste errors. They expand at runtime (not stored)."
+    },
+    {
+      "title": "Views as virtual tables (joins)",
+      "description": "Treat common joins as virtual tables so analysis queries stay readable and consistent.",
+      "examples": [
+        {
+          "name": "create_vw_sales_enriched",
+          "description": "Question: how do we expose sales joined to customer attributes as a reusable object?",
+          "sql": "DROP VIEW IF EXISTS vw_sales_enriched;\nCREATE VIEW vw_sales_enriched AS\nSELECT s.sale_id, s.sale_date, s.product, s.amount,\n       c.customer_id, c.name, c.country\nFROM sales s\nJOIN customers c USING(customer_id);\n\nSELECT * FROM vw_sales_enriched ORDER BY sale_id;",
+          "nerd_notes": "Defining the join once prevents duplication and drift across many queries.",
+          "compat_examples": {
+            "postgres": "-- Portable: CREATE VIEW vw_sales_enriched AS SELECT ... JOIN ...;",
+            "mysql": "-- Portable: CREATE VIEW vw_sales_enriched AS SELECT ... JOIN ...;",
+            "oracle": "-- Portable: CREATE VIEW vw_sales_enriched AS SELECT ... JOIN ...;"
+          }
+        },
+        {
+          "name": "create_vw_sales_enriched_left",
+          "description": "Question: how do we include customers with no sales using a LEFT JOIN?",
+          "sql": "DROP VIEW IF EXISTS vw_sales_enriched_left;\nCREATE VIEW vw_sales_enriched_left AS\nSELECT s.sale_id, s.sale_date, s.product, s.amount,\n       c.customer_id, c.name, c.country\nFROM customers c\nLEFT JOIN sales s USING(customer_id);\n\nSELECT * FROM vw_sales_enriched_left ORDER BY customer_id, sale_id;",
+          "nerd_notes": "LEFT JOIN preserves all customers, even those without matching sales.",
+          "compat_examples": {
+            "postgres": "-- Portable LEFT JOIN view.",
+            "mysql": "-- Portable LEFT JOIN view.",
+            "oracle": "-- Portable LEFT JOIN view."
+          }
+        },
+        {
+          "name": "create_vw_sales_enriched_usa",
+          "description": "Question: how do we publish a region-specific join view (USA only)?",
+          "sql": "DROP VIEW IF EXISTS vw_sales_enriched_usa;\nCREATE VIEW vw_sales_enriched_usa AS\nSELECT s.sale_id, s.sale_date, s.product, s.amount,\n       c.customer_id, c.name, c.country\nFROM sales s JOIN customers c USING(customer_id)\nWHERE c.country = 'USA';\n\nSELECT * FROM vw_sales_enriched_usa ORDER BY sale_id;",
+          "nerd_notes": "Separate views per region simplify downstream filters.",
+          "compat_examples": {
+            "postgres": "-- Portable filtered join view.",
+            "mysql": "-- Portable filtered join view.",
+            "oracle": "-- Portable filtered join view."
+          }
+        }
+      ],
+  "narrative": "Complex joins are error-prone to repeat. Put them in a view so downstream queries read like 'SELECT ... FROM vw_sales_enriched'.",
+  "nerd_notes": "Why views: prevent drift across notebooks/dashboards. If audiences differ (INNER vs LEFT), publish separate views."
+    },
+    {
+  "title": "Business Intelligence view (monthly)",
+  "description": "Summarize sales by month for dashboards; a view provides a stable contract for BI tools.",
+      "examples": [
+        {
+          "name": "create_vw_monthly_sales",
+          "description": "Question: how do we publish a monthly aggregation as a stable interface for BI tools?",
+          "sql": "DROP VIEW IF EXISTS vw_monthly_sales;\nCREATE VIEW vw_monthly_sales AS\nSELECT DATE_TRUNC('month', sale_date) AS month,\n       SUM(amount) AS total_revenue,\n       COUNT(*) AS sale_count\nFROM sales\nGROUP BY month;\n\nSELECT * FROM vw_monthly_sales ORDER BY month;",
+          "nerd_notes": "DATE_TRUNC('month', ...) yields a date bucket suitable for time series.",
+          "compat_examples": {
+            "postgres": "-- Postgres: DATE_TRUNC('month', sale_date) works as-is.",
+            "mysql": "-- MySQL: use DATE_FORMAT(sale_date,'%Y-%m-01') AS month and GROUP BY that value.",
+            "oracle": "-- Oracle: use TRUNC(sale_date,'MM') AS month and GROUP BY that value."
+          }
+        },
+        {
+          "name": "create_vw_monthly_avg_order",
+          "description": "Question: how do we expose average order value by month for BI?",
+          "sql": "DROP VIEW IF EXISTS vw_monthly_avg_order;\nCREATE VIEW vw_monthly_avg_order AS\nSELECT DATE_TRUNC('month', sale_date) AS month,\n       AVG(amount) AS avg_order_value,\n       COUNT(*) AS sale_count\nFROM sales\nGROUP BY month;\n\nSELECT * FROM vw_monthly_avg_order ORDER BY month;",
+          "nerd_notes": "Expose different metrics as separate views to keep contracts simple.",
+          "compat_examples": {
+            "postgres": "-- Same DATE_TRUNC pattern.",
+            "mysql": "-- Use DATE_FORMAT for bucket and AVG(amount).",
+            "oracle": "-- Use TRUNC(date,'MM') and AVG(amount)."
+          }
+        },
+        {
+          "name": "create_vw_monthly_growth",
+          "description": "Question: how do we expose month-over-month growth using a view built on the monthly view?",
+          "sql": "DROP VIEW IF EXISTS vw_monthly_growth;\nCREATE VIEW vw_monthly_growth AS\nSELECT month,\n       total_revenue,\n       LAG(total_revenue) OVER (ORDER BY month) AS prior_revenue,\n       total_revenue - LAG(total_revenue) OVER (ORDER BY month) AS abs_change,\n       CASE WHEN LAG(total_revenue) OVER (ORDER BY month) IS NULL OR LAG(total_revenue) OVER (ORDER BY month)=0 THEN NULL\n            ELSE (total_revenue - LAG(total_revenue) OVER (ORDER BY month)) / LAG(total_revenue) OVER (ORDER BY month)\n       END AS pct_change\nFROM vw_monthly_sales;\n\nSELECT * FROM vw_monthly_growth ORDER BY month;",
+          "nerd_notes": "Windows over the monthly view give growth metrics without re-aggregating base tables.",
+          "compat_examples": {
+            "postgres": "-- LAG over monthly buckets works as-is.",
+            "mysql": "-- MySQL 8+: LAG supported in window functions.",
+            "oracle": "-- Oracle analytic LAG supported."
+          }
+        }
+      ],
+  "narrative": "BI views provide stable, queryable interfaces for tools and analysts. This one answers 'how much did we sell each month?'.",
+  "nerd_notes": "Why views: they decouple physical tables from the semantic layer. For very large data, snapshot into tables for performance."
+    },
+    {
+  "title": "Security & masking via views",
+  "description": "Expose non-sensitive columns and masked PII; views help enforce least privilege at the SQL layer.",
+      "examples": [
+        {
+          "name": "create_vw_customer_public",
+          "description": "Question: how do we mask emails and expose only safe columns?",
+          "sql": "DROP VIEW IF EXISTS vw_customer_public;\nCREATE VIEW vw_customer_public AS\nSELECT\n  customer_id,\n  name,\n  -- mask email: first 3 chars + '***@' + domain\n  LEFT(email, 3) || '***@' || SUBSTR(email, INSTR(email, '@') + 1) AS email_masked,\n  country\nFROM customers;\n\nSELECT * FROM vw_customer_public ORDER BY customer_id;",
+          "nerd_notes": "DuckDB supports LEFT, SUBSTR, and INSTR(2-arg). Avoid 3-arg INSTR variants.",
+          "compat_examples": {
+            "postgres": "-- Use LEFT(email,3) || '***@' || SPLIT_PART(email,'@',2) AS email_masked",
+            "mysql": "-- Use CONCAT(LEFT(email,3),'***@',SUBSTRING_INDEX(email,'@',-1)) AS email_masked",
+            "oracle": "-- Use SUBSTR(email,1,3) || '***@' || SUBSTR(email,INSTR(email,'@')+1) AS email_masked"
+          }
+        },
+        {
+          "name": "create_vw_us_customers",
+          "description": "Question: how do we do row-level filtering via a view (e.g., only USA customers)?",
+          "sql": "DROP VIEW IF EXISTS vw_us_customers;\nCREATE VIEW vw_us_customers AS\nSELECT customer_id, name, country\nFROM customers\nWHERE country = 'USA';\n\nSELECT * FROM vw_us_customers ORDER BY customer_id;",
+          "nerd_notes": "Views can implement coarse row-level filtering. Fine-grained security is engine-specific; DuckDB focuses on analytics, not RBAC.",
+          "compat_examples": {
+            "postgres": "-- Combine with RLS policies (CREATE POLICY ...) for robust security.",
+            "mysql": "-- Use DEFINER views or separate schemas to partition access.",
+            "oracle": "-- Use VPD (Virtual Private Database) / RLS for row filtering."
+          }
+        },
+        {
+          "name": "create_vw_customer_public_domain",
+          "description": "Question: how do we also expose the email domain while keeping the local-part masked?",
+          "sql": "DROP VIEW IF EXISTS vw_customer_public_domain;\nCREATE VIEW vw_customer_public_domain AS\nSELECT\n  customer_id,\n  name,\n  LEFT(email, 3) || '***@' || SUBSTR(email, INSTR(email,'@')+1) AS email_masked,\n  SUBSTR(email, INSTR(email,'@')+1) AS email_domain,\n  country\nFROM customers;\n\nSELECT * FROM vw_customer_public_domain ORDER BY customer_id;",
+          "nerd_notes": "Domains are often less sensitive and useful for grouping; avoid exposing full emails.",
+          "compat_examples": {
+            "postgres": "-- Use SPLIT_PART(email,'@',2) for domain.",
+            "mysql": "-- Use SUBSTRING_INDEX(email,'@',-1) for domain.",
+            "oracle": "-- Use SUBSTR(email,INSTR(email,'@')+1) for domain."
+          }
+        }
+      ],
+  "narrative": "Views can serve as a security boundary: mask sensitive fields and publish audience-specific slices.",
+  "nerd_notes": "Why views: reduce accidental exposure. Still combine with permissions/RLS in engines that support it."
+    },
+    {
+  "title": "Updating view definitions",
+  "description": "Evolve views safely with CREATE OR REPLACE (or DROP+CREATE) to preserve stable contracts.",
+      "examples": [
+        {
+          "name": "update_view_definition",
+          "description": "Question: how do we evolve a view definition without breaking dependents?",
+          "sql": "-- Method A: CREATE OR REPLACE (supported in DuckDB)\nCREATE OR REPLACE VIEW vw_top_customers AS\nSELECT c.customer_id, c.name, SUM(s.amount) AS total_spent\nFROM customers c\nJOIN sales s USING(customer_id)\nGROUP BY c.customer_id, c.name;\n\n-- Evolve the view: add a spending tier\nCREATE OR REPLACE VIEW vw_top_customers AS\nSELECT c.customer_id, c.name, SUM(s.amount) AS total_spent,\n       CASE WHEN SUM(s.amount) >= 150 THEN 'Gold'\n            WHEN SUM(s.amount) >= 100 THEN 'Silver'\n            ELSE 'Bronze' END AS tier\nFROM customers c\nJOIN sales s USING(customer_id)\nGROUP BY c.customer_id, c.name;\n\nSELECT * FROM vw_top_customers ORDER BY total_spent DESC, customer_id;",
+          "nerd_notes": "Prefer CREATE OR REPLACE when available; fall back to DROP VIEW IF EXISTS + CREATE VIEW.",
+          "compat_examples": {
+            "postgres": "-- Postgres: CREATE OR REPLACE VIEW is supported.",
+            "mysql": "-- MySQL: CREATE OR REPLACE VIEW supported (requires privileges).",
+            "oracle": "-- Oracle: CREATE OR REPLACE VIEW is supported."
+          }
+        }
+      ],
+      "narrative": "Views evolve. Keep names stable while extending definitions, and document breaking changes.",
+      "nerd_notes": "Why views: you can improve internals without changing consumers. For breaking changes, use versioned names."
+    },
+    {
+      "title": "Views over external files (Parquet)",
+      "description": "Create views over file-backed sources so analysts can query data without learning file functions.",
+      "examples": [
+        {
+          "name": "vw_events_from_parquet",
+          "description": "Question: how do we expose a Parquet file as a reusable view?",
+          "sql": "CREATE OR REPLACE VIEW vw_events AS\nSELECT * FROM read_parquet('examples/events.parquet');\n\n-- Deterministic sanity check\nSELECT COUNT(*) AS event_count FROM vw_events;",
+          "nerd_notes": "Why views: hide file paths/functions, present a table-like interface. You can also project only needed columns in the view.",
+          "compat_examples": {
+            "postgres": "-- Use foreign tables or FDW (e.g., parquet_fdw) instead of views over files.",
+            "mysql": "-- External file querying typically via engines/connectors; create views over staging tables.",
+            "oracle": "-- Use external tables; then create a view over the external table."
+          }
+        }
+      ],
+      "narrative": "A view can present file-backed data as if it were a table, simplifying access for consumers.",
+      "nerd_notes": "Ensure file paths are stable in your environment; parameterize via variables/config where applicable."
+    },
+    {
+      "title": "Temporary views (session-scoped)",
+      "description": "Use TEMP views for ad-hoc pipelines that shouldn't persist beyond the session.",
+      "examples": [
+        {
+          "name": "temp_view_recent_sales",
+          "description": "Question: how do we create a session-only view for a working set?",
+          "sql": "CREATE OR REPLACE TEMP VIEW vw_tmp_recent_sales AS\nSELECT * FROM sales WHERE sale_date >= DATE '2024-02-01';\n\nSELECT COUNT(*) AS recent_count FROM vw_tmp_recent_sales;",
+          "nerd_notes": "TEMP views auto-drop at session end. Use them as glue in notebooks/pipelines.",
+          "compat_examples": {
+            "postgres": "-- CREATE TEMP VIEW ...; exists only in the session.",
+            "mysql": "-- Emulate with TEMPORARY TABLES or session-scoped tables.",
+            "oracle": "-- Use GLOBAL TEMPORARY TABLES or session constructs; TEMP view syntax varies."
+          }
+        },
+        {
+          "name": "temp_view_recent_sales_usa",
+          "description": "Question: how can we reuse the TEMP view with joins (e.g., only USA)?",
+          "sql": "SELECT COUNT(*) AS recent_usa_count\nFROM vw_tmp_recent_sales r\nJOIN customers c USING(customer_id)\nWHERE c.country = 'USA';",
+          "nerd_notes": "TEMP views compose like regular views within the session.",
+          "compat_examples": {
+            "postgres": "-- Same join against a TEMP VIEW.",
+            "mysql": "-- Use a TEMPORARY TABLE if TEMP VIEW isn't supported.",
+            "oracle": "-- Use a GLOBAL TEMP TABLE or equivalent."
+          }
+        }
+      ],
+      "narrative": "Temporary views help structure multi-step analysis without leaving artifacts.",
+      "nerd_notes": "Why views: organize analysis steps; TEMP scope avoids clutter."
+    },
+    {
+      "title": "Materialized snapshot pattern (no true MV)",
+      "description": "Simulate materialized views by snapshotting into a table when performance matters.",
+      "examples": [
+        {
+          "name": "snapshot_monthly_sales",
+          "description": "Question: how can we persist a view's results and refresh later?",
+          "sql": "DROP TABLE IF EXISTS monthly_sales_snapshot;\nCREATE TABLE monthly_sales_snapshot AS\nSELECT * FROM vw_monthly_sales;\n\n-- Refresh pattern\nDELETE FROM monthly_sales_snapshot;\nINSERT INTO monthly_sales_snapshot\nSELECT * FROM vw_monthly_sales;\n\nSELECT * FROM monthly_sales_snapshot ORDER BY month;",
+          "nerd_notes": "DuckDB has no built-in materialized views; use tables as snapshots and refresh explicitly.",
+          "compat_examples": {
+            "postgres": "-- Postgres: CREATE MATERIALIZED VIEW mv AS SELECT ...; REFRESH MATERIALIZED VIEW mv;",
+            "mysql": "-- MySQL: no native MVs; use tables + events/jobs to refresh.",
+            "oracle": "-- Oracle: supports materialized views with fast refresh under conditions."
+          }
+        },
+        {
+          "name": "snapshot_vs_view_totals",
+          "description": "Question: how do snapshot totals compare to live view totals?",
+          "sql": "SELECT\n  (SELECT SUM(total_revenue) FROM monthly_sales_snapshot) AS snapshot_revenue,\n  (SELECT SUM(total_revenue) FROM vw_monthly_sales) AS view_revenue;",
+          "nerd_notes": "Compare aggregates to sanity-check refresh logic.",
+          "compat_examples": {
+            "postgres": "-- Same scalar subselect comparison.",
+            "mysql": "-- Same scalar subselect comparison.",
+            "oracle": "-- Same scalar subselect comparison."
+          }
+        }
+      ],
+  "narrative": "Materializing a view improves performance when you don't need real-time data.",
+  "nerd_notes": "Why views: semantic layer stays the same; you can swap a view for a snapshot transparently to consumers."
+    },
+    {
+  "title": "Layered views with derived columns",
+  "description": "Compose views on views to add derived columns and keep business rules centralized.",
+      "examples": [
+        {
+          "name": "virtual_table_style_view",
+          "description": "Question: how do we publish a 'virtual table' combining joins and derived columns?",
+          "sql": "CREATE OR REPLACE VIEW vw_sales_virtual AS\nSELECT se.sale_id, se.sale_date, se.product, se.amount,\n       se.customer_id, se.name AS customer_name, se.country,\n       CASE WHEN se.amount >= 100 THEN 'Big' ELSE 'Standard' END AS size_label\nFROM vw_sales_enriched se;\n\nSELECT * FROM vw_sales_virtual ORDER BY sale_id;",
+          "nerd_notes": "This is just a layered view on top of another view, typical in BI stacks.",
+          "compat_examples": {
+            "postgres": "-- Portable layered views.",
+            "mysql": "-- Portable layered views.",
+            "oracle": "-- Portable layered views."
+          }
+        },
+        {
+          "name": "virtual_table_us_only",
+          "description": "Question: how do we layer a regional slice on top of a virtual view?",
+          "sql": "CREATE OR REPLACE VIEW vw_sales_virtual_us AS\nSELECT * FROM vw_sales_virtual WHERE country = 'USA';\n\nSELECT * FROM vw_sales_virtual_us ORDER BY sale_id;",
+          "nerd_notes": "Layer views to publish audience-specific slices.",
+          "compat_examples": {
+            "postgres": "-- Portable layered filter view.",
+            "mysql": "-- Portable layered filter view.",
+            "oracle": "-- Portable layered filter view."
+          }
+        }
+      ],
+  "narrative": "A view is often called a virtual table: here we expose derived columns for easy reuse.",
+  "nerd_notes": "Why views: layering keeps queries modular and maintainable versus one huge query."
+    },
+    {
+  "title": "Business Intelligence views",
+  "description": "Package common metrics (top customers, monthly totals) into shareable views.",
+      "examples": [
+        {
+          "name": "bi_top_customers",
+          "description": "Question: how do we expose a top-customer leaderboard for dashboards?",
+          "sql": "CREATE OR REPLACE VIEW vw_bi_top_customers AS\nSELECT customer_id, name, SUM(amount) AS total_spent\nFROM vw_sales_enriched\nGROUP BY customer_id, name;\n\nSELECT * FROM vw_bi_top_customers ORDER BY total_spent DESC, customer_id LIMIT 5;",
+          "nerd_notes": "BI views often add ORDER BY/LIMIT at query time, not inside the view.",
+          "compat_examples": {
+            "postgres": "-- Portable aggregation view.",
+            "mysql": "-- Portable aggregation view.",
+            "oracle": "-- Portable aggregation view."
+          }
+        },
+        {
+          "name": "bi_top_customers_usa",
+          "description": "Question: how do we publish a leaderboard for USA only?",
+          "sql": "CREATE OR REPLACE VIEW vw_bi_top_customers_us AS\nSELECT customer_id, name, SUM(amount) AS total_spent\nFROM vw_sales_enriched\nWHERE country = 'USA'\nGROUP BY customer_id, name;\n\nSELECT * FROM vw_bi_top_customers_us ORDER BY total_spent DESC, customer_id LIMIT 5;",
+          "nerd_notes": "Region-specific BI views prevent repeated WHERE clauses downstream.",
+          "compat_examples": {
+            "postgres": "-- Portable aggregation with filter.",
+            "mysql": "-- Portable aggregation with filter.",
+            "oracle": "-- Portable aggregation with filter."
+          }
+        }
+      ],
+  "narrative": "BI views package common metrics (top customers, revenue by month) for reuse.",
+  "nerd_notes": "Why views: consistent metrics across dashboards; consider versioning as needs evolve."
+    },
+    {
+  "title": "Security & access-control views",
+  "description": "Publish role/audience-specific slices (row filters + masking).",
+      "examples": [
+        {
+          "name": "security_us_only",
+          "description": "Question: how can we expose only USA rows with masked emails?",
+          "sql": "CREATE OR REPLACE VIEW vw_us_public AS\nSELECT customer_id, name,\n       LEFT(email, 3) || '***@' || SUBSTR(email, INSTR(email,'@')+1) AS email_masked,\n       country\nFROM customers\nWHERE country = 'USA';\n\nSELECT * FROM vw_us_public ORDER BY customer_id;",
+          "nerd_notes": "Use separate views per audience. Enforcement depends on the surrounding platform.",
+          "compat_examples": {
+            "postgres": "-- Combine views with RLS policies for enforcement.",
+            "mysql": "-- Use DEFINER views and GRANTs.",
+            "oracle": "-- Use VPD (RLS) policies for enforcement."
+          }
+        }
+      ],
+  "narrative": "Views can reduce data exposure risk by masking columns and filtering rows.",
+  "nerd_notes": "Why views: consistent masking logic. Combine with GRANTs/RLS in engines that support it."
+    },
+    {
+  "title": "Managing and inspecting views",
+  "description": "Discover view names/definitions via information_schema for governance and ops.",
+      "examples": [
+        {
+          "name": "list_views_and_sql",
+          "description": "Question: how do we list views and inspect their definitions?",
+          "sql": "-- List views via information_schema\nSELECT table_name\nFROM information_schema.tables\nWHERE table_type = 'VIEW'\nORDER BY table_name;",
+          "nerd_notes": "DuckDB exposes information_schema; querying it is portable across engines.",
+          "compat_examples": {
+            "postgres": "-- SELECT table_name FROM information_schema.views ORDER BY table_name;",
+            "mysql": "-- SELECT table_name FROM information_schema.views WHERE table_schema = DATABASE();",
+            "oracle": "-- SELECT view_name FROM user_views ORDER BY view_name;"
+          }
+        },
+        {
+          "name": "list_columns_for_sales_enriched",
+          "description": "Question: how do we list the columns exposed by a specific view?",
+          "sql": "SELECT column_name, data_type\nFROM information_schema.columns\nWHERE table_name = 'vw_sales_enriched'\nORDER BY ordinal_position;",
+          "nerd_notes": "Use information_schema.columns to confirm view contracts.",
+          "compat_examples": {
+            "postgres": "-- SELECT column_name, data_type FROM information_schema.columns WHERE table_name='vw_sales_enriched';",
+            "mysql": "-- SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name='vw_sales_enriched';",
+            "oracle": "-- SELECT column_name, data_type FROM user_tab_columns WHERE table_name = 'VW_SALES_ENRICHED';"
+          }
+        }
+      ],
+  "narrative": "Operationally, you often need to enumerate views and manage dependencies.",
+  "nerd_notes": "Why views: they form your semantic layer; inventory them for governance. Use migrations for changes."
+    },
+    {
+  "title": "Updating views: replace vs drop+create",
+  "description": "Compare CREATE OR REPLACE with DROP+CREATE and when to use each.",
+      "examples": [
+        {
+          "name": "drop_and_recreate_example",
+          "description": "Question: how do we replace a view in engines without CREATE OR REPLACE?",
+          "sql": "DROP VIEW IF EXISTS vw_monthly_sales;\nCREATE VIEW vw_monthly_sales AS\nSELECT DATE_TRUNC('month', sale_date) AS month,\n       SUM(amount) AS total_revenue,\n       COUNT(*) AS sale_count\nFROM sales\nGROUP BY month;\n\nSELECT * FROM vw_monthly_sales ORDER BY month;",
+          "nerd_notes": "Drop+Create works everywhere but may temporarily break dependents.",
+          "compat_examples": {
+            "postgres": "-- Prefer CREATE OR REPLACE VIEW when possible.",
+            "mysql": "-- CREATE OR REPLACE VIEW is available in MySQL.",
+            "oracle": "-- CREATE OR REPLACE VIEW is supported."
+          }
+        }
+      ],
+  "narrative": "When CREATE OR REPLACE isn't available or desired, use DROP + CREATE with care.",
+  "nerd_notes": "Why views: provide a contract; coordinate migrations to avoid breaking dependents."
+    },
+    {
+  "title": "Derived labels via views",
+  "description": "Publish human-friendly labels without changing base tables.",
+      "examples": [
+        {
+          "name": "virtual_view_alt",
+          "description": "Question: how do we precompute helpful derived labels in a virtual table?",
+          "sql": "CREATE OR REPLACE VIEW vw_sales_labels AS\nSELECT sale_id, product, amount,\n       CASE WHEN amount >= 150 THEN 'Very High'\n            WHEN amount >= 50 THEN 'High'\n            ELSE 'Normal' END AS spend_band\nFROM sales;\n\nSELECT * FROM vw_sales_labels ORDER BY sale_id;",
+          "nerd_notes": "Layered, labeled views keep business logic centralized.",
+          "compat_examples": {
+            "postgres": "-- Portable CASE expression.",
+            "mysql": "-- Portable CASE expression.",
+            "oracle": "-- Portable CASE expression."
+          }
+        }
+      ],
+  "narrative": "Different consumers may want differently labeled slices — publish them as separate views.",
+  "nerd_notes": "Why views: keep labeling centralized; avoid ORDER BY inside views."
+    },
+    {
+  "title": "Creating views (syntax)",
+  "description": "Minimal CREATE VIEW example; prefer explicit column lists over SELECT * for stable contracts.",
+      "examples": [
+        {
+          "name": "creating_views_basic",
+          "description": "Question: what's the minimal syntax to create and use a view?",
+          "sql": "DROP VIEW IF EXISTS vw_minimal;\nCREATE VIEW vw_minimal (sale_id, amount) AS\nSELECT sale_id, amount FROM sales;\n\nSELECT sale_id, amount FROM vw_minimal ORDER BY sale_id;",
+          "nerd_notes": "Namespacing and ownership are environment concerns; DuckDB focuses on local analytics.",
+          "compat_examples": {
+            "postgres": "-- CREATE VIEW vw_minimal AS SELECT ...;",
+            "mysql": "-- CREATE VIEW vw_minimal AS SELECT ...;",
+            "oracle": "-- CREATE VIEW vw_minimal AS SELECT ...;"
+          }
+        }
+      ],
+  "narrative": "Views are named SELECTs. Use them to avoid repeating logic.",
+  "nerd_notes": "Why views: stable, reusable semantics. Prefer explicit columns in both views and consumers."
+    },
+    {
+  "title": "Common use cases & advantages",
+  "description": "Showcase masking and aggregation — the two most common reasons teams adopt views.",
+      "examples": [
+        {
+          "name": "use_case_masking",
+          "description": "Question: use case #1 — mask PII while keeping analysis useful?",
+          "sql": "SELECT * FROM vw_customer_public ORDER BY customer_id;",
+          "nerd_notes": "Reuses the masking view defined earlier.",
+          "compat_examples": {
+            "postgres": "-- Same concept with SPLIT_PART, LEFT.",
+            "mysql": "-- Same concept with SUBSTRING_INDEX, LEFT.",
+            "oracle": "-- Same concept with SUBSTR, INSTR."
+          }
+        },
+        {
+          "name": "use_case_aggregation",
+          "description": "Question: use case #2 — publish ready-to-chart aggregates?",
+          "sql": "SELECT * FROM vw_monthly_sales ORDER BY month;",
+          "nerd_notes": "BI tools can bind directly to this view.",
+          "compat_examples": {
+            "postgres": "-- DATE_TRUNC variant.",
+            "mysql": "-- DATE_FORMAT variant.",
+            "oracle": "-- TRUNC(date,'MM') variant."
+          }
+        }
+      ],
+  "narrative": "Common advantages: consistency, reuse, and a stable contract for tools and analysts.",
+  "nerd_notes": "Why views: document semantics once. Add owner/contact metadata in your catalog where possible."
+    },
+    {
+  "title": "Performance and catalog",
+  "description": "Views compute at query-time; inspect the catalog without scanning data.",
+      "examples": [
+        {
+          "name": "performance_note",
+          "description": "Question: how to confirm what views exist (without scanning data)?",
+          "sql": "SELECT table_name FROM information_schema.tables WHERE table_type='VIEW' ORDER BY table_name;",
+          "nerd_notes": "Views compute at query time; avoid heavy joins in deeply nested views when possible.",
+          "compat_examples": {
+            "postgres": "-- SELECT table_name FROM information_schema.views;",
+            "mysql": "-- SELECT table_name FROM information_schema.views WHERE table_schema = DATABASE();",
+            "oracle": "-- SELECT view_name FROM user_views;"
+          }
+        }
+      ],
+    "narrative": "Views aren't materialized by default; performance depends on the underlying query.",
+    "nerd_notes": "Why views: they separate logical from physical. For speed, stage expensive results or snapshot."
+    },
+    {
+    "title": "Cleanup",
+      "description": "Tear down objects so the lesson is re-runnable.",
+      "examples": [
+        {
+          "name": "cleanup_views_and_tables",
+          "description": "Question: how do we clean up all views and base tables created in this lesson?",
+  "sql": "DROP VIEW IF EXISTS vw_events;\nDROP VIEW IF EXISTS vw_tmp_recent_sales;\nDROP VIEW IF EXISTS vw_sales_virtual_us;\nDROP VIEW IF EXISTS vw_sales_virtual;\nDROP VIEW IF EXISTS vw_bi_top_customers_us;\nDROP VIEW IF EXISTS vw_bi_top_customers;\nDROP VIEW IF EXISTS vw_us_public;\nDROP VIEW IF EXISTS vw_sales_labels;\nDROP VIEW IF EXISTS vw_minimal;\nDROP VIEW IF EXISTS vw_top_customers;\nDROP VIEW IF EXISTS vw_us_customers;\nDROP VIEW IF EXISTS vw_customer_public_domain;\nDROP VIEW IF EXISTS vw_customer_public;\nDROP VIEW IF EXISTS vw_monthly_avg_order;\nDROP VIEW IF EXISTS vw_monthly_sales;\nDROP VIEW IF EXISTS vw_sales_enriched_left;\nDROP VIEW IF EXISTS vw_sales_enriched;\nDROP VIEW IF EXISTS vw_recent_high_sales;\nDROP VIEW IF EXISTS vw_high_sales;\nDROP TABLE IF EXISTS monthly_sales_snapshot;\nDROP TABLE IF EXISTS sales;\nDROP TABLE IF EXISTS customers;",
+          "nerd_notes": "Idempotent cleanup allows repeated validation runs.",
+          "compat_examples": {
+            "postgres": "-- Same DROP IF EXISTS semantics.",
+            "mysql": "-- DROP VIEW IF EXISTS / DROP TABLE IF EXISTS.",
+            "oracle": "-- Use DROP VIEW / DROP TABLE; IF EXISTS may require PL/SQL guards."
+          }
+        }
+      ],
+      "narrative": "We remove all created objects to leave the database clean.",
+      "nerd_notes": "Consider leaving core staging tables in real projects."
+    }
+  ],
+  "exercises": [
+    {
+      "id": "list-views",
+      "prompt": "List all views created in this lesson using information_schema",
+      "answer_sql": "SELECT table_name FROM information_schema.tables WHERE table_type='VIEW' ORDER BY table_name;"
+    },
+    {
+      "id": "top-customer",
+      "prompt": "Using vw_bi_top_customers, show the single highest-spending customer (name + total_spent)",
+      "answer_sql": "SELECT name, total_spent FROM vw_bi_top_customers ORDER BY total_spent DESC, name LIMIT 1;"
+    },
+    {
+      "id": "monthly-trend",
+      "prompt": "Show months from vw_monthly_sales ordered ascending with revenue and count",
+      "answer_sql": "SELECT month, total_revenue, sale_count FROM vw_monthly_sales ORDER BY month;"
+    }
+  ]
+}

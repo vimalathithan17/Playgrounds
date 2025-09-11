@@ -1,0 +1,493 @@
+{
+  "title": "Date & Time Functions",
+  "description": "Practical, question-driven guide to working with dates & times in DuckDB: extraction, arithmetic, bucketing, rolling metrics, calendars, time zones, and performance tips. Each example is self-contained and idempotent.",
+  "sections": [
+    {
+      "title": "0. Introduction: Date & Time",
+      "narrative": "Dates and times power reporting, monitoring, and analytics. Key skills include parsing, extracting parts, truncating to periods, rolling windows, and careful handling of time zones.",
+      "nerd_notes": "Prefer deterministic literals in examples. Use DATE_TRUNC keys for grouping, and isolate presentation-only formatting with STRFTIME at the edge."
+    },
+    {
+      "title": "1. Setup: base events table",
+      "narrative": "We start with a tiny `events` table used across several examples. Keeping setup minimal makes subsequent queries focused and fast.",
+      "nerd_notes": "Use deterministic literals for reproducible docs. Add indexes only when examples actually need them (not here).",
+      "examples": [
+        {
+          "name": "create_events",
+          "sql": "DROP TABLE IF EXISTS events;\nCREATE TABLE events (\n  event_id INTEGER,\n  event_ts TIMESTAMP,          -- logical event occurrence time\n  ingest_ts TIMESTAMP,         -- when pipeline ingested the event\n  user_id INTEGER,\n  event_type VARCHAR,          -- classification of event\n  value DOUBLE,\n  payload_bytes INTEGER,       -- size metric for performance examples\n  source VARCHAR               -- origin system\n);\nINSERT INTO events VALUES\n (1,'2024-01-01 08:00:00','2024-01-01 08:00:05',1,'login',10.0,450,'web'),\n (2,'2024-01-01 08:03:10','2024-01-01 08:03:15',1,'click',2.5,120,'web'),\n (3,'2024-01-01 08:05:00','2024-01-01 08:05:01',1,'purchase',25.0,980,'web'),\n (4,'2024-01-03 09:30:00','2024-01-03 09:30:07',1,'login',5.0,430,'mobile'),\n (5,'2024-01-08 12:00:00','2024-01-08 12:02:30',2,'login',7.5,400,'web'),\n (6,'2024-01-08 12:05:00','2024-01-08 12:05:20',2,'click',1.0,95,'web'),\n (7,'2024-01-10 14:00:00','2024-01-10 14:05:10',1,'logout',3.0,300,'web'),\n (8,'2024-01-10 14:10:00','2024-01-10 14:10:05',1,'login',4.0,310,'mobile');",
+          "description": "Question: how do we create a richer temporal dataset with latency & type dimensions?",
+          "nerd_notes": "Separate logical time (event_ts) vs ingestion (ingest_ts) enables latency calculations.",
+          "compat_examples": {
+            "postgres": "-- Same columns; consider NUMERIC for large payload sizes.",
+            "mysql": "-- TIMESTAMP vs DATETIME nuance; use DATETIME for full range.",
+            "oracle": "-- Use NUMBER for payload_bytes; VARCHAR2 for source."
+          }
+        }
+      ]
+    },
+    {
+      "title": "2. Current date/time functions",
+      "narrative": "Retrieve current date/time values. Useful for auditing or relative filters (e.g., last 7 days).",
+      "nerd_notes": "Avoid non-deterministic NOW/CURRENT_* in snapshot tests; prefer fixed literals when teaching logic.",
+      "examples": [
+        {
+          "name": "current_functions",
+          "sql": "SELECT CURRENT_DATE AS today_date, CURRENT_TIME AS now_time, CURRENT_TIMESTAMP AS now_ts;",
+          "description": "Question: how do we get today's date and current wall-clock timestamp?",
+          "nerd_notes": "Evaluation time is per statement execution.",
+          "compat_examples": {
+            "postgres": "-- Same functions.",
+            "mysql": "-- Use CURDATE()/CURRENT_TIMESTAMP as alternatives.",
+            "oracle": "-- SYSDATE for DATE, SYSTIMESTAMP for full precision."
+          }
+        }
+      ]
+    },
+    {
+      "title": "2.5 Cheat Sheet: Common Date/Time Patterns",
+      "examples": [
+        {
+          "name": "cs_parse_and_format_ts",
+          "sql": "SELECT TIMESTAMP '2024-02-01 09:15:00' AS ts, STRFTIME(TIMESTAMP '2024-02-01 09:15:00', '%Y-%m-%d %H:%M') AS formatted;",
+          "description": "Parse/construct a TIMESTAMP and format it for display.",
+          "nerd_notes": "Keep raw TIMESTAMP for math; format only at output.",
+          "compat_examples": {"postgres": "-- TO_CHAR(ts, 'YYYY-MM-DD HH24:MI').", "mysql": "-- DATE_FORMAT(ts, '%Y-%m-%d %H:%i').", "oracle": "-- TO_CHAR(ts, 'YYYY-MM-DD HH24:MI')."}
+        },
+        {
+          "name": "cs_extract_parts_quick",
+          "sql": "SELECT DATE '2024-01-05' AS d, STRFTIME(DATE '2024-01-05','%Y') AS year, STRFTIME(DATE '2024-01-05','%m') AS month, STRFTIME(DATE '2024-01-05','%d') AS day;",
+          "description": "Get year/month/day parts from a date literal.",
+          "nerd_notes": "Cast to INT if numeric sorting or math is required.",
+          "compat_examples": {"postgres": "-- EXTRACT(YEAR FROM d) etc.", "mysql": "-- YEAR(d), MONTH(d), DAY(d).", "oracle": "-- EXTRACT(YEAR FROM d)."}
+        },
+        {
+          "name": "cs_truncate_and_group_events",
+          "sql": "SELECT DATE_TRUNC('month', event_ts) AS month, COUNT(*) AS events FROM events GROUP BY 1 ORDER BY month;",
+          "description": "Month bucket and count events (type-preserving key).",
+          "nerd_notes": "DATE_TRUNC keeps temporal type for chaining and filters.",
+          "compat_examples": {"postgres": "-- Identical DATE_TRUNC.", "mysql": "-- GROUP BY DATE_FORMAT(event_ts,'%Y-%m-01').", "oracle": "-- TRUNC(event_ts,'MM')."}
+        },
+        {
+          "name": "cs_diff_minutes_quick",
+          "sql": "SELECT (JULIAN(TIMESTAMP '2024-01-01 08:03:15') - JULIAN(TIMESTAMP '2024-01-01 08:00:05'))*24*60 AS minutes_diff;",
+          "description": "Compute minute difference between two timestamps.",
+          "nerd_notes": "Multiply day fraction by 24*60 to get minutes.",
+          "compat_examples": {"postgres": "-- EXTRACT(EPOCH FROM (t2-t1))/60.", "mysql": "-- TIMESTAMPDIFF(MINUTE, t1, t2).", "oracle": "-- (t2 - t1)*24*60."}
+        }
+      ],
+      "narrative": "Quick patterns: parse/format, extract parts, truncate to period, and compute differences.",
+      "nerd_notes": "Use ORDER BY in examples that produce multiple rows for deterministic outputs."
+    },
+    {
+      "title": "2.6 Pitfalls, Tips, and Q&A",
+      "examples": [
+        {"name": "pitfall_current_timestamp_in_docs", "sql": "", "description": "CURRENT_TIMESTAMP is non-deterministic; avoid it in tests/docs unless you freeze time."},
+        {"name": "tip_prefer_date_trunc_keys", "sql": "", "description": "Group on DATE_TRUNC keys (type-preserving) instead of formatted strings for better downstream math and pushdown."},
+        {"name": "question_date_vs_timestamp", "sql": "", "description": "When to use DATE vs TIMESTAMP? Use DATE for calendar days; TIMESTAMP when hours/minutes/seconds matter."},
+        {"name": "tricky_iso_week_year_boundary", "sql": "", "description": "ISO week-year can differ from calendar year around Jan 1. Label reports explicitly to avoid confusion."},
+        {"name": "fundamental_store_utc_then_present", "sql": "", "description": "Store in UTC (or store offsets) and present in local time at the edge; model DST properly in the presentation layer."}
+      ],
+      "narrative": "Common gotchas and best practices for reliable temporal logic.",
+      "nerd_notes": "Prefer deterministic literals in examples; parameterize ranges for reuse."
+    },
+    {
+      "title": "3. Parsing & formatting",
+      "narrative": "Convert between strings and date/timestamp types and render formatted output for reports.",
+      "nerd_notes": "`STRFTIME` returns TEXT; keep raw TIMESTAMP for calculations and only format at presentation edge.",
+      "examples": [
+        {
+          "name": "parse_and_format",
+          "sql": "SELECT CAST('2024-02-01' AS DATE) AS parsed_date, STRFTIME(CAST('2024-02-01' AS DATE), '%d-%b-%Y') AS formatted;",
+          "description": "Question: how do we parse a literal and format it in a custom pattern?",
+          "nerd_notes": "%b gives abbreviated month name; keep locale implications in mind.",
+          "compat_examples": {
+            "postgres": "-- Use TO_CHAR(date, 'DD-Mon-YYYY').",
+            "mysql": "-- DATE_FORMAT(date, '%d-%b-%Y').",
+            "oracle": "-- TO_CHAR(date, 'DD-MON-YYYY')."
+          }
+        }
+      ]
+    },
+    {
+      "title": "4. Extracting parts",
+      "narrative": "Derive year, month, day, hour etc. for grouping or filtering.",
+      "nerd_notes": "`STRFTIME` flexible but string-based; when you need numeric order or math CAST or use extraction functions.",
+      "examples": [
+        {
+          "name": "extract_parts",
+          "sql": "SELECT event_id, event_ts, STRFTIME(event_ts, '%Y') AS year, STRFTIME(event_ts, '%m') AS month, STRFTIME(event_ts, '%d') AS day, STRFTIME(event_ts, '%H') AS hour FROM events;",
+          "description": "Question: how do we break a timestamp into calendar components?",
+          "nerd_notes": "Leading zeros preserved; cast to INT if required.",
+          "compat_examples": {
+            "postgres": "-- EXTRACT(YEAR FROM event_ts).",
+            "mysql": "-- YEAR(event_ts), MONTH(event_ts).",
+            "oracle": "-- EXTRACT(YEAR FROM event_ts)."
+          }
+        }
+      ]
+    },
+    {
+      "title": "5. Date arithmetic basics",
+      "narrative": "Add/subtract intervals and compute elapsed days relative to a reference.",
+      "nerd_notes": "Subtracting DATEs yields integer days; TIMESTAMP differences often require CAST or specialized functions in other engines.",
+      "examples": [
+        {
+          "name": "date_arith",
+          "sql": "SELECT event_id, event_ts, event_ts + INTERVAL '1 day' AS plus_one_day, event_ts - INTERVAL '7 days' AS minus_one_week, JULIAN(event_ts) - JULIAN(DATE '2024-01-01') AS days_since_start FROM events;",
+          "description": "Question: how do we add/subtract days and get days since a fixed date?",
+          "nerd_notes": "`JULIAN` subtraction gives fractional days; wrap in ROUND() if you need whole numbers.",
+          "compat_examples": {
+            "postgres": "-- event_ts + INTERVAL '1 day'.",
+            "mysql": "-- DATE_ADD/DATE_SUB equivalents.",
+            "oracle": "-- event_ts + 1 for days; use NUMTODSINTERVAL for clarity."
+          }
+        }
+      ]
+    },
+    {
+      "title": "6. Period truncation & boundaries",
+      "narrative": "Normalize timestamps to consistent period starts (day/week/month/quarter/year) to build buckets and align comparisons.",
+      "nerd_notes": "Week starts (DATE_TRUNC('week', ts)) may differ by engine locale/config; always state assumption (ISO Monday).",
+      "examples": [
+        {
+          "name": "period_boundaries",
+          "sql": "SELECT event_ts, DATE_TRUNC('day', event_ts) AS day_start, DATE_TRUNC('week', event_ts) AS week_start, DATE_TRUNC('month', event_ts) AS month_start, DATE_TRUNC('quarter', event_ts) AS quarter_start, DATE_TRUNC('year', event_ts) AS year_start FROM events ORDER BY event_ts;",
+          "description": "Question: how do we derive aligned starts for common reporting periods?",
+          "nerd_notes": "Truncated values enable grouping without string formatting.",
+          "compat_examples": {
+            "postgres": "-- Same DATE_TRUNC function.",
+            "mysql": "-- Use DATE_FORMAT or manual arithmetic (no native quarter trunc).",
+            "oracle": "-- TRUNC(ts, 'MM'), TRUNC(ts, 'Q')."
+          }
+        }
+      ]
+    },
+    {
+      "title": "7. Aggregations by month",
+      "narrative": "Bucket events by month and summarize counts & totals.",
+      "nerd_notes": "`DATE_TRUNC` groups keep temporal type (handy for ordering and further math).",
+      "examples": [
+        {
+          "name": "time_agg",
+          "sql": "SELECT DATE_TRUNC('month', event_ts) AS month, COUNT(*) AS events, SUM(value) AS total_value FROM events GROUP BY month ORDER BY month;",
+          "description": "Question: how do we aggregate events per calendar month?",
+          "nerd_notes": "Prefer truncation over formatted TEXT for downstream arithmetic.",
+          "compat_examples": {
+            "postgres": "-- Identical.",
+            "mysql": "-- GROUP BY DATE_FORMAT(event_ts, '%Y-%m-01').",
+            "oracle": "-- TRUNC(event_ts,'MM')."
+          }
+        }
+      ]
+    },
+    {
+      "title": "8. Rolling window (row-based)",
+      "narrative": "Compute a rolling sum over the last N rows per user ordered by time — portable when true time-range windows aren't supported uniformly.",
+      "nerd_notes": "Row-based windows differ from time-range windows; they depend on row density not elapsed time.",
+      "examples": [
+        {
+          "name": "rolling_rows",
+          "sql": "SELECT event_id, user_id, event_ts, value, SUM(value) OVER (PARTITION BY user_id ORDER BY event_ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS rolling_last_3_rows FROM events ORDER BY user_id, event_ts;",
+          "description": "Question: how do we calculate a 3-row rolling sum per user?",
+          "nerd_notes": "Use ROWS BETWEEN for deterministic frame; adjust preceding count for window length.",
+          "compat_examples": {
+            "postgres": "-- Same window syntax.",
+            "mysql": "-- Requires 8+ window functions.",
+            "oracle": "-- Identical analytic clause."
+          }
+        }
+      ]
+    },
+    {
+      "title": "9. Calendar generation & gap fill",
+      "narrative": "Generate a date series then LEFT JOIN facts to identify missing days (common in time series QA).",
+      "nerd_notes": "Recursive CTE suitable for short spans; large ranges benefit from a persisted date dimension.",
+      "examples": [
+        {
+          "name": "calendar_gap",
+          "sql": "WITH RECURSIVE cal(d) AS (SELECT DATE '2024-01-01' UNION ALL SELECT d + INTERVAL 1 DAY FROM cal WHERE d < DATE '2024-01-12'), daily AS (SELECT DATE(event_ts) AS d, COUNT(*) AS events FROM events GROUP BY 1) SELECT cal.d, COALESCE(daily.events,0) AS events FROM cal LEFT JOIN daily ON cal.d = daily.d ORDER BY cal.d;",
+          "description": "Question: how do we produce a continuous date list and mark days with zero events?",
+          "nerd_notes": "Always bound recursion with a clear end condition.",
+          "compat_examples": {
+            "postgres": "-- generate_series(DATE '2024-01-01', DATE '2024-01-12', '1 day').",
+            "mysql": "-- Recursive CTE; ensure max recursion settings.",
+            "oracle": "-- CONNECT BY LEVEL pattern to generate dates."
+          }
+        }
+      ]
+    },
+    {
+      "title": "10. Advanced temporal analytics (mini)",
+      "narrative": "Show moving average & volatility style metric using a tiny sensor sample to avoid large data generation.",
+      "nerd_notes": "Small dataset keeps validation fast while illustrating analytic window stacking.",
+      "examples": [
+        {
+          "name": "mini_time_series",
+          "sql": "DROP TABLE IF EXISTS sensor_readings;\nCREATE TABLE sensor_readings(ts TIMESTAMP, sensor_id INT, val DOUBLE);\nINSERT INTO sensor_readings VALUES\n ('2024-01-15 08:00:00',1,22.5),\n ('2024-01-15 09:00:00',1,23.1),\n ('2024-01-15 10:00:00',1,21.8),\n ('2024-01-15 08:00:00',2,45.2),\n ('2024-01-15 09:00:00',2,47.8),\n ('2024-01-15 10:00:00',2,43.5);\nSELECT sensor_id, ts, val, ROUND(AVG(val) OVER (PARTITION BY sensor_id ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW),2) AS ma_3, ROUND(MAX(val) OVER (PARTITION BY sensor_id ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) - MIN(val) OVER (PARTITION BY sensor_id ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW),2) AS range_3 FROM sensor_readings ORDER BY sensor_id, ts;",
+          "description": "Question: how do we compute a 3-period moving average and intra-window range?",
+          "nerd_notes": "Multiple window functions share ordering to avoid re-sorting.",
+          "compat_examples": {
+            "postgres": "-- Same; consider RANGE if time continuity guaranteed.",
+            "mysql": "-- Window functions OK (8+).",
+            "oracle": "-- Identical analytic syntax."
+          }
+        }
+      ]
+    },
+    {
+      "title": "11. Time zone handling & formatting",
+      "narrative": "Illustrate conceptual UTC normalization using stored offsets then present times in different zones.",
+      "nerd_notes": "DuckDB timestamps are naive; storing an offset lets you approximate conversions. Real DST rules require a timezone-aware layer.",
+      "examples": [
+        {
+          "name": "tz_format",
+          "sql": "DROP TABLE IF EXISTS global_events;\nCREATE TABLE global_events(event_id INT, event_name VARCHAR, local_ts TIMESTAMP, utc_offset_hours INT);\nINSERT INTO global_events VALUES (1,'Launch Americas','2024-01-15 10:00:00',-5),(2,'Launch Europe','2024-01-15 15:00:00',1);\n-- Normalize to UTC by subtracting the stored offset hours\nSELECT event_name, local_ts, utc_offset_hours, local_ts - (utc_offset_hours * INTERVAL '1 hour') AS utc_ts FROM global_events ORDER BY event_id;",
+          "description": "Question: how do we normalize naive local timestamps to UTC using a stored offset?",
+          "nerd_notes": "Offset arithmetic ignores DST complexities; keep original local + offset columns.",
+          "compat_examples": {
+            "postgres": "-- Consider TIMESTAMP WITH TIME ZONE for auto-normalization.",
+            "mysql": "-- Store in UTC; convert with CONVERT_TZ if tz tables loaded.",
+            "oracle": "-- Use FROM_TZ / AT TIME ZONE for robust handling."
+          }
+        }
+      ]
+    },
+    {
+      "title": "12. Performance considerations",
+      "narrative": "Demonstrate difference between truncation (type-preserving) and formatting (string) for grouping keys.",
+      "nerd_notes": "Date string grouping prevents use of date math and can inhibit predicate pushdown in some engines.",
+      "examples": [
+        {
+          "name": "perf_compare",
+          "sql": "-- Compare grouping approaches on small set (conceptual)\nSELECT 'truncate' AS method, DATE_TRUNC('month', event_ts) AS month_key, COUNT(*) AS events FROM events GROUP BY 2 UNION ALL SELECT 'string_fmt', STRFTIME(event_ts, '%Y-%m') AS month_key, COUNT(*) FROM events GROUP BY 2 ORDER BY method;",
+          "description": "Question: why prefer DATE_TRUNC over formatted strings for grouping?",
+          "nerd_notes": "Truncated keys keep temporal semantics for later filters.",
+          "compat_examples": {
+            "postgres": "-- Same principle.",
+            "mysql": "-- DATE_FORMAT vs generated DATE key.",
+            "oracle": "-- TRUNC keeps DATE datatype."
+          }
+        }
+      ]
+    },
+    {
+      "title": "13. Cleanup",
+      "narrative": "Drop ad-hoc tables created in advanced sections so notebook reruns cleanly.",
+      "nerd_notes": "Idempotent teardown keeps validator green on repeats.",
+      "examples": [
+        {
+          "name": "cleanup",
+          "sql": "DROP TABLE IF EXISTS sensor_readings;\nDROP TABLE IF EXISTS global_events;",
+          "description": "Question: how do we reset side tables created by advanced examples?",
+          "nerd_notes": "Leave base 'events' table intact in case exercises depend on it.",
+          "compat_examples": {
+            "postgres": "-- Same DROP IF EXISTS.",
+            "mysql": "-- Same syntax.",
+            "oracle": "-- Use PURGE only when needed."
+          }
+        }
+      ]
+    },
+    {
+      "title": "14. Event vs ingest latency",
+      "narrative": "Measure pipeline latency between when an event occurred and when it was ingested.",
+      "nerd_notes": "Latency = ingest_ts - event_ts. Large gaps can indicate backlog or network delay.",
+      "examples": [
+        {
+          "name": "ingest_latency",
+          "sql": "SELECT event_id, event_type, event_ts, ingest_ts, (JULIAN(ingest_ts)-JULIAN(event_ts))*24*60 AS latency_minutes FROM events ORDER BY latency_minutes DESC;",
+          "description": "Question: how do we compute per-event ingestion latency in minutes?",
+          "nerd_notes": "Multiply day fraction by 24*60 to convert to minutes.",
+          "compat_examples": {"postgres": "-- EXTRACT(EPOCH FROM (ingest_ts-event_ts))/60.", "mysql": "-- TIMESTAMPDIFF(MINUTE,event_ts,ingest_ts).", "oracle": "-- (ingest_ts-event_ts)*24*60."}
+        }
+      ]
+    },
+    {
+      "title": "15. Latency buckets",
+      "narrative": "Categorize events into latency bands for SLA style reporting.",
+      "nerd_notes": "CASE expression on computed latency avoids re-calculation by using a subquery/CTE.",
+      "examples": [
+        {
+          "name": "latency_buckets",
+          "sql": "WITH l AS (SELECT (JULIAN(ingest_ts)-JULIAN(event_ts))*24*60 AS latency_min FROM events) SELECT CASE WHEN latency_min <= 1 THEN '<=1m' WHEN latency_min <= 5 THEN '1-5m' WHEN latency_min <= 10 THEN '5-10m' ELSE '>10m' END AS bucket, COUNT(*) AS events FROM l GROUP BY 1 ORDER BY CASE bucket WHEN '<=1m' THEN 1 WHEN '1-5m' THEN 2 WHEN '5-10m' THEN 3 ELSE 4 END;",
+          "description": "Question: how do we bucket events by latency ranges?",
+          "nerd_notes": "Custom ORDER BY preserves logical bucket ordering.",
+          "compat_examples": {"postgres": "-- Same CASE pattern.", "mysql": "-- Identical; ensure integer math.", "oracle": "-- Same; consider virtual column for reuse."}
+        }
+      ]
+    },
+    {
+      "title": "16. Hourly volume by type",
+      "narrative": "Summarize events per hour and event_type for workload shape.",
+      "nerd_notes": "DATE_TRUNC to hour yields a reusable grouping key.",
+      "examples": [
+        {
+          "name": "hourly_by_type",
+          "sql": "SELECT DATE_TRUNC('hour', event_ts) AS hour, event_type, COUNT(*) AS events, SUM(payload_bytes) AS bytes FROM events GROUP BY 1,2 ORDER BY hour, event_type;",
+          "description": "Question: how do we aggregate events per hour per type?",
+          "nerd_notes": "Including payload size shows throughput dimension.",
+          "compat_examples": {"postgres": "-- Identical syntax.", "mysql": "-- DATE_FORMAT(event_ts,'%Y-%m-%d %H:00:00').", "oracle": "-- TRUNC(event_ts,'HH24')."}
+        }
+      ]
+    },
+    {
+      "title": "17. Simple sessionization (gap based)",
+      "narrative": "Assign session ids per user where gaps > 10 minutes start a new session.",
+      "nerd_notes": "Compute gap with LAG then cumulative sum to increment session id.",
+      "examples": [
+        {
+          "name": "sessionize",
+          "sql": "WITH ordered AS (SELECT *, LAG(event_ts) OVER (PARTITION BY user_id ORDER BY event_ts) AS prev_ts FROM events), gaps AS (SELECT *, CASE WHEN prev_ts IS NULL OR (JULIAN(event_ts)-JULIAN(prev_ts))*24*60 > 10 THEN 1 ELSE 0 END AS gap_start FROM ordered) SELECT user_id, event_id, event_ts, SUM(gap_start) OVER (PARTITION BY user_id ORDER BY event_ts ROWS UNBOUNDED PRECEDING) AS session_id FROM gaps ORDER BY user_id, event_ts;",
+          "description": "Question: how do we derive session ids with a 10-minute inactivity rule?",
+          "nerd_notes": "Adjust threshold to business definition of inactivity.",
+          "compat_examples": {"postgres": "-- Use (event_ts - prev_ts) > interval '10 minutes'.", "mysql": "-- TIMESTAMPDIFF(MINUTE,prev_ts,event_ts) > 10.", "oracle": "-- (event_ts - prev_ts)*24*60 > 10."}
+        }
+      ]
+    },
+    {
+      "title": "18. Period-to-date metrics",
+      "narrative": "Compute month-to-date (MTD) and quarter-to-date (QTD) value totals per user.",
+      "nerd_notes": "Partition by user + truncated period then use running SUM ordered by time.",
+      "examples": [
+        {
+          "name": "period_to_date",
+          "sql": "SELECT user_id, event_ts, value, DATE_TRUNC('month', event_ts) AS month, SUM(value) OVER (PARTITION BY user_id, DATE_TRUNC('month', event_ts) ORDER BY event_ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS mtd_value, DATE_TRUNC('quarter', event_ts) AS quarter, SUM(value) OVER (PARTITION BY user_id, DATE_TRUNC('quarter', event_ts) ORDER BY event_ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS qtd_value FROM events ORDER BY user_id, event_ts;",
+          "description": "Question: how do we compute MTD/QTD cumulative sums per user?",
+          "nerd_notes": "DATE_TRUNC repeated; could wrap in a CTE for DRY.",
+          "compat_examples": {"postgres": "-- Same; consider RANGE UNBOUNDED PRECEDING for time continuity.", "mysql": "-- Window functions identical (8+).", "oracle": "-- Same analytic functions."}
+        }
+      ]
+    },
+    {
+      "title": "19. Business-day difference (approx)",
+      "narrative": "Approximate business day span ignoring holidays (weekends removed).",
+      "nerd_notes": "Simplified: total_days - weekend_days; suitable for quick heuristics only.",
+      "examples": [
+        {
+          "name": "business_day_diff",
+          "sql": "-- Approximate business days (exclude weekends) between first and last event for user 1\nWITH RECURSIVE span AS (\n  SELECT MIN(event_ts)::DATE AS start_d, MAX(event_ts)::DATE AS end_d\n  FROM events WHERE user_id=1\n), calendar(d) AS (\n  SELECT start_d FROM span\n  UNION ALL\n  SELECT d + INTERVAL '1 day' FROM calendar, span WHERE d < end_d\n), weekends AS (\n  SELECT COUNT(*) AS weekend_days FROM calendar WHERE STRFTIME(d,'%w') IN ('0','6')\n) SELECT ROUND((JULIAN(end_d)-JULIAN(start_d)) - COALESCE(weekend_days,0)) AS approx_business_days FROM span, weekends;",
+          "description": "Question: how do we approximate business days between first and last event for user 1 (ignoring holidays)?",
+          "nerd_notes": "Recursive date series avoids engine-specific generate_series; still a heuristic (no holidays).",
+          "compat_examples": {"postgres": "-- Could use generate_series(start_d,end_d,'1 day') and filter weekends.", "mysql": "-- 8.0+ recursive CTE identical; STRFTIME tokens differ (use DAYOFWEEK).", "oracle": "-- CONNECT BY LEVEL with TO_CHAR(d,'D') in place of STRFTIME."}
+        }
+      ]
+    },
+    {
+      "title": "20. ISO week & year pitfalls",
+      "narrative": "Show how year boundaries can differ for ISO week vs calendar year.",
+      "nerd_notes": "Important when first days of January belong to last ISO week of previous year.",
+      "examples": [
+        {
+          "name": "iso_week_diff",
+          "sql": "WITH sample(d) AS (VALUES (DATE '2023-12-31'), (DATE '2024-01-01'), (DATE '2024-12-30')) SELECT d, STRFTIME(d,'%Y') AS cal_year, STRFTIME(d,'%W') AS week_num, STRFTIME(d,'%Y-W%W') AS year_week FROM sample ORDER BY d;",
+          "description": "Question: how can calendar year differ from week label?",
+          "nerd_notes": "Week numbering tokens may vary across engines; verify definition.",
+          "compat_examples": {"postgres": "-- TO_CHAR(d,'IYYY-IW') for ISO weeks.", "mysql": "-- WEEK(d,3) for ISO mode.", "oracle": "-- TO_CHAR(d,'IYYY-IW')."}
+        }
+      ]
+    },
+    {
+      "title": "21. Daily event type pivot",
+      "narrative": "Produce a compact daily summary with counts per event_type (wide format).",
+      "nerd_notes": "Conditional aggregation keeps it portable; pivot clause not universal.",
+      "examples": [
+        {
+          "name": "daily_type_pivot",
+          "sql": "SELECT DATE(event_ts) AS d, SUM(CASE WHEN event_type='login' THEN 1 ELSE 0 END) AS logins, SUM(CASE WHEN event_type='logout' THEN 1 ELSE 0 END) AS logouts, SUM(CASE WHEN event_type='purchase' THEN 1 ELSE 0 END) AS purchases, SUM(CASE WHEN event_type='click' THEN 1 ELSE 0 END) AS clicks FROM events GROUP BY 1 ORDER BY d;",
+          "description": "Question: how do we pivot event_type counts by day without a PIVOT keyword?",
+          "nerd_notes": "Add more CASE branches for additional types; consider generating dynamic SQL if types vary frequently.",
+          "compat_examples": {"postgres": "-- Same CASE pattern; crosstab() optional.", "mysql": "-- Same CASE aggregation.", "oracle": "-- PIVOT clause alternative but CASE is portable."}
+        }
+      ]
+    }
+    ,{
+      "title": "22. Holiday-aware business days",
+      "narrative": "Refine business day calculation by excluding explicit holiday dates in addition to weekends.",
+      "nerd_notes": "Maintains small inline holiday table; production systems externalize calendar with country/market codes.",
+      "examples": [
+        {"name": "holiday_business_days","sql": "WITH RECURSIVE span AS (SELECT MIN(event_ts)::DATE AS start_d, MAX(event_ts)::DATE AS end_d FROM events WHERE user_id=1), calendar(d) AS (SELECT start_d FROM span UNION ALL SELECT d + INTERVAL '1 day' FROM calendar, span WHERE d < end_d), holidays(h) AS (VALUES (DATE '2024-01-02'),(DATE '2024-01-08')), filtered AS (SELECT d, CASE WHEN STRFTIME(d,'%w') IN ('0','6') OR d IN (SELECT h FROM holidays) THEN 0 ELSE 1 END AS is_bd FROM calendar) SELECT SUM(is_bd) AS business_days_ex_holidays FROM filtered;","description": "Question: how do we exclude known holiday dates from business day counts?","nerd_notes": "Inline VALUES keeps example self-contained; join to dim_holiday in real models.","compat_examples": {"postgres": "-- generate_series + LEFT JOIN holiday table.", "mysql": "-- Recursive CTE; use DAYOFWEEK for weekend.", "oracle": "-- CONNECT BY LEVEL calendar + holiday table."}}
+      ]
+    }
+    ,{
+      "title": "23. True 7-day rolling window (time RANGE)",
+      "narrative": "Illustrate a range-based rolling sum using event timestamps over last 7 days (if engine supports).",
+      "nerd_notes": "DuckDB supports RANGE on ORDER BY with numeric expressions; emulate by converting to epoch days for portable pattern.",
+      "examples": [
+        {"name": "rolling_7d_range","sql": "-- Emulate 7-day rolling by filtering within window for each row\nWITH base AS (SELECT event_id, user_id, event_ts, value FROM events) SELECT b1.user_id, b1.event_id, b1.event_ts, (SELECT SUM(value) FROM base b2 WHERE b2.user_id = b1.user_id AND b2.event_ts BETWEEN b1.event_ts - INTERVAL '7 days' AND b1.event_ts) AS rolling_7d_sum FROM base b1 ORDER BY b1.user_id, b1.event_ts;","description": "Question: how do we compute a 7-day time-based rolling sum per user?","nerd_notes": "Scalar correlated subquery pattern is O(n^2) on large sets; window RANGE frame preferred if supported.","compat_examples": {"postgres": "-- SUM(value) OVER (PARTITION BY user_id ORDER BY event_ts RANGE BETWEEN INTERVAL '7 days' PRECEDING AND CURRENT ROW).", "mysql": "-- MySQL lacks INTERVAL RANGE frames; use self-correlated subquery similar to this.", "oracle": "-- RANGE BETWEEN INTERVAL '7' DAY PRECEDING."}}
+      ]
+    }
+    ,{
+      "title": "24. DST gap & overlap demo",
+      "narrative": "Show detecting potential daylight saving time anomalies using stored offsets around a transition boundary.",
+      "nerd_notes": "DuckDB naive timestamps: simulate DST by crafting rows with differing utc_offset_hours; flag jumps > 1 hour difference from expected progression.",
+      "examples": [
+        {"name": "dst_overlap_gap","sql": "DROP TABLE IF EXISTS tz_events;\nCREATE TABLE tz_events(local_ts TIMESTAMP, utc_offset_hours INT);\n-- Simulate spring forward (skip 02:00) and fall back (repeat hour) style anomalies\nINSERT INTO tz_events VALUES ('2024-03-10 00:30:00',-5),('2024-03-10 01:30:00',-5),('2024-03-10 03:30:00',-4), -- gap (02:00 missing)\n ('2024-11-03 00:30:00',-4),('2024-11-03 01:30:00',-4),('2024-11-03 01:30:00',-5),('2024-11-03 02:30:00',-5); -- overlap repeated 01:30 with different offset\nWITH ordered AS (SELECT *, local_ts - (utc_offset_hours * INTERVAL '1 hour') AS utc_ts, LAG(local_ts) OVER (ORDER BY local_ts) AS prev_local, LAG(utc_offset_hours) OVER (ORDER BY local_ts) AS prev_off FROM tz_events), diff AS (SELECT *, (JULIAN(local_ts)-JULIAN(prev_local))*24*60 AS mins_forward FROM ordered) SELECT local_ts, utc_offset_hours, utc_ts, CASE WHEN mins_forward IS NULL THEN 'start' WHEN mins_forward > 90 THEN 'gap_detected' WHEN mins_forward < 30 THEN 'overlap_or_reversal' ELSE 'normal' END AS anomaly_flag FROM diff ORDER BY local_ts;","description": "Question: how can we flag DST-like gaps or overlaps using naive timestamps + offsets?","nerd_notes": "Threshold heuristics ( >90 min gap, <30 min overlap ) illustrate detection; tune for dataset granularity.","compat_examples": {"postgres": "-- TIMESTAMP WITH TIME ZONE handles DST automatically; anomaly detection may compare AT TIME ZONE conversions.", "mysql": "-- Use CONVERT_TZ; store timezone names not offsets for reliability.", "oracle": "-- FROM_TZ(local_ts, tz) AT TIME ZONE 'UTC'."}}
+      ]
+    }
+    ,{
+      "title": "25. Weekly retention cohorts",
+      "narrative": "Assign each user a signup (first event) week and compute activity weeks since signup (cohort retention skeleton).",
+      "nerd_notes": "Small dataset so only user 1/2; pattern scales by joining fact to first-event dimension.",
+      "examples": [
+        {"name": "weekly_cohorts","sql": "WITH first_event AS (SELECT user_id, MIN(event_ts) AS first_ts FROM events GROUP BY 1), fact AS (SELECT e.user_id, e.event_ts, DATE_TRUNC('week', e.event_ts) AS activity_week FROM events e) SELECT f.user_id, DATE_TRUNC('week', fe.first_ts) AS cohort_week, f.activity_week, CAST((JULIAN(f.activity_week) - JULIAN(DATE_TRUNC('week', fe.first_ts)))/7 AS INT) AS weeks_since_signup FROM fact f JOIN first_event fe USING(user_id) ORDER BY user_id, weeks_since_signup, activity_week;","description": "Question: how do we derive weeks since first activity (cohort age) per user?","nerd_notes": "INTEGER cast floors fractional; ensures week 0 contains signup week.","compat_examples": {"postgres": "-- Same; EXTRACT(EPOCH)/604800 alt.", "mysql": "-- TIMESTAMPDIFF(WEEK,DATE_TRUNC('week',first_ts),activity_week).", "oracle": "-- (activity_week - TRUNC(first_ts,'IW'))/7."}}
+      ]
+    }
+    ,{
+      "title": "26. SCD2 effective dating pattern",
+      "narrative": "Generate valid_from / valid_to ranges for changing attribute snapshots derived from event stream (toy example).",
+      "nerd_notes": "Uses LEAD to mark next change boundary; open-ended current row gets NULL valid_to.",
+      "examples": [
+        {"name": "scd2_effective_dates","sql": "-- Derive user state changes based on event_type transitions\nWITH user_events AS (SELECT user_id, event_ts, event_type FROM events WHERE user_id=1 ORDER BY event_ts), changes AS (SELECT *, LAG(event_type) OVER (PARTITION BY user_id ORDER BY event_ts) AS prev_type FROM user_events), filtered AS (SELECT * FROM changes WHERE prev_type IS DISTINCT FROM event_type OR prev_type IS NULL), ranged AS (SELECT *, LEAD(event_ts) OVER (PARTITION BY user_id ORDER BY event_ts) AS next_ts FROM filtered) SELECT user_id, event_type AS state, event_ts AS valid_from, next_ts AS valid_to FROM ranged ORDER BY valid_from;","description": "Question: how do we build effective date ranges for state changes (SCD2)?","nerd_notes": "Filters consecutive duplicates before LEAD so ranges represent distinct states.","compat_examples": {"postgres": "-- IS DISTINCT FROM avoids NULL issues.", "mysql": "-- Use (prev_type IS NULL OR prev_type <> event_type).", "oracle": "-- NVL comparisons for NULL-safe difference."}}
+      ]
+    }
+    ,{
+      "title": "27. Event gap detection (>N hours)",
+      "narrative": "Identify gaps larger than a threshold (12h) per user to spot inactivity windows.",
+      "nerd_notes": "Gap metric leverages LAG then filters on computed hour difference.",
+      "examples": [
+        {"name": "gap_detection","sql": "WITH ordered AS (SELECT *, LAG(event_ts) OVER (PARTITION BY user_id ORDER BY event_ts) AS prev_ts FROM events), gaps AS (SELECT user_id, prev_ts, event_ts AS curr_ts, (JULIAN(event_ts)-JULIAN(prev_ts))*24 AS hours_gap FROM ordered WHERE prev_ts IS NOT NULL) SELECT * FROM gaps WHERE hours_gap > 12 ORDER BY user_id, prev_ts;","description": "Question: how do we list event intervals exceeding 12 hours per user?","nerd_notes": "Consider parameterizing threshold via a CTE constant.","compat_examples": {"postgres": "-- EXTRACT(EPOCH FROM (event_ts-prev_ts))/3600.", "mysql": "-- TIMESTAMPDIFF(HOUR,prev_ts,event_ts).", "oracle": "-- (event_ts-prev_ts)*24."}}
+      ]
+    }
+    ,{
+      "title": "28. Irregular (15m / 45m) buckets",
+      "narrative": "Show constructing custom non-uniform time buckets (15 then 45 minute span) via CASE on minute component.",
+      "nerd_notes": "Pattern maps each timestamp to start of its irregular interval; widen with more WHEN clauses.",
+      "examples": [
+        {"name": "irregular_buckets","sql": "SELECT event_id, event_ts, CASE WHEN CAST(STRFTIME(event_ts,'%M') AS INT) < 15 THEN DATE_TRUNC('hour', event_ts) WHEN CAST(STRFTIME(event_ts,'%M') AS INT) < 60 THEN DATE_TRUNC('hour', event_ts) + INTERVAL '15 minutes' END AS bucket_start FROM events ORDER BY event_ts;","description": "Question: how do we map events into 15m then 45m buckets?","nerd_notes": "Second branch covers remaining 45-minute span; ensure mutually exclusive ranges.","compat_examples": {"postgres": "-- DATE_TRUNC + EXTRACT(MINUTE).", "mysql": "-- CASE on MINUTE(event_ts).", "oracle": "-- TRUNC to hour + NUMTODSINTERVAL(15,'MINUTE')."}}
+      ]
+    }
+    ,{
+      "title": "29. Sliding median & percentile",
+      "narrative": "Compute rolling median and 90th percentile over last 3 rows (row-based stand-in for time window).",
+      "nerd_notes": "Emulates median/p90 for small row-based frame using window row numbering since PERCENTILE_CONT not available.",
+      "examples": [
+        {"name": "rolling_percentiles","sql": "WITH framed AS (SELECT user_id, event_ts, value, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY event_ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS rn_frame, COUNT(*) OVER (PARTITION BY user_id ORDER BY event_ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS cnt_frame, LIST(value) OVER (PARTITION BY user_id ORDER BY event_ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS list_vals FROM events) SELECT user_id, event_ts, value, -- median for small frame: pick middle after sort\nCASE cnt_frame WHEN 1 THEN value WHEN 2 THEN (list_vals[1] + list_vals[2]) / 2 ELSE list_vals[2] END AS median_last3, -- p90 approximate: highest value if frame <=3 (so index = cnt)\nCASE cnt_frame WHEN 1 THEN value WHEN 2 THEN list_vals[2] ELSE list_vals[3] END AS p90_last3 FROM framed ORDER BY user_id, event_ts;","description": "Question: how do we compute rolling median and p90 per user (3-row frame) without PERCENTILE_CONT?","nerd_notes": "LIST() window collects ordered values; for frame size up to 3 we index directly (DuckDB lists 1-based).","compat_examples": {"postgres": "-- Use PERCENTILE_CONT normally; LIST emulation requires array_agg + ordering.", "mysql": "-- Emulate via JSON_ARRAYAGG ordered in subquery.", "oracle": "-- MEDIAN() analytic built-in; list emulation via COLLECT ordering not guaranteed."}}
+      ]
+    }
+    ,{
+      "title": "30. Anomaly: jump vs prior avg",
+      "narrative": "Flag events where value exceeds prior 3 events average by >100%.",
+      "nerd_notes": "Use window AVG on preceding rows only (ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING) then compare current value.",
+      "examples": [
+        {"name": "anomaly_jump","sql": "WITH metrics AS (SELECT user_id, event_id, event_ts, value, AVG(value) OVER (PARTITION BY user_id ORDER BY event_ts ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING) AS prior3_avg FROM events) SELECT *, CASE WHEN prior3_avg IS NOT NULL AND value > prior3_avg * 2 THEN 'spike' ELSE 'normal' END AS anomaly_flag FROM metrics ORDER BY user_id, event_ts;","description": "Question: how do we label spikes relative to recent rolling average?","nerd_notes": "Skip first rows lacking full prior frame; threshold adjustable.","compat_examples": {"postgres": "-- Identical window clause.", "mysql": "-- Same in 8+.", "oracle": "-- Analytic AVG identical."}}
+      ]
+    }
+  ],
+  "exercises": [
+    {
+      "id": "basic-select",
+      "prompt": "Show the first 5 rows from `events`.",
+      "answer_sql": "SELECT * FROM events LIMIT 5;"
+    },
+    {
+      "id": "aggregate-1",
+      "prompt": "Count rows grouped by `event_id`.",
+      "answer_sql": "SELECT event_id, COUNT(*) AS cnt FROM events GROUP BY event_id ORDER BY cnt DESC;"
+    },
+    {
+      "id": "filter-top",
+      "prompt": "Select the top 10 rows where `event_id` is positive (if numeric) or not null otherwise.",
+      "answer_sql": "SELECT * FROM events WHERE event_id IS NOT NULL AND event_id > 0 LIMIT 10;"
+    }
+  ]
+}

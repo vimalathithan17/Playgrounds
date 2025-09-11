@@ -1,0 +1,280 @@
+{
+  "title": "Examples Index",
+  "description": "A central index describing each tutorial file and its JSON equivalent. Exercises added in the `exercises` field with templated answers.",
+  "tutorials": [
+    {
+      "file": "agg.json",
+      "topic": "Aggregation & Grouping"
+    },
+    {
+      "title": "1.6 Pitfalls, Tips, and Q&A",
+      "narrative": "Operational notes to keep examples portable and stable.",
+      "examples": [
+        { "name": "pitfall_missing_order_by", "description": "Without ORDER BY, UNION results can be non-deterministic in demos.", "sql": "" },
+        { "name": "tip_use_information_schema", "description": "Prefer information_schema for portable introspection across engines.", "sql": "" },
+        { "name": "question_when_to_materialize", "description": "Materialize CTAS when reused many times; scan external files for freshness.", "sql": "" },
+        { "name": "tricky_temp_vs_persistent", "description": "TEMP tables vanish at session end; don’t rely on them across separate runs.", "sql": "" },
+        { "name": "fundamental_idempotent_setup", "description": "DROP IF EXISTS before CREATE to keep lessons re-runnable.", "sql": "" }
+      ]
+    },
+    {
+      "file": "altertable.json",
+      "topic": "ALTER TABLE"
+    },
+    {
+      "file": "condition.json",
+      "topic": "Conditional Logic"
+    },
+    {
+      "file": "constraints.json",
+      "topic": "Constraints"
+    },
+    {
+      "file": "constraints_comparison.json",
+      "topic": "Constraints Comparison"
+    },
+    {
+      "file": "cte.json",
+      "topic": "Common Table Expressions"
+    },
+    {
+      "file": "datentime.json",
+      "topic": "Date & Time"
+    },
+    {
+      "file": "db.json",
+      "topic": "Database Basics"
+    },
+    {
+      "file": "dcl.json",
+      "topic": "DCL"
+    },
+    {
+      "file": "ddl.json",
+      "topic": "DDL"
+    },
+    {
+      "file": "dropncleanup.json",
+      "topic": "Drop & Cleanup"
+    },
+    {
+      "file": "duckadv.json",
+      "topic": "DuckDB Advanced"
+    }
+  ],
+  "exercises": [
+    {
+      "id": "examples-1-list-files",
+      "prompt": "Return a short list of tutorial JSON filenames (safe demo; hard-coded list).",
+      "answer_sql": "SELECT 'agg.json' AS file UNION ALL SELECT 'joins.json' UNION ALL SELECT 'select.json';"
+    }
+  ],
+  "note": "A central index describing each tutorial file and its JSON equivalent. Exercises are included for practice.",
+  "sections": [
+    {
+      "title": "0. Introduction: Examples Index",
+      "narrative": "This index links and demos the major lessons in this repo. It includes a tiny runnable setup, a realistic e-commerce mini‑schema, and BI queries so the page is useful standalone. All snippets are idempotent and deterministic.",
+      "nerd_notes": "Prefer minimal datasets, stable ORDER BY, and DROP IF EXISTS so re-runs are clean. When referencing other lessons, keep examples self-contained here.",
+      "examples": []
+    },
+    {
+      "title": "Sample Dataset Setup",
+      "narrative": "A tiny example that creates a small table and selects from it so this file contains a runnable demo.",
+      "nerd_notes": "Idempotent CREATE/INSERT patterns make the examples safe to re-run.",
+      "examples": [
+        {
+          "name": "tiny_users",
+          "description": "Create and query a tiny users table.",
+          "sql": "DROP TABLE IF EXISTS tiny_users; CREATE TABLE tiny_users(id INTEGER, name TEXT); INSERT INTO tiny_users VALUES (1,'Alice'),(2,'Bob'); SELECT * FROM tiny_users;",
+          "nerd_notes": "Small example to illustrate setup; keep datasets minimal for validator speed."
+        }
+      ]
+    },
+    {
+      "title": "E-Commerce Schema Example",
+      "narrative": "Create a tiny products/orders pair and show a simple join; useful for linking to deeper tutorials.",
+      "nerd_notes": "This tiny schema is safe and idempotent.",
+      "examples": [
+        {
+          "name": "ecommerce_schema_tiny",
+          "description": "Create tiny products and orders and join them.",
+          "sql": "DROP TABLE IF EXISTS products; DROP TABLE IF EXISTS orders; CREATE TABLE products(product_id INTEGER, name TEXT); CREATE TABLE orders(order_id INTEGER, product_id INTEGER); INSERT INTO products VALUES (1,'Widget'),(2,'Gadget'); INSERT INTO orders VALUES (1,1),(2,2); SELECT p.name, o.order_id FROM products p JOIN orders o ON p.product_id = o.product_id ORDER BY o.order_id;",
+          "nerd_notes": "Kept compact to remain fast in the validator."
+        }
+      ]
+    },
+    {
+      "title": "1.5 Cheat Sheet: Quick Examples",
+      "narrative": "Fast, self-contained snippets built on this file's tiny demo objects. They return small, stable results and are safe to re-run.",
+      "examples": [
+        {
+          "name": "cs_list_tables_main",
+          "description": "List a couple of objects in main schema.",
+          "sql": "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema='main' AND table_name IN ('tiny_users','products') ORDER BY table_name;",
+          "nerd_notes": "information_schema is portable across engines; keep selection tight for stability.",
+          "compat_examples": {
+            "postgres": "-- Same query with table_catalog filter if needed",
+            "mysql": "-- Use information_schema.TABLES with TABLE_SCHEMA",
+            "oracle": "-- Use ALL_TABLES/ALL_OBJECTS for visibility"
+          }
+        },
+        {
+          "name": "cs_count_orders_per_product",
+          "description": "Count orders per product using the tiny e-commerce snippet.",
+          "sql": "WITH o AS (SELECT * FROM orders), p AS (SELECT * FROM products) SELECT p.name, COUNT(o.order_id) AS orders FROM p JOIN o ON p.product_id = o.product_id GROUP BY p.name ORDER BY p.name;",
+          "nerd_notes": "Uses CTE aliases to show a common pattern while staying deterministic."
+        },
+        {
+          "name": "cs_preview_columns_products",
+          "description": "Preview product columns via PRAGMA.",
+          "sql": "SELECT name, \"type\" AS column_type, \"notnull\" AS is_not_null FROM pragma_table_info('products') ORDER BY cid LIMIT 5;",
+          "nerd_notes": "PRAGMA table_info is handy for quick introspection.",
+          "compat_examples": {
+            "postgres": "-- SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name='products' ORDER BY ordinal_position",
+            "mysql": "-- SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name='products' ORDER BY ordinal_position",
+            "oracle": "-- SELECT column_name, data_type, nullable FROM ALL_TAB_COLUMNS WHERE table_name='PRODUCTS' ORDER BY column_id"
+          }
+        },
+        {
+          "name": "cs_temp_table_rowcount",
+          "description": "Create a TEMP table and return a row count.",
+          "sql": "CREATE TEMP TABLE IF NOT EXISTS tmp_demo AS SELECT * FROM products WHERE 1=0; SELECT COUNT(*) AS rows FROM tmp_demo;",
+          "nerd_notes": "WHERE 1=0 copies structure only; TEMP tables are session-scoped."
+        }
+      ]
+    },
+    {
+      "title": "1. Create Database Schema",
+      "narrative": "Let’s start with a realistic e-commerce schema so the rest of the lesson has something meaningful to query. Question-first: now let’s say we need customers, products, categories, orders, and order items with sensible constraints — how do we design and create that in DuckDB? We’ll create five tables with primary keys, reasonable types, and foreign key references. We’ll keep everything idempotent so the example can be re-run.",
+      "nerd_notes": "DuckDB stores data in a single database file by default and runs embedded. Foreign key references are supported as metadata; enforcement is evolving by version — always validate critical integrity in ETL or application code. Prefer DECIMAL for currency. Defaults like CURRENT_DATE and CURRENT_TIMESTAMP are supported. Use DROP IF EXISTS to keep examples re-runnable.",
+      "examples": [
+        {
+          "name": "create_ecommerce_schema",
+          "description": "Now let’s say we need a complete e-commerce database schema with categories, customers, products, orders, and order_items — how do we create it in a portable, DuckDB-friendly way?",
+          "sql": "-- Create complete e-commerce database schema (DuckDB-compatible)\n-- Idempotent drops in dependency order\nDROP TABLE IF EXISTS order_items;\nDROP TABLE IF EXISTS orders;\nDROP TABLE IF EXISTS products;\nDROP TABLE IF EXISTS categories;\nDROP TABLE IF EXISTS customers;\n\n-- Categories table\nCREATE TABLE categories (\n    category_id INTEGER PRIMARY KEY,\n    name VARCHAR(100) NOT NULL,\n    description TEXT\n);\n\n-- Customers table\nCREATE TABLE customers (\n    customer_id INTEGER PRIMARY KEY,\n    first_name VARCHAR(50) NOT NULL,\n    last_name VARCHAR(50) NOT NULL,\n    email VARCHAR(100) UNIQUE NOT NULL,\n    phone VARCHAR(20),\n    registration_date DATE DEFAULT CURRENT_DATE,\n    city VARCHAR(50),\n    country VARCHAR(50) DEFAULT 'USA'\n);\n\n-- Products table\nCREATE TABLE products (\n    product_id INTEGER PRIMARY KEY,\n    name VARCHAR(200) NOT NULL,\n    description TEXT,\n    price DECIMAL(10,2) NOT NULL CHECK (price > 0),\n    stock_quantity INTEGER DEFAULT 0 CHECK (stock_quantity >= 0),\n    category_id INTEGER,\n    created_date DATE DEFAULT CURRENT_DATE,\n    is_active BOOLEAN DEFAULT true,\n    FOREIGN KEY (category_id) REFERENCES categories(category_id)\n);\n\n-- Orders table\nCREATE TABLE orders (\n    order_id INTEGER PRIMARY KEY,\n    customer_id INTEGER NOT NULL,\n    order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    status VARCHAR(20) DEFAULT 'pending',\n    total_amount DECIMAL(10,2) DEFAULT 0,\n    shipping_address TEXT,\n    FOREIGN KEY (customer_id) REFERENCES customers(customer_id)\n);\n\n-- Order items junction table\nCREATE TABLE order_items (\n    order_item_id INTEGER PRIMARY KEY,\n    order_id INTEGER NOT NULL,\n    product_id INTEGER NOT NULL,\n    quantity INTEGER NOT NULL CHECK (quantity > 0),\n    unit_price DECIMAL(10,2) NOT NULL,\n    FOREIGN KEY (order_id) REFERENCES orders(order_id),\n    FOREIGN KEY (product_id) REFERENCES products(product_id)\n);\n\nSELECT 'Database schema created successfully!' AS result;",
+          "nerd_notes": "We use INTEGER primary keys and explicit foreign keys for clarity. If you prefer auto-generated keys, some engines use IDENTITY/AUTO_INCREMENT/SERIAL (see compat examples). In DuckDB, it’s common to populate integer keys explicitly in demos to keep examples deterministic.",
+          "compat_examples": {
+            "postgres": "-- PostgreSQL variant: use identity columns and the same constraints\n-- CREATE TABLE categories (\n--   category_id SERIAL PRIMARY KEY,\n--   name VARCHAR(100) NOT NULL,\n--   description TEXT\n-- );\n-- CREATE TABLE customers (\n--   customer_id SERIAL PRIMARY KEY,\n--   first_name VARCHAR(50) NOT NULL,\n--   last_name VARCHAR(50) NOT NULL,\n--   email VARCHAR(100) UNIQUE NOT NULL,\n--   phone VARCHAR(20),\n--   registration_date DATE DEFAULT CURRENT_DATE,\n--   city VARCHAR(50),\n--   country VARCHAR(50) DEFAULT 'USA'\n-- );\n-- ... (products, orders, order_items with SERIAL and the same FKs)",
+            "mysql": "-- MySQL variant: use AUTO_INCREMENT and DECIMAL for currency\n-- CREATE TABLE categories (\n--   category_id INT AUTO_INCREMENT PRIMARY KEY,\n--   name VARCHAR(100) NOT NULL,\n--   description TEXT\n-- );\n-- CREATE TABLE customers (\n--   customer_id INT AUTO_INCREMENT PRIMARY KEY,\n--   first_name VARCHAR(50) NOT NULL,\n--   last_name VARCHAR(50) NOT NULL,\n--   email VARCHAR(100) UNIQUE NOT NULL,\n--   phone VARCHAR(20),\n--   registration_date DATE DEFAULT (CURRENT_DATE),\n--   city VARCHAR(50),\n--   country VARCHAR(50) DEFAULT 'USA'\n-- );",
+            "oracle": "-- Oracle variant: use NUMBER and IDENTITY or SEQUENCE; syntax differs for defaults\n-- CREATE TABLE categories (\n--   category_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,\n--   name VARCHAR2(100) NOT NULL,\n--   description CLOB\n-- );\n-- CREATE TABLE customers (\n--   customer_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,\n--   first_name VARCHAR2(50) NOT NULL,\n--   last_name VARCHAR2(50) NOT NULL,\n--   email VARCHAR2(100) UNIQUE NOT NULL,\n--   phone VARCHAR2(20),\n--   registration_date DATE DEFAULT SYSDATE,\n--   city VARCHAR2(50),\n--   country VARCHAR2(50) DEFAULT 'USA'\n-- );"
+          }
+        }
+      ]
+    },
+    {
+      "title": "2. Insert Sample Data",
+      "narrative": "With the schema in place, let’s load realistic sample data. Question-first: now let’s say we need categories, customers, products, orders, and order items that tie together with valid keys — how do we insert them so the IDs line up for joins? We’ll insert explicit IDs to keep referential integrity deterministic in DuckDB.",
+      "nerd_notes": "We include primary key values explicitly so references (like product_id or customer_id) match up across tables. This avoids relying on engine-specific auto-increment and keeps the lesson fully portable and re-runnable.",
+      "examples": [
+        {
+          "name": "insert_ecommerce_sample_data",
+          "description": "Now let’s say we want representative e-commerce data for analytics — how do we insert consistent categories, customers, products, orders, and order_items?",
+          "sql": "-- Insert sample data for our e-commerce database (explicit IDs for portability)\n\n-- Insert categories\nINSERT INTO categories (category_id, name, description) VALUES\n(1, 'Electronics', 'Electronic devices and gadgets'),\n(2, 'Clothing', 'Apparel and fashion items'),\n(3, 'Books', 'Physical and digital books'),\n(4, 'Home & Garden', 'Home improvement and gardening supplies'),\n(5, 'Sports', 'Sports equipment and fitness gear');\n\n-- Insert customers\nINSERT INTO customers (customer_id, first_name, last_name, email, phone, city, country) VALUES\n(1,'John','Doe','john.doe@email.com','555-0101','New York','USA'),\n(2,'Jane','Smith','jane.smith@email.com','555-0102','Los Angeles','USA'),\n(3,'Bob','Johnson','bob.johnson@email.com','555-0103','Chicago','USA'),\n(4,'Alice','Williams','alice.williams@email.com','555-0104','Houston','USA'),\n(5,'Charlie','Brown','charlie.brown@email.com','555-0105','Phoenix','USA'),\n(6,'Diana','Davis','diana.davis@email.com','555-0106','Philadelphia','USA'),\n(7,'Eva','Miller','eva.miller@email.com','555-0107','San Antonio','USA'),\n(8,'Frank','Wilson','frank.wilson@email.com','555-0108','San Diego','USA');\n\n-- Insert products (explicit product_id and category_id)\nINSERT INTO products (product_id, name, description, price, stock_quantity, category_id) VALUES\n(1,'Smartphone Pro','Latest smartphone with advanced features', 899.99, 50, 1),\n(2,'Laptop Ultra','High-performance laptop for professionals', 1299.99, 25, 1),\n(3,'Wireless Headphones','Premium noise-canceling headphones', 199.99, 100, 1),\n(4,'Smart Watch','Fitness tracking smartwatch', 299.99, 75, 1),\n(5,'Denim Jeans','Classic blue denim jeans', 79.99, 200, 2),\n(6,'Cotton T-Shirt','Comfortable cotton t-shirt', 24.99, 300, 2),\n(7,'Winter Jacket','Warm winter jacket', 149.99, 80, 2),\n(8,'SQL Mastery Book','Complete guide to SQL databases', 49.99, 150, 3),\n(9,'Programming Fundamentals','Learn programming basics', 39.99, 120, 3),\n(10,'Garden Tools Set','Complete gardening tool kit', 89.99, 60, 4),\n(11,'Indoor Plant Pot','Decorative pot for indoor plants', 19.99, 180, 4),\n(12,'Tennis Racket','Professional tennis racket', 129.99, 40, 5),\n(13,'Running Shoes','Comfortable running shoes', 99.99, 150, 5);\n\n-- Insert orders (explicit order_id)\nINSERT INTO orders (order_id, customer_id, order_date, status, shipping_address) VALUES\n(1, 1, '2024-01-15 10:30:00', 'completed', '123 Main St, New York, NY'),\n(2, 2, '2024-01-16 14:20:00', 'completed', '456 Oak Ave, Los Angeles, CA'),\n(3, 3, '2024-01-17 09:15:00', 'shipped',   '789 Pine St, Chicago, IL'),\n(4, 4, '2024-01-18 16:45:00', 'pending',  '321 Elm St, Houston, TX'),\n(5, 1, '2024-01-19 11:20:00', 'completed', '123 Main St, New York, NY'),\n(6, 5, '2024-01-20 13:30:00', 'shipped',   '654 Maple Dr, Phoenix, AZ');\n\n-- Insert order items (explicit order_item_id)\nINSERT INTO order_items (order_item_id, order_id, product_id, quantity, unit_price) VALUES\n(1, 1, 1, 1, 899.99),\n(2, 1, 3, 1, 199.99),\n(3, 2, 2, 1, 1299.99),\n(4, 2, 5, 2, 79.99),\n(5, 3, 4, 1, 299.99),\n(6, 3, 6, 3, 24.99),\n(7, 4, 8, 2, 49.99),\n(8, 4, 9, 1, 39.99),\n(9, 5, 7, 1, 149.99),\n(10,5, 11,2, 19.99),\n(11,6, 12,1, 129.99),\n(12,6, 13,1, 99.99);\n\n-- Update order totals\nUPDATE orders SET total_amount = (\n    SELECT SUM(quantity * unit_price)\n    FROM order_items oi\n    WHERE oi.order_id = orders.order_id\n);\n\n-- Quick sanity check\nSELECT (SELECT COUNT(*) FROM customers) AS customers,\n       (SELECT COUNT(*) FROM products)  AS products,\n       (SELECT COUNT(*) FROM orders)    AS orders,\n       (SELECT COUNT(*) FROM order_items) AS order_items;",
+          "nerd_notes": "If you prefer generated keys, see the compat examples in the previous section. We update totals after inserting order_items so the values reflect line items.",
+          "compat_examples": {
+            "postgres": "-- Postgres can omit explicit IDs if using SERIAL/IDENTITY and RETURNING to capture keys\n-- INSERT INTO categories (name, description) VALUES (...); -- then use RETURNING to map to products if needed",
+            "mysql": "-- MySQL can use AUTO_INCREMENT and LAST_INSERT_ID() pattern to retrieve generated keys if building references procedurally",
+            "oracle": "-- Oracle can use IDENTITY or sequences + RETURNING INTO to propagate generated keys"
+          }
+        }
+      ]
+    },
+    {
+      "title": "Business Intelligence Queries",
+      "narrative": "Now that we have a realistic dataset, let’s answer BI-style questions. We’ll start with a quick orientation query, then dive into customer analysis, product performance, sales trends, and composite KPIs. For each: question first, then the SQL, plus alternatives and notes.",
+      "nerd_notes": "Deterministic ordering (ORDER BY) makes results stable in the notebook. Prefer DATE_TRUNC for bucketing dates; avoid engine-specific functions unless you include a DuckDB-friendly equivalent.",
+      "examples": [
+        {
+          "name": "bi_dataset_overview",
+          "description": "Question: what’s the shape of our dataset (counts by table)?",
+          "sql": "SELECT 'customers' AS table_name, COUNT(*) AS rows FROM customers\nUNION ALL SELECT 'products', COUNT(*) FROM products\nUNION ALL SELECT 'orders', COUNT(*) FROM orders\nUNION ALL SELECT 'order_items', COUNT(*) FROM order_items;",
+          "nerd_notes": "A quick row-count inventory helps confirm we loaded what we think we did."
+        }
+      ]
+    },
+    {
+      "title": "1. Customer Analysis",
+      "narrative": "Question: which customers are most valuable and how recently did they purchase? We’ll compute core metrics (total orders, total spent, AOV, recency) and then label segments (Active/At Risk/Churned; High/Medium/Low value).",
+      "nerd_notes": "Alternative: compute metrics in a materialized summary table for performance. For recency, DATE_DIFF in DuckDB uses date_diff('day', last_order_date, current_date).",
+      "examples": [
+        {
+          "name": "customer_segmentation_dashboard",
+          "description": "Now let’s say we need a customer segmentation view with lifecycle status and value segment — how do we build it?",
+          "sql": "WITH customer_metrics AS (\n    SELECT \n        c.customer_id,\n        c.first_name,\n        c.last_name,\n        c.email,\n        c.registration_date,\n        COUNT(o.order_id) AS total_orders,\n        COALESCE(SUM(o.total_amount), 0) AS total_spent,\n        COALESCE(AVG(o.total_amount), 0) AS avg_order_value,\n        MAX(o.order_date) AS last_order_date,\n        date_diff('day', MAX(o.order_date), CURRENT_DATE) AS days_since_last_order\n    FROM customers c\n    LEFT JOIN orders o ON c.customer_id = o.customer_id\n    GROUP BY c.customer_id, c.first_name, c.last_name, c.email, c.registration_date\n)\nSELECT \n    *,\n    CASE \n        WHEN total_orders = 0 THEN 'Never Purchased'\n        WHEN days_since_last_order <= 30 THEN 'Active'\n        WHEN days_since_last_order <= 90 THEN 'At Risk'\n        ELSE 'Churned'\n    END AS customer_status,\n    CASE \n        WHEN total_spent > 1000 THEN 'High Value'\n        WHEN total_spent > 300 THEN 'Medium Value'\n        WHEN total_spent > 0 THEN 'Low Value'\n        ELSE 'No Value'\n    END AS value_segment\nFROM customer_metrics\nORDER BY total_spent DESC;",
+          "nerd_notes": "Alternative approaches: compute RFM (Recency, Frequency, Monetary) bins with NTILE or CASE and join to descriptive labels. Pitfall: NULL last_order_date yields NULL recency; COALESCE or CASE as needed.",
+          "compat_examples": {
+            "postgres": "-- Use AGE() or DATE_PART('day', CURRENT_DATE - last_order_date) for recency if preferred",
+            "mysql": "-- Use DATEDIFF(CURRENT_DATE, last_order_date) for recency",
+            "oracle": "-- Use TRUNC(CURRENT_DATE) - TRUNC(last_order_date) for days difference"
+          }
+        }
+      ]
+    },
+    {
+      "title": "2. Product Performance",
+      "narrative": "Question: which products and categories drive revenue, and how do we rank them within a category? We’ll compute totals and ranks, and derive an average revenue per order for context.",
+      "nerd_notes": "Alternative: compute price-quantity revenue directly from order_items to avoid dependency on order header totals. RANK ties share ranks; use DENSE_RANK to avoid gaps.",
+      "examples": [
+        {
+          "name": "product_performance_ranking",
+          "description": "Now let’s say we need product-level KPIs and a per-category revenue rank — how do we compute that?",
+          "sql": "WITH product_performance AS (\n    SELECT \n        p.product_id,\n        p.name,\n        c.name AS category,\n        p.price,\n        p.stock_quantity,\n        COUNT(oi.order_item_id) AS times_ordered,\n        COALESCE(SUM(oi.quantity), 0) AS total_quantity_sold,\n        COALESCE(SUM(oi.quantity * oi.unit_price), 0) AS total_revenue\n    FROM products p\n    INNER JOIN categories c ON p.category_id = c.category_id\n    LEFT JOIN order_items oi ON p.product_id = oi.product_id\n    GROUP BY p.product_id, p.name, c.name, p.price, p.stock_quantity\n)\nSELECT \n    *,\n    CASE \n        WHEN times_ordered = 0 THEN 'Never Sold'\n        WHEN times_ordered >= 5 THEN 'Best Seller'\n        WHEN times_ordered >= 2 THEN 'Popular'\n        ELSE 'Slow Mover'\n    END AS performance_category,\n    RANK() OVER (PARTITION BY category ORDER BY total_revenue DESC) AS revenue_rank_in_category,\n    total_revenue / NULLIF(times_ordered, 0) AS avg_revenue_per_order\nFROM product_performance\nORDER BY total_revenue DESC;",
+          "nerd_notes": "If you want margin-based KPIs, add a cost column and compute contribution margin. For ties, RANK vs DENSE_RANK affect numbering.",
+          "compat_examples": {
+            "postgres": "-- Same query works. Consider MATERIALIZED VIEW for heavy dashboards.",
+            "mysql": "-- Requires MySQL 8+ for window functions; older versions can emulate ranks via variables.",
+            "oracle": "-- Analytic functions supported; syntax similar."
+          }
+        }
+      ]
+    },
+    {
+      "title": "3. Sales Trends",
+      "narrative": "Question: what are our month-over-month trends and growth rates? We’ll bucket by month with DATE_TRUNC, compute revenue and orders, then compare to the previous month using LAG.",
+      "nerd_notes": "Alternative: compute weekly buckets with DATE_TRUNC('week', order_date). Pitfall: division by zero on growth rates when the prior period is zero — guard with CASE/NULLIF.",
+      "examples": [
+        {
+          "name": "monthly_trends_and_growth",
+          "description": "Now let’s say we want monthly orders, revenue, unique customers, and growth vs the prior month — how do we compute that?",
+          "sql": "WITH monthly_sales AS (\n    SELECT \n        DATE_TRUNC('month', order_date) AS month,\n        COUNT(*) AS orders,\n        SUM(total_amount) AS revenue,\n        AVG(total_amount) AS avg_order_value,\n        COUNT(DISTINCT customer_id) AS unique_customers\n    FROM orders\n    GROUP BY DATE_TRUNC('month', order_date)\n),\nsales_with_growth AS (\n    SELECT \n        *,\n        LAG(revenue, 1) OVER (ORDER BY month) AS prev_month_revenue,\n        LAG(orders, 1) OVER (ORDER BY month) AS prev_month_orders\n    FROM monthly_sales\n)\nSELECT \n    month,\n    orders,\n    revenue,\n    avg_order_value,\n    unique_customers,\n    revenue / NULLIF(unique_customers, 0) AS revenue_per_customer,\n    CASE \n        WHEN prev_month_revenue IS NULL THEN NULL\n        ELSE ROUND(((revenue - prev_month_revenue) / prev_month_revenue * 100), 2)\n    END AS revenue_growth_pct,\n    CASE \n        WHEN prev_month_orders IS NULL THEN NULL\n        ELSE ROUND(((orders - prev_month_orders) / prev_month_orders * 100), 2)\n    END AS order_growth_pct\nFROM sales_with_growth\nORDER BY month;",
+          "nerd_notes": "For sparse data, consider a calendar table LEFT JOIN to fill missing months with zeros.",
+          "compat_examples": {
+            "postgres": "-- DATE_TRUNC and window functions are supported as-is.",
+            "mysql": "-- Use MySQL 8+ for window functions; DATE_TRUNC alternative: DATE_FORMAT(order_date, '%Y-01-01') for month starts.",
+            "oracle": "-- Use TRUNC(order_date, 'MM') for month buckets; analytic functions supported."
+          }
+        }
+      ]
+    },
+    {
+      "title": "4. Advanced Business Metrics",
+      "narrative": "Overview of advanced metrics such as cohort retention, lifetime value (LTV), conversion funnels, and time-to-event analysis. Use this as a roadmap and expand with concrete datasets and queries where relevant.",
+      "nerd_notes": "High-level outline to keep coverage complete. Add focused examples with realistic data when deep-diving into each metric.",
+      "examples": [
+        {
+          "name": "concept_advanced_business_metrics",
+          "description": "Concept marker for 'Advanced Business Metrics' (no-op query).",
+          "sql": "SELECT 'Advanced Business Metrics' AS topic;",
+          "nerd_notes": "Intentional no-op query to keep the lesson runnable. Replace with concrete analyses in future revisions."
+        }
+      ]
+    }
+  ],
+  "final_cleanup": {
+    "title": "Final Cleanup",
+    "description": "Drop demo tables created by this lesson.",
+    "examples": [
+      {
+        "name": "final_cleanup",
+        "sql": "-- Clean up tables that this lesson may have created\nDROP TABLE IF EXISTS sales;\nDROP TABLE IF EXISTS sales_rollup;\n-- E-commerce demo cleanup (drop in dependency order)\nDROP TABLE IF EXISTS order_items;\nDROP TABLE IF EXISTS orders;\nDROP TABLE IF EXISTS products;\nDROP TABLE IF EXISTS categories;\nDROP TABLE IF EXISTS customers;",
+        "description": "Drop demo tables.",
+        "nerd_notes": "Idempotent cleanup that is safe to run multiple times. Keep cleanup lightweight so validator runs remain fast.",
+        "compat_examples": {
+          "postgres": "-- Portable SQL: DROP TABLE IF EXISTS is supported in Postgres. For cascades, add CASCADE if you need to drop dependent objects.",
+          "mysql": "-- Portable SQL: DROP TABLE IF EXISTS works in MySQL. Add CASCADE for foreign keys if necessary.",
+          "oracle": "-- Oracle: DROP TABLE table_name CASCADE CONSTRAINTS to drop dependent constraints; older Oracle doesn't support IF EXISTS."
+        }
+      }
+    ]
+  }
+}

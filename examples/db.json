@@ -1,0 +1,237 @@
+{
+  "title": "Database Basics & Schema",
+  "description": "Question-driven guide to DuckDB database & schema operations: creating tables, introspection, schemas, exporting, lightweight versioning, and multi-tenant patterns.",
+  "sections": [
+    {
+      "title": "0. Introduction: Database & Schema",
+      "narrative": "Foundational operations: create tables, list objects via information_schema, use schemas (namespaces), export data, and keep lightweight version records.",
+      "nerd_notes": "Prefer ANSI information_schema for portability. Use IF EXISTS/IF NOT EXISTS for idempotent DDL in examples."
+    },
+    {
+      "title": "1. Setup: sample table",
+      "narrative": "Create a tiny table reused in later introspection and export examples.",
+      "nerd_notes": "Keep seed data minimal so validation stays quick.",
+      "examples": [
+        {
+          "name": "create_tables",
+          "sql": "DROP TABLE IF EXISTS people;\nCREATE TABLE people(id INTEGER PRIMARY KEY, name TEXT, age INTEGER);\nINSERT INTO people VALUES (1,'Alice',30),(2,'Bob',25);\nSELECT * FROM people;",
+          "description": "Question: how do we create a small base table?",
+          "nerd_notes": "Primary key ensures uniqueness.",
+          "compat_examples": {
+            "postgres": "-- SERIAL/BIGSERIAL often used.",
+            "mysql": "-- Use INT AUTO_INCREMENT PRIMARY KEY.",
+            "oracle": "-- Use GENERATED AS IDENTITY."
+          }
+        }
+      ]
+    },
+    {
+      "title": "1.5 Cheat Sheet: Common DB/Schema Tasks",
+      "examples": [
+        {
+          "name": "cs_list_tables_main",
+          "sql": "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema = 'main' ORDER BY table_name;",
+          "description": "List all user tables in the main schema.",
+          "nerd_notes": "Filter out system schemas for clarity.",
+          "compat_examples": {"postgres": "-- Filter NOT IN ('pg_catalog','information_schema').", "mysql": "-- WHERE table_schema = DATABASE().", "oracle": "-- USER_TABLES/ALL_TABLES."}
+        },
+        {
+          "name": "cs_create_schema_and_table_scratch",
+          "sql": "CREATE SCHEMA IF NOT EXISTS scratch;\n-- Use OR REPLACE CTAS for a clean, idempotent demo row\nCREATE OR REPLACE TABLE scratch.demo AS SELECT 1::INTEGER AS id, 'hello'::TEXT AS note;\n-- drop immediately to keep environment clean\nDROP TABLE IF EXISTS scratch.demo;\nDROP SCHEMA IF EXISTS scratch;\nSELECT 'ok' AS status;",
+          "description": "Create a schema and table safely, then cleanup.",
+          "nerd_notes": "Use IF NOT EXISTS/IF EXISTS and end with a SELECT for deterministic output.",
+          "compat_examples": {"postgres": "-- Same pattern; wrap in a transaction if needed.", "mysql": "-- Use CREATE DATABASE; DROP DATABASE carefully.", "oracle": "-- CREATE USER + DROP USER CASCADE for true schema lifecycle."}
+        },
+        {
+          "name": "cs_show_columns_people_quick",
+          "sql": "SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'people' ORDER BY ordinal_position;",
+          "description": "Inspect column definitions for a table.",
+          "nerd_notes": "Ordinal position preserves creation order.",
+          "compat_examples": {"postgres": "-- Same information_schema view.", "mysql": "-- information_schema.columns.", "oracle": "-- ALL_TAB_COLUMNS."}
+        },
+        {
+          "name": "cs_export_people_csv_quick",
+          "sql": "COPY (SELECT * FROM people ORDER BY id) TO './people_export.csv' (HEADER, DELIMITER ',');\nSELECT COUNT(*) AS rows_exported FROM people;",
+          "description": "Export people data to CSV and confirm row count.",
+          "nerd_notes": "Explicit ORDER BY ensures deterministic file rows.",
+          "compat_examples": {"postgres": "-- COPY ... TO STDOUT WITH CSV HEADER.", "mysql": "-- SELECT ... INTO OUTFILE requires FILE privilege.", "oracle": "-- External tables or spool in client."}
+        }
+      ],
+      "narrative": "Quick-reference tasks: list tables, create schema/table safely, inspect columns, and export to CSV.",
+      "nerd_notes": "Keep examples idempotent and end with a SELECT for predictable validator output."
+    },
+    {
+      "title": "1.6 Pitfalls, Tips, and Q&A",
+      "examples": [
+        {"name": "pitfall_non_deterministic_export_order", "sql": "", "description": "Export without ORDER BY can produce different row orders across runs. Always ORDER BY before exporting."},
+        {"name": "tip_use_information_schema", "sql": "", "description": "Prefer information_schema for cross-engine introspection; PRAGMA/SHOW are engine-specific."},
+        {"name": "question_schema_vs_database", "sql": "", "description": "In DuckDB, schemas are namespaces inside a database file; use them to organize objects per domain."},
+        {"name": "tricky_drop_schema_dependencies", "sql": "", "description": "Dropping a schema with objects fails without CASCADE; either drop children first or script CASCADE carefully."},
+        {"name": "fundamental_idempotent_ddl", "sql": "", "description": "Guard DDL with IF EXISTS/IF NOT EXISTS so notebooks/docs can be re-run safely."}
+      ],
+      "narrative": "Common gotchas and best practices for DB and schema operations.",
+      "nerd_notes": "Use deterministic outputs in docs; avoid destructive operations unless they are explicitly cleaned up."}
+    ,
+    {
+      "title": "2. Listing tables",
+      "narrative": "Use information_schema to list tables in the main schema.",
+      "nerd_notes": "information_schema is ANSI style; PRAGMA helpers exist but are engine-specific.",
+      "examples": [
+        {
+          "name": "show_tables",
+          "sql": "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema='main' ORDER BY table_name;",
+          "description": "Question: how do we list user tables?",
+          "nerd_notes": "Filter out system schemas for clarity.",
+          "compat_examples": {
+            "postgres": "-- Filter table_schema NOT IN ('pg_catalog','information_schema').",
+            "mysql": "-- Use information_schema.tables WHERE table_schema = DATABASE().",
+            "oracle": "-- ALL_TABLES / USER_TABLES views."
+          }
+        }
+      ]
+    },
+    {
+      "title": "3. Basic schema (namespace) usage",
+      "narrative": "Create a separate schema and a table inside it to demonstrate namespacing.",
+      "nerd_notes": "DuckDB supports CREATE SCHEMA; default is 'main'.",
+      "examples": [
+        {
+          "name": "schemas",
+          "sql": "CREATE SCHEMA IF NOT EXISTS analytics;\nCREATE TABLE IF NOT EXISTS analytics.metrics(metric_id INTEGER, value DOUBLE);\nINSERT INTO analytics.metrics VALUES (1,100.0);\nSELECT * FROM analytics.metrics;",
+          "description": "Question: how do we create and query in a schema?",
+          "nerd_notes": "Qualify objects with schema.table.",
+          "compat_examples": {
+            "postgres": "-- Same CREATE SCHEMA IF NOT EXISTS.",
+            "mysql": "-- SCHEMA synonym for DATABASE; use CREATE DATABASE.",
+            "oracle": "-- Users act as schemas; CREATE USER + grants."
+          }
+        }
+      ]
+    },
+    {
+      "title": "4. Introspection & table metadata",
+      "narrative": "Read column metadata for a table using information_schema columns view.",
+      "nerd_notes": "Great for code generation or migration diff tools.",
+      "examples": [
+        {
+          "name": "table_info",
+          "sql": "SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name='people' ORDER BY ordinal_position;",
+          "description": "Question: how do we inspect column structure?",
+          "nerd_notes": "Order by ordinal_position to preserve creation order.",
+          "compat_examples": {
+            "postgres": "-- Same columns view.",
+            "mysql": "-- information_schema.columns with column_name/data_type.",
+            "oracle": "-- ALL_TAB_COLUMNS view."
+          }
+        }
+      ]
+    },
+    {
+      "title": "5. Export to CSV",
+      "narrative": "Write table data to a CSV file for interchange.",
+      "nerd_notes": "Writer must have filesystem permission.",
+      "examples": [
+        {
+          "name": "export_csv",
+          "sql": "COPY (SELECT * FROM people ORDER BY id) TO './people_export.csv' (HEADER, DELIMITER ',');",
+          "description": "Question: how do we export a table subset to CSV?",
+          "nerd_notes": "Explicit ORDER gives deterministic row order.",
+          "compat_examples": {
+            "postgres": "-- \nCOPY (SELECT * FROM people) TO STDOUT WITH CSV HEADER.",
+            "mysql": "-- SELECT ... INTO OUTFILE requires permissions.",
+            "oracle": "-- Use external tables or SQL*Plus spool."
+          }
+        }
+      ]
+    },
+    {
+      "title": "6. Lightweight version tracking",
+      "narrative": "Track applied schema versions in a tiny table (simplified migration ledger).",
+      "nerd_notes": "Keeps history without heavy framework overhead.",
+      "examples": [
+        {
+          "name": "schema_versions",
+          "sql": "DROP TABLE IF EXISTS schema_versions;\nCREATE TABLE schema_versions(version VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, description TEXT);\nINSERT INTO schema_versions(version, description) VALUES ('1.0.0','Initial'),('1.1.0','Add analytics schema');\nSELECT * FROM schema_versions ORDER BY applied_at;",
+          "description": "Question: how do we record minimal schema version metadata?",
+          "nerd_notes": "Add checksum/source_id columns for integrity.",
+          "compat_examples": {
+            "postgres": "-- Same pattern; apply inside transaction.",
+            "mysql": "-- Use VARCHAR key + timestamp.",
+            "oracle": "-- Consider NUMBER for version ordering."
+          }
+        }
+      ]
+    },
+    {
+      "title": "7. Drift detection sample",
+      "narrative": "Compare recorded definition vs live (simulated) to flag drift.",
+      "nerd_notes": "Simplified: stores a stub definition; real systems parse pg_catalog/sqlite_master/etc.",
+      "examples": [
+        {
+          "name": "drift_detect",
+          "sql": "DROP TABLE IF EXISTS object_registry;\nCREATE TABLE object_registry(obj_name VARCHAR PRIMARY KEY, recorded_sql TEXT);\nINSERT INTO object_registry VALUES('people','CREATE TABLE people(id INTEGER PRIMARY KEY, name TEXT, age INTEGER)');\n-- Simulate change: no actual change to keep validation safe\nSELECT obj_name, CASE WHEN recorded_sql LIKE 'CREATE TABLE people%' THEN 'IN_SYNC' ELSE 'DRIFT' END AS drift_status FROM object_registry;",
+          "description": "Question: how do we flag if live schema differs from recorded?",
+          "nerd_notes": "Real drift requires fetching actual DDL; DuckDB exposes PRAGMA show_tables, etc.",
+          "compat_examples": {
+            "postgres": "-- Compare pg_get_tabledef vs stored snapshot.",
+            "mysql": "-- SHOW CREATE TABLE vs stored text.",
+            "oracle": "-- DBMS_METADATA.GET_DDL comparison."
+          }
+        }
+      ]
+    },
+    {
+      "title": "8. Multi-tenant pattern (simplified)",
+      "narrative": "Store tenants and per-tenant config keys in shared tables.",
+      "nerd_notes": "Row-level isolation via tenant_id filter; for stricter isolation use separate schemas/databases.",
+      "examples": [
+        {
+          "name": "multi_tenant",
+          "sql": "DROP TABLE IF EXISTS tenants; DROP TABLE IF EXISTS tenant_configs;\nCREATE TABLE tenants(tenant_id INTEGER PRIMARY KEY, name TEXT, tier TEXT);\nCREATE TABLE tenant_configs(tenant_id INTEGER, cfg_key TEXT, cfg_val TEXT);\nINSERT INTO tenants VALUES (1,'Acme','ENTERPRISE'),(2,'Startup','BASIC');\nINSERT INTO tenant_configs VALUES (1,'feature.analytics','true'),(2,'feature.analytics','false');\nSELECT t.name, t.tier, c.cfg_key, c.cfg_val FROM tenants t JOIN tenant_configs c USING(tenant_id) ORDER BY t.tenant_id;",
+          "description": "Question: how do we model simple shared-tenancy metadata?",
+          "nerd_notes": "Composite UNIQUE(tenant_id,cfg_key) recommended.",
+          "compat_examples": {
+            "postgres": "-- Add partial indexes per tenant if needed.",
+            "mysql": "-- Consider separate databases for noisy tenants.",
+            "oracle": "-- Use dedicated schemas + FGAC for isolation."
+          }
+        }
+      ]
+    },
+    {
+      "title": "9. Cleanup",
+      "narrative": "Remove auxiliary tables created in advanced sections.",
+      "nerd_notes": "Leave base people table for exercises.",
+      "examples": [
+        {
+          "name": "cleanup",
+          "sql": "DROP TABLE IF EXISTS schema_versions;\nDROP TABLE IF EXISTS object_registry;\nDROP TABLE IF EXISTS tenant_configs;\nDROP TABLE IF EXISTS tenants;",
+          "description": "Question: how do we teardown side tables while keeping base data?",
+          "nerd_notes": "Keeps 'people' for exercise queries.",
+          "compat_examples": {
+            "postgres": "-- Same DROP IF EXISTS.",
+            "mysql": "-- Same syntax.",
+            "oracle": "-- Use PURGE to bypass recycle bin."
+          }
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+      "id": "basic-select",
+      "prompt": "Show the first 5 rows from `people`.",
+      "answer_sql": "SELECT * FROM people LIMIT 5;"
+    },
+    {
+      "id": "aggregate-1",
+      "prompt": "Count rows grouped by `id`.",
+      "answer_sql": "SELECT id, COUNT(*) AS cnt FROM people GROUP BY id ORDER BY cnt DESC;"
+    },
+    {
+      "id": "filter-top",
+      "prompt": "Select the top 10 rows where `id` is positive (if numeric) or not null otherwise.",
+      "answer_sql": "SELECT * FROM people WHERE id IS NOT NULL AND id > 0 LIMIT 10;"
+    }
+  ]
+}

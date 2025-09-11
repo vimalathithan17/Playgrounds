@@ -1,0 +1,592 @@
+{
+  "title": "WHERE - Filtering Results",
+  "description": "A question-first guide to filtering with WHERE in DuckDB. We cover comparisons, boolean logic, NULL handling, pattern matching, IN/NOT IN semantics, and WHERE vs HAVING. All examples are self-contained, deterministic, and DuckDB/WASM-safe.",
+  "sections": [
+    {
+      "title": "0) Introduction: WHERE",
+      "description": "WHERE filters rows before aggregation. We'll cover comparisons, boolean logic, NULL handling, pattern matching, IN/NOT IN semantics, and common pitfalls.",
+      "examples": [
+        {
+          "name": "intro_where_overview",
+          "description": "WHERE keeps rows that satisfy a predicate. Prefer explicit comparisons and add ORDER BY in examples for determinism.",
+          "sql": "",
+          "nerd_notes": "Avoid wrapping columns in functions if you care about predicate pushdown (sargability). Use IS NULL/IS NOT NULL for NULL handling.",
+          "compat_examples": {
+            "postgres": "-- Portable WHERE syntax across engines",
+            "mysql": "-- Portable WHERE syntax across engines",
+            "oracle": "-- Portable WHERE syntax across engines"
+          }
+        }
+      ],
+      "narrative": "Start from simple predicates and compose. Use parentheses to make logic obvious, and beware NOT IN with NULLs.",
+      "nerd_notes": "Treat WHERE as your first line of defense: reduce data early, keep expressions simple, and stabilize outputs with ORDER BY in docs."
+    },
+    {
+      "title": "1. Setup: people table",
+      "examples": [
+        {
+          "name": "create_people",
+          "sql": "DROP TABLE IF EXISTS people; CREATE TABLE people (id INTEGER, name TEXT, age INTEGER, city TEXT); INSERT INTO people VALUES (1,'Alice',30,'NY'),(2,'Bob',NULL,'LA'),(3,'Carol',25,NULL);",
+          "description": "Create people: a short demo.",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+        }
+      ],
+      "narrative": "Create objects and small sample data used by subsequent examples. Keep these steps idempotent.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "1.5) Cheat Sheet: WHERE Essentials",
+      "description": "Four tiny, self-contained predicates using inline VALUES for deterministic outputs.",
+      "examples": [
+        {
+          "name": "cs_eq_filter_quick",
+          "description": "Equality filter with ORDER BY for determinism.",
+          "sql": "WITH t(id, city) AS (VALUES (1,'NY'),(2,'LA')) SELECT id, city FROM t WHERE city = 'NY' ORDER BY id;",
+          "nerd_notes": "Simple equality predicate. Add ORDER BY in examples to stabilize results.",
+          "compat_examples": {
+            "postgres": "-- Portable equality predicate",
+            "mysql": "-- Portable equality predicate",
+            "oracle": "-- Portable equality predicate"
+          }
+        },
+        {
+          "name": "cs_between_in_quick",
+          "description": "Combine BETWEEN (inclusive) and IN for concise filters.",
+          "sql": "WITH t(x) AS (VALUES (5),(10),(15)) SELECT x FROM t WHERE x BETWEEN 6 AND 15 AND x IN (10,15) ORDER BY x;",
+          "nerd_notes": "BETWEEN includes endpoints; IN is concise for small lists.",
+          "compat_examples": {
+            "postgres": "-- BETWEEN / IN portable",
+            "mysql": "-- BETWEEN / IN portable",
+            "oracle": "-- BETWEEN / IN portable"
+          }
+        },
+        {
+          "name": "cs_ci_like_quick",
+          "description": "Case-insensitive LIKE using LOWER().",
+          "sql": "WITH t(name) AS (VALUES ('Alice'),('bob')) SELECT name FROM t WHERE LOWER(name) LIKE 'a%' ORDER BY name;",
+          "nerd_notes": "Use LOWER() for portable case-insensitive matching; some engines have ILIKE.",
+          "compat_examples": {
+            "postgres": "-- ILIKE 'a%' is simpler",
+            "mysql": "-- Collation may already be case-insensitive",
+            "oracle": "-- Use LOWER(name) LIKE 'a%'"
+          }
+        },
+        {
+          "name": "cs_null_safe_coalesce_quick",
+          "description": "NULL checks and COALESCE for defaults.",
+          "sql": "WITH t(age) AS (VALUES (NULL),(25)) SELECT COALESCE(age,0) AS age_norm FROM t WHERE (age IS NULL OR age >= 20) ORDER BY age_norm;",
+          "nerd_notes": "Use IS NULL / IS NOT NULL for tests; COALESCE provides default values when needed.",
+          "compat_examples": {
+            "postgres": "-- Portable NULL checks and COALESCE",
+            "mysql": "-- Portable NULL checks and COALESCE",
+            "oracle": "-- NVL is Oracle-specific; COALESCE is portable"
+          }
+        }
+      ],
+      "narrative": "Copy/paste-ready WHERE patterns that don’t depend on prior setup.",
+      "nerd_notes": "Inline VALUES keep examples isolated and deterministic."
+    },
+    {
+      "title": "1.6) Pitfalls, Tips, and Q&A",
+      "description": "Common WHERE gotchas and best practices.",
+      "examples": [
+        {
+          "name": "pt_not_in_with_nulls",
+          "description": "NOT IN with NULLs can yield no rows; prefer NOT EXISTS for anti-joins.",
+          "sql": "",
+          "nerd_notes": "If the subquery returns a NULL, comparisons become UNKNOWN; NOT IN filters nothing."
+        },
+        {
+          "name": "pt_parentheses_precedence",
+          "description": "Always use parentheses to make AND/OR precedence explicit.",
+          "sql": "",
+          "nerd_notes": "(A AND B) OR C differs from A AND (B OR C); be explicit."
+        },
+        {
+          "name": "pt_like_case_sensitivity",
+          "description": "LIKE case sensitivity varies by engine/collation; use LOWER() for portable case-insensitive matches.",
+          "sql": "",
+          "nerd_notes": "Some engines offer ILIKE; prefer LOWER() for portability in docs."
+        },
+        {
+          "name": "pt_left_join_filtering",
+          "description": "Filtering LEFT JOINed rows in WHERE can turn it into an INNER join; move the predicate into the ON clause if you want to keep unmatched rows.",
+          "sql": "",
+          "nerd_notes": "Use ON for match conditions; use WHERE for post-join filters that may eliminate NULL-extended rows."
+        },
+        {
+          "name": "pt_sargability_functions_on_columns",
+          "description": "Avoid wrapping columns in functions in WHERE when possible; it can prevent predicate pushdown.",
+          "sql": "",
+          "nerd_notes": "Prefer rewriting LIKE 'A%' over LOWER(name) LIKE 'a%' when collation allows; otherwise accept the trade-off."
+        }
+      ],
+      "narrative": "Be explicit, beware NULL semantics, and keep predicates simple for both correctness and performance.",
+      "nerd_notes": "Document assumptions (collation, nullability) near predicates to avoid surprises."
+    },
+    {
+      "title": "2. Basic WHERE",
+      "examples": [
+        {
+          "name": "basic_where",
+          "sql": "SELECT * FROM people WHERE age >= 30 ORDER BY id;",
+          "description": "Question: how do we filter rows to those with age >= 30?",
+          "nerd_notes": "ORDER BY makes outputs deterministic for validation.",
+          "compat_examples": {
+            "postgres": "-- Portable: SELECT * FROM people WHERE age >= 30;",
+            "mysql": "-- Portable: SELECT * FROM people WHERE age >= 30;",
+            "oracle": "-- Portable: SELECT * FROM people WHERE age >= 30;"
+          }
+        },
+        {
+          "name": "basic_where_multiple_predicates",
+          "description": "Question: filter adults in NY using two predicates.",
+          "sql": "SELECT id, name, age, city FROM people WHERE age >= 18 AND city = 'NY' ORDER BY id;",
+          "nerd_notes": "Combine predicates to narrow results early.",
+          "compat_examples": {
+            "postgres": "-- Portable",
+            "mysql": "-- Portable",
+            "oracle": "-- Portable"
+          }
+        }
+      ],
+      "narrative": "Start with a simple comparison filter. WHERE keeps rows that satisfy the predicate.",
+      "nerd_notes": "Prefer explicit comparisons; avoid applying functions to columns when possible if you care about pushdown."
+    },
+    {
+      "title": "3. NULL-safe comparisons",
+      "examples": [
+        {
+          "name": "null_safe",
+          "sql": "SELECT * FROM people WHERE age IS NULL ORDER BY id; SELECT * FROM people WHERE city IS NOT NULL ORDER BY id;",
+          "description": "Question: how do we test for missing values? Use IS NULL / IS NOT NULL.",
+          "nerd_notes": "Avoid '= NULL' (invalid). Use IS NULL / IS NOT NULL.",
+          "compat_examples": {
+            "postgres": "-- Portable: IS NULL / IS NOT NULL",
+            "mysql": "-- Portable: IS NULL / IS NOT NULL",
+            "oracle": "-- Portable: IS NULL / IS NOT NULL"
+          }
+        },
+        {
+          "name": "null_compare_pitfall",
+          "description": "Question: why does age = NULL match nothing?",
+          "sql": "SELECT * FROM people WHERE age = NULL ORDER BY id;",
+          "nerd_notes": "Demonstrates invalid NULL comparison; use IS NULL instead.",
+          "compat_examples": {
+            "postgres": "-- Same behavior; age = NULL is never true",
+            "mysql": "-- Same behavior; use IS NULL",
+            "oracle": "-- Same behavior; use IS NULL"
+          }
+        }
+      ],
+      "narrative": "NULLs require IS NULL / IS NOT NULL — comparisons like age = NULL never match.",
+      "nerd_notes": "COALESCE provides a fallback when you want to treat NULLs as defaults."
+    },
+    {
+      "title": "4. LIKE and REGEXP",
+      "examples": [
+        {
+          "name": "like_regexp",
+          "sql": "SELECT * FROM people WHERE name LIKE 'A%' ORDER BY id; SELECT * FROM people WHERE REGEXP_MATCHES(name, '^A') ORDER BY id;",
+          "description": "Question: how do we match simple patterns (LIKE) and regular expressions (REGEXP_MATCHES)?",
+          "nerd_notes": "Use LOWER(name) and lowercase patterns for case-insensitive matching across engines.",
+          "compat_examples": {
+            "postgres": "-- Use ILIKE for case-insensitive LIKE; regex: name ~ '^A'",
+            "mysql": "-- LIKE is case-insensitive by collation; regex: name REGEXP '^A'",
+            "oracle": "-- Use REGEXP_LIKE(name,'^A'); LIKE uses case by NLS settings"
+          }
+        },
+        {
+          "name": "case_insensitive_like",
+          "description": "Question: match names starting with 'a' regardless of case.",
+          "sql": "SELECT * FROM people WHERE LOWER(name) LIKE 'a%' ORDER BY id;",
+          "nerd_notes": "Portable case-insensitive LIKE via LOWER().",
+          "compat_examples": {
+            "postgres": "-- Use ILIKE 'a%' for simplicity",
+            "mysql": "-- Collation may make LIKE case-insensitive already",
+            "oracle": "-- Use LOWER(name) LIKE 'a%'"
+          }
+        }
+      ],
+      "narrative": "LIKE uses % and _; regex is more powerful but heavier. Prefer non-leading wildcards for performance.",
+      "nerd_notes": "DuckDB supports REGEXP_MATCHES; use LOWER(...) for case-insensitive behavior."
+    },
+    {
+      "title": "5. Combining conditions",
+      "examples": [
+        {
+          "name": "and_or",
+          "sql": "SELECT * FROM people WHERE (age > 20 AND city = 'NY') OR age IS NULL ORDER BY id;",
+          "description": "Question: how do we combine AND/OR to express complex logic?",
+          "nerd_notes": "Use parentheses to make precedence explicit and avoid surprises.",
+          "compat_examples": {
+            "postgres": "-- Portable boolean logic",
+            "mysql": "-- Portable boolean logic",
+            "oracle": "-- Portable boolean logic"
+          }
+        },
+        {
+          "name": "precedence_demo",
+          "description": "Question: how do parentheses change logic?",
+          "sql": "SELECT * FROM people WHERE age > 20 AND (city = 'NY' OR city = 'LA') ORDER BY id;",
+          "nerd_notes": "Parentheses make intent explicit and avoid precedence bugs.",
+          "compat_examples": {
+            "postgres": "-- Portable",
+            "mysql": "-- Portable",
+            "oracle": "-- Portable"
+          }
+        }
+      ],
+      "narrative": "Combine predicates with AND/OR; group with parentheses."
+    },
+    {
+      "title": "6. Cleanup",
+      "examples": [
+        {
+          "name": "cleanup",
+          "sql": "DROP TABLE IF EXISTS people;",
+          "description": "Cleanup: a short demo.",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+        }
+      ],
+      "narrative": "Tear down objects created in this lesson so the examples are repeatable and safe to re-run.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "WHERE Clause - Complete Operators Guide",
+      "narrative": "Comprehensive operators: comparison operators, logical operators, NULL checks, pattern matching, and set membership (IN / NOT IN). Use parentheses to make complex boolean logic explicit.",
+      "nerd_notes": "Nerd note: predicate order matters for short-circuiting and performance; move cheap, selective predicates earlier and avoid functions on indexed columns where possible.",
+      "examples": [
+        {
+          "name": "comparison_and_logic",
+          "sql": "-- self-contained comparison example using inline data\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'Bob',NULL,'LA'),(3,'Carol',25,NULL)) SELECT * FROM people WHERE age >= 25 AND city = 'NY' ORDER BY id;",
+          "description": "Combine comparison operators with AND/OR to filter rows.",
+          "nerd_notes": "Use parentheses to avoid ambiguity: (A AND B) OR C is not the same as A AND (B OR C)."
+        },
+        {
+          "name": "in_and_between_examples",
+          "sql": "-- self-contained IN and BETWEEN examples\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'Bob',NULL,'LA'),(3,'Carol',25,NULL)) SELECT * FROM people WHERE id IN (1,3) ORDER BY id;\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'Bob',NULL,'LA'),(3,'Carol',25,NULL)) SELECT * FROM people WHERE age BETWEEN 20 AND 40 ORDER BY id;",
+          "description": "IN and BETWEEN examples for membership and range checks.",
+          "nerd_notes": "IN with a subquery can be expensive for large sets; EXISTS or JOINs are alternatives.",
+          "compat_examples": {
+            "postgres": "-- Portable: IN / BETWEEN",
+            "mysql": "-- Portable: IN / BETWEEN",
+            "oracle": "-- Portable: IN / BETWEEN"
+          }
+        },
+        {
+          "name": "not_between_example",
+          "description": "Question: exclude ages in [20, 30].",
+          "sql": "WITH people(id, name, age, city) AS (VALUES (1,'A',18,'X'),(2,'B',22,'Y'),(3,'C',35,'Z')) SELECT * FROM people WHERE age NOT BETWEEN 20 AND 30 ORDER BY id;",
+          "nerd_notes": "NOT BETWEEN excludes endpoints as well (since BETWEEN is inclusive).",
+          "compat_examples": {
+            "postgres": "-- Portable",
+            "mysql": "-- Portable",
+            "oracle": "-- Portable"
+          }
+        }
+      ]
+    },
+    {
+      "title": "1. LIKE Pattern Matching",
+      "narrative": "LIKE uses simple wildcards (% and _) and is portable; regular expressions are more powerful but costlier. Use lower() to do case-insensitive matching consistently.",
+      "nerd_notes": "Nerd note: avoid leading wildcards if you want to use index-like acceleration; use full-text search or trigram indexes for advanced use cases.",
+      "examples": [
+        {
+          "name": "like_examples",
+          "sql": "-- self-contained LIKE examples\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'bob',28,'LA')) SELECT * FROM people WHERE name LIKE 'A%' ORDER BY id;\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'bob',28,'LA')) SELECT * FROM people WHERE LOWER(name) LIKE 'a%' ORDER BY id;",
+          "description": "Basic LIKE examples and case-insensitive pattern matching.",
+          "nerd_notes": "Use LOWER() for portable case-insensitive searches.",
+          "compat_examples": {
+            "postgres": "-- ILIKE for case-insensitive LIKE",
+            "mysql": "-- Case-insensitivity depends on collation; use LOWER() for portability",
+            "oracle": "-- Use NLS settings or LOWER() for case-insensitive"
+          }
+        },
+        {
+          "name": "like_contains_demo",
+          "description": "Question: find names containing 'li'.",
+          "sql": "WITH people(id, name) AS (VALUES (1,'Alice'),(2,'Liam')) SELECT * FROM people WHERE name LIKE '%li%' ORDER BY id;",
+          "nerd_notes": "Leading wildcard disables index-like acceleration (where applicable).",
+          "compat_examples": {
+            "postgres": "-- Portable",
+            "mysql": "-- Portable",
+            "oracle": "-- Portable"
+          }
+        }
+      ]
+    },
+    {
+      "title": "2. IN and NOT IN",
+      "narrative": "IN allows concise membership checks; NOT IN can be tricky with NULLs (a NOT IN (subquery) may return no rows if subquery yields NULL). Prefer NOT EXISTS for safe anti-joins.",
+      "nerd_notes": "Nerd note: use EXISTS/NOT EXISTS when the subquery returns many rows or when NULL semantics matter.",
+      "examples": [
+        {
+          "name": "in_example",
+          "sql": "-- self-contained IN example with CTE\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'Bob',NULL,'LA'),(3,'Carol',25,NULL)) SELECT * FROM people WHERE id IN (SELECT id FROM people WHERE age >= 30) ORDER BY id;",
+          "description": "IN with an inline list or subquery.",
+          "nerd_notes": "For small literal lists IN is fine; for subqueries consider performance and NULL semantics.",
+          "compat_examples": {
+            "postgres": "-- Portable: IN with subquery",
+            "mysql": "-- Portable: IN with subquery",
+            "oracle": "-- Portable: IN with subquery"
+          }
+        },
+        {
+          "name": "not_in_vs_not_exists",
+          "sql": "-- self-contained NOT IN vs NOT EXISTS\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'Bob',NULL,'LA'),(3,'Carol',25,NULL)) SELECT * FROM people p WHERE p.id NOT IN (SELECT id FROM people WHERE age > 100) ORDER BY id;\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'Bob',NULL,'LA'),(3,'Carol',25,NULL)) SELECT * FROM people p WHERE NOT EXISTS (SELECT 1 FROM people q WHERE q.id = p.id AND q.age > 100) ORDER BY id;",
+          "description": "Demonstrate NOT IN vs NOT EXISTS semantics.",
+          "nerd_notes": "When in doubt prefer NOT EXISTS to avoid NULL surprises.",
+          "compat_examples": {
+            "postgres": "-- NOT IN can be NULL-tricky; prefer NOT EXISTS for anti-joins",
+            "mysql": "-- Same caution with NULLs using NOT IN",
+            "oracle": "-- NOT IN with NULL yields no rows; prefer NOT EXISTS"
+          }
+        },
+        {
+          "name": "not_in_null_trap",
+          "description": "Question: show NOT IN returning zero rows due to NULL in subquery.",
+          "sql": "WITH ids(id) AS (VALUES (1),(NULL)), people(id) AS (VALUES (1),(2)) SELECT * FROM people WHERE id NOT IN (SELECT id FROM ids) ORDER BY id;",
+          "nerd_notes": "If subquery yields NULL, NOT IN is unknown for all rows; prefer NOT EXISTS.",
+          "compat_examples": {
+            "postgres": "-- Same NULL semantics",
+            "mysql": "-- Same NULL semantics",
+            "oracle": "-- Same NULL semantics"
+          }
+        }
+      ]
+    },
+    {
+      "title": "3. BETWEEN Range Conditions",
+      "narrative": "BETWEEN is inclusive and is a readable way to express ranges; be explicit about bounds when timezone/datetime types are involved.",
+      "nerd_notes": "Nerd note: for floats use careful rounding; for dates prefer DATE_TRUNC to normalize before range filtering.",
+      "examples": [
+        {
+          "name": "between_example",
+          "sql": "-- self-contained BETWEEN example\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'Bob',19,'LA'),(3,'Carol',40,NULL)) SELECT * FROM people WHERE age BETWEEN 20 AND 40 ORDER BY id;",
+          "description": "Simple BETWEEN example.",
+          "nerd_notes": "BETWEEN includes both endpoints."
+        }
+      ]
+    },
+    {
+      "title": "4. IS NULL and IS NOT NULL",
+      "narrative": "IS NULL and IS NOT NULL are explicit checks for missing data. Avoid '= NULL' which is invalid — use IS NULL.",
+      "nerd_notes": "Nerd note: NULLs propagate in expressions; use COALESCE to provide defaults when appropriate.",
+      "examples": [
+        {
+          "name": "is_null_examples",
+          "sql": "-- self-contained IS NULL examples\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'Bob',NULL,'LA')) SELECT * FROM people WHERE age IS NULL ORDER BY id;\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'Bob',NULL,'LA')) SELECT * FROM people WHERE age IS NOT NULL ORDER BY id;",
+          "description": "IS NULL and IS NOT NULL usage examples.",
+          "nerd_notes": "COALESCE(age, 0) can be used when treating NULL as a default."
+        }
+      ]
+    },
+    {
+      "title": "WHERE vs HAVING - Key Differences",
+      "narrative": "WHERE filters rows before aggregation; HAVING filters groups after aggregation. Use WHERE to reduce rows early and HAVING to filter aggregated results.",
+      "nerd_notes": "Nerd note: prefer WHERE where possible for performance; HAVING is used to apply predicates to aggregate values.",
+      "examples": [
+        {
+          "name": "where_vs_having_example",
+          "sql": "-- self-contained WHERE vs HAVING example\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'Bob',30,'NY'),(3,'Carol',25,'LA')) SELECT city, COUNT(*) AS cnt FROM people WHERE age IS NOT NULL GROUP BY city HAVING COUNT(*) > 1 ORDER BY city;",
+          "description": "Example contrasting WHERE and HAVING.",
+          "nerd_notes": "This returns cities with more than one non-null-aged person.",
+          "compat_examples": {
+            "postgres": "-- Portable: WHERE before aggregation, HAVING after",
+            "mysql": "-- Portable: WHERE vs HAVING",
+            "oracle": "-- Portable: WHERE vs HAVING"
+          }
+        },
+        {
+          "name": "date_between_caution",
+          "description": "Question: inclusive date range filter for a month.",
+          "sql": "WITH t(d) AS (VALUES (DATE '2024-01-31'),(DATE '2024-02-01'),(DATE '2024-02-28')) SELECT * FROM t WHERE d BETWEEN DATE '2024-02-01' AND DATE '2024-02-28' ORDER BY d;",
+          "nerd_notes": "BETWEEN is inclusive; for timestamps, prefer half-open [start, next_month) using < next_month.",
+          "compat_examples": {
+            "postgres": "-- Portable",
+            "mysql": "-- Portable",
+            "oracle": "-- Portable"
+          }
+        },
+        {
+          "name": "coalesce_default_demo",
+          "description": "Question: treat NULL ages as 0 for filtering.",
+          "sql": "WITH people(id, age) AS (VALUES (1,NULL),(2,25)) SELECT * FROM people WHERE COALESCE(age,0) = 0 ORDER BY id;",
+          "nerd_notes": "Be careful: COALESCE in WHERE may prevent pushdown; use only when semantically needed.",
+          "compat_examples": {
+            "postgres": "-- Portable",
+            "mysql": "-- Portable",
+            "oracle": "-- Portable"
+          }
+        }
+      ]
+    },
+    {
+      "title": "WHERE clause usage in practice",
+      "narrative": "Ask a concrete question, then write the predicate. Keep it readable and deterministic.",
+      "nerd_notes": "Use parentheses for clarity; add ORDER BY for stable results in demos.",
+      "examples": [
+        {
+          "name": "where_usage_examples",
+          "description": "Question: find people in NY with age >= 25, and those named starting with 'A'.",
+          "sql": "WITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'Bob',22,'LA'),(3,'Ann',26,'NY')) SELECT * FROM people WHERE city = 'NY' AND age >= 25 ORDER BY id;\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'Bob',22,'LA'),(3,'Ann',26,'NY')) SELECT * FROM people WHERE name LIKE 'A%' ORDER BY id;",
+          "nerd_notes": "Two common WHERE forms: comparisons and LIKE."
+        }
+      ]
+    },
+    {
+      "title": "HAVING clause usage in practice",
+  "narrative": "Use HAVING to filter on aggregates like count > 1 after GROUP BY.",
+      "nerd_notes": "WHERE reduces rows before aggregation; HAVING filters groups after.",
+      "examples": [
+        {
+          "name": "having_usage_example",
+          "description": "Question: which cities have at least 2 people aged 25+?",
+          "sql": "WITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'Bob',22,'NY'),(3,'Ann',26,'NY'),(4,'Cara',28,'LA')) SELECT city, COUNT(*) AS cnt FROM people WHERE age >= 25 GROUP BY city HAVING COUNT(*) >= 2 ORDER BY city;",
+          "nerd_notes": "Classic HAVING pattern: filter by aggregate predicate.",
+          "compat_examples": {
+            "postgres": "-- Portable HAVING example",
+            "mysql": "-- Portable HAVING example",
+            "oracle": "-- Portable HAVING example"
+          }
+        },
+        {
+          "name": "safe_numeric_filter",
+          "description": "Question: avoid errors when filtering possibly non-numeric text.",
+          "sql": "WITH t(x) AS (VALUES ('10'),('abc')) SELECT * FROM t WHERE CASE WHEN REGEXP_MATCHES(x,'^[0-9]+$') THEN CAST(x AS INTEGER) ELSE NULL END > 5 ORDER BY x;",
+          "nerd_notes": "Guard casts with regex before comparing numerically.",
+          "compat_examples": {
+            "postgres": "-- Use CASE/regex similarly",
+            "mysql": "-- Use REGEXP_LIKE or RLIKE; CAST under guard",
+            "oracle": "-- Use REGEXP_LIKE and TO_NUMBER under CASE"
+          }
+        },
+        {
+          "name": "having_avg_demo",
+          "description": "Question: cities with average age >= 26.",
+          "sql": "WITH people(id, age, city) AS (VALUES (1,30,'NY'),(2,22,'NY'),(3,26,'LA'),(4,40,'LA')) SELECT city, AVG(age) AS avg_age FROM people GROUP BY city HAVING AVG(age) >= 26 ORDER BY city;",
+          "nerd_notes": "HAVING filters by aggregate expressions.",
+          "compat_examples": {
+            "postgres": "-- Portable",
+            "mysql": "-- Portable",
+            "oracle": "-- Portable"
+          }
+        }
+      ]
+    },
+    {
+      "title": "Advanced WHERE Clause Techniques",
+      "narrative": "Advanced patterns: predicate pushdown, expression indexes, and using windowed subqueries for complex filters. Break large predicates into named CTEs for clarity.",
+      "nerd_notes": "Nerd note: refactor complex WHERE logic into CTEs for readability and maintainability; DuckDB will inline where appropriate.",
+      "examples": [
+        {
+          "name": "cte_predicate_example",
+          "sql": "-- self-contained CTE predicate example\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'Bob',24,'LA'),(3,'Carol',28,'NY')), recent AS (SELECT * FROM people WHERE age >= 25) SELECT * FROM recent WHERE city = 'NY' ORDER BY id;",
+          "description": "Use CTEs to structure complex predicate logic.",
+          "nerd_notes": "CTEs improve readability; performance depends on engine optimization."
+        },
+        {
+          "name": "anti_join_exists",
+          "description": "Question: filter rows with no matching child (NOT EXISTS).",
+          "sql": "WITH parents(id) AS (VALUES (1),(2)), children(pid) AS (VALUES (2)) SELECT * FROM parents p WHERE NOT EXISTS (SELECT 1 FROM children c WHERE c.pid = p.id) ORDER BY id;",
+          "nerd_notes": "NOT EXISTS is a safe anti-join pattern and avoids NOT IN NULL pitfalls.",
+          "compat_examples": {
+            "postgres": "-- Portable",
+            "mysql": "-- Portable",
+            "oracle": "-- Portable"
+          }
+        }
+      ]
+    },
+    {
+      "title": "1. Advanced Pattern Matching and Regular Expressions",
+      "narrative": "Regular expressions provide powerful matching; use REGEXP_MATCHES or the engine-specific regex functions. Prefer compiled regex in client code when performance matters.",
+      "nerd_notes": "Nerd note: complex regexes can be expensive; prefer simpler LIKE patterns where possible.",
+      "examples": [
+        {
+          "name": "regex_example",
+          "sql": "-- self-contained regex example\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'bob',28,'LA')) SELECT * FROM people WHERE REGEXP_MATCHES(name, '^[A-Z][a-z]+$') ORDER BY id;",
+          "description": "Regular expression demo to match capitalized names.",
+          "nerd_notes": "This filters names that start with a capital letter and contain only letters."
+        },
+        {
+          "name": "regex_email_demo",
+          "description": "Question: select rows that look like basic emails.",
+          "sql": "WITH t(email) AS (VALUES ('a@b.com'),('bad@'),('x@y')) SELECT * FROM t WHERE REGEXP_MATCHES(email,'^[^@]+@[^@]+\\.[^@]+$') ORDER BY email;",
+          "nerd_notes": "Simple regex for demo; real-world email validation is more complex.",
+          "compat_examples": {
+            "postgres": "-- Use ~ operator or REGEXP_MATCHES",
+            "mysql": "-- Use REGEXP",
+            "oracle": "-- Use REGEXP_LIKE"
+          }
+        }
+      ]
+    },
+    {
+      "title": "2. Complex Conditional Logic with CASE in WHERE Clauses",
+      "narrative": "Use CASE inside predicates sparingly — prefer to compute classification columns in a subquery/CTE and then filter by them for clarity.",
+      "nerd_notes": "Nerd note: CASE in WHERE can be hard to read; prefer explicit expressions when possible.",
+      "examples": [
+        {
+          "name": "case_in_where_example",
+          "sql": "-- self-contained CASE in WHERE example\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',NULL,'NY'),(2,'Bob',28,'LA')) SELECT * FROM people WHERE (CASE WHEN age IS NULL THEN 0 WHEN age < 30 THEN 1 ELSE 2 END) = 1 ORDER BY id;",
+          "description": "Example using CASE within a WHERE predicate.",
+          "nerd_notes": "Prefer computing the CASE in a CTE for readability."
+        },
+        {
+          "name": "precompute_then_filter",
+          "description": "Question: compute a flag in a CTE, then filter by it.",
+          "sql": "WITH people(id, age) AS (VALUES (1, NULL),(2,28),(3,35)), flags AS (SELECT id, CASE WHEN age IS NULL THEN 'missing' WHEN age < 30 THEN 'young' ELSE 'adult' END AS bucket FROM people) SELECT * FROM flags WHERE bucket = 'adult' ORDER BY id;",
+          "nerd_notes": "Improves readability versus embedding CASE in WHERE.",
+          "compat_examples": {
+            "postgres": "-- Portable",
+            "mysql": "-- Portable",
+            "oracle": "-- Portable"
+          }
+        }
+      ]
+    },
+    {
+      "title": "3. Advanced Filtering with Subqueries and Window Functions",
+      "narrative": "Use window functions and subqueries to express advanced filters such as top-N per group, deduplication, or running-window thresholds.",
+      "nerd_notes": "Nerd note: window functions can avoid joins for certain 'top N per group' patterns and are efficient in columnar engines like DuckDB.",
+      "examples": [
+        {
+          "name": "top_n_per_group",
+          "sql": "-- self-contained top-N per group example\nWITH people(id, name, age, city) AS (VALUES (1,'Alice',30,'NY'),(2,'Bob',28,'NY'),(3,'Carol',25,'LA')) SELECT id, name, age, city FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY city ORDER BY age DESC) AS rn FROM people) t WHERE rn = 1 ORDER BY city, id;",
+          "description": "Top-N per group using window functions.",
+          "nerd_notes": "This returns the oldest person per city."
+        },
+        {
+          "name": "dedupe_keep_latest",
+          "description": "Question: keep latest row per id by timestamp.",
+          "sql": "WITH t(id, ts, val) AS (VALUES (1, TIMESTAMP '2024-01-01 10:00:00', 'a'),(1, TIMESTAMP '2024-01-02 09:00:00','b'),(2, TIMESTAMP '2024-01-01 11:00:00','x')) SELECT id, ts, val FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY ts DESC) rn FROM t) s WHERE rn = 1 ORDER BY id;",
+          "nerd_notes": "ROW_NUMBER-based dedup is a common filtering pattern.",
+          "compat_examples": {
+            "postgres": "-- Portable",
+            "mysql": "-- Portable (8.0+ window functions)",
+            "oracle": "-- Portable"
+          }
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+      "id": "basic-select",
+      "prompt": "Show the first 5 rows from `people`.",
+      "answer_sql": "SELECT * FROM people LIMIT 5;"
+    },
+    {
+      "id": "aggregate-1",
+      "prompt": "Count rows grouped by `id`.",
+      "answer_sql": "SELECT id, COUNT(*) AS cnt FROM people GROUP BY id ORDER BY cnt DESC;"
+    },
+    {
+      "id": "filter-top",
+      "prompt": "Select the top 10 rows where `id` is positive (if numeric) or not null otherwise.",
+      "answer_sql": "SELECT * FROM people WHERE id IS NOT NULL AND id > 0 LIMIT 10;"
+    }
+  ]
+}

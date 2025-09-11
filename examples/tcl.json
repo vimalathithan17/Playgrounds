@@ -1,0 +1,288 @@
+{
+  "title": "Transaction Control (TCL)",
+  "description": "Question-first guide to transactions in DuckDB: BEGIN/COMMIT/ROLLBACK and SAVEPOINT patterns. All examples are self-contained, idempotent, deterministic (ORDER BY where relevant), and DuckDB/WASM-safe.",
+  "sections": [
+    {
+      "title": "0) Introduction: Transactions (TCL)",
+      "description": "What are transactions and how do BEGIN/COMMIT/ROLLBACK work in DuckDB?",
+      "examples": [
+        {
+          "name": "intro_tcl_overview",
+          "sql": "",
+          "description": "Overview: group multiple statements so they succeed or fail together. Use BEGIN for a unit of work, COMMIT to persist, ROLLBACK to undo.",
+          "nerd_notes": "Deterministic examples add ORDER BY; keep snippets idempotent; avoid long-lived transactions in interactive docs."
+        }
+      ],
+      "narrative": "Transactions ensure atomicity across multiple statements. We'll show quick commit/rollback patterns and safe alternatives to savepoints.",
+      "nerd_notes": "Some tools autocommit by default—wrap related statements in BEGIN/COMMIT explicitly when teaching or scripting."
+    },
+    {
+      "title": "1.5) Cheat Sheet: Transaction Essentials",
+      "description": "Four compact, self-contained patterns for commit, rollback, atomic updates, and staged apply.",
+      "examples": [
+        {
+          "name": "cs_begin_commit_quick",
+          "description": "BEGIN + COMMIT around inserts into a TEMP table; verify count.",
+          "sql": "CREATE TEMP TABLE cs_tx_demo(id INTEGER);\nBEGIN TRANSACTION;\nINSERT INTO cs_tx_demo VALUES (1),(2);\nCOMMIT;\nSELECT COUNT(*) AS cnt FROM cs_tx_demo;\nDROP TABLE IF EXISTS cs_tx_demo;",
+          "nerd_notes": "TEMP confines scope; cleanup at the end keeps the environment tidy."
+        },
+        {
+          "name": "cs_rollback_quick",
+          "description": "Insert within a transaction, then ROLLBACK; count returns 0.",
+          "sql": "CREATE TEMP TABLE cs_tx_rb(id INTEGER);\nBEGIN TRANSACTION;\nINSERT INTO cs_tx_rb VALUES (1),(2);\nROLLBACK;\nSELECT COUNT(*) AS cnt FROM cs_tx_rb;\nDROP TABLE IF EXISTS cs_tx_rb;",
+          "nerd_notes": "Create the table outside the transaction so it remains to observe the rollback effect."
+        },
+        {
+          "name": "cs_atomic_update_quick",
+          "description": "Two updates as one atomic change, then COMMIT; verify final values.",
+          "sql": "CREATE TEMP TABLE cs_tx_upd(id INTEGER, qty INTEGER);\nINSERT INTO cs_tx_upd VALUES (1,10),(2,5);\nBEGIN TRANSACTION;\nUPDATE cs_tx_upd SET qty = qty + 1 WHERE id = 1;\nUPDATE cs_tx_upd SET qty = qty - 1 WHERE id = 2;\nCOMMIT;\nSELECT id, qty FROM cs_tx_upd ORDER BY id;\nDROP TABLE IF EXISTS cs_tx_upd;",
+          "nerd_notes": "Use ORDER BY for deterministic output in examples."
+        },
+        {
+          "name": "cs_stage_apply_quick",
+          "description": "Emulate savepoint-like control by staging deltas and applying only approved changes before COMMIT.",
+          "sql": "CREATE TEMP TABLE cs_tx_target(id INTEGER, qty INTEGER);\nCREATE TEMP TABLE cs_tx_stage(id INTEGER, delta INTEGER);\nINSERT INTO cs_tx_target VALUES (1, 10);\nBEGIN TRANSACTION;\nINSERT INTO cs_tx_stage VALUES (1, 3), (2, 5);\n-- Apply only id=1 delta from stage\nUPDATE cs_tx_target t\nSET qty = qty + (SELECT delta FROM cs_tx_stage s WHERE s.id = t.id AND s.id = 1)\nWHERE EXISTS (SELECT 1 FROM cs_tx_stage s WHERE s.id = t.id AND s.id = 1);\nCOMMIT;\nSELECT id, qty FROM cs_tx_target ORDER BY id;\nDROP TABLE IF EXISTS cs_tx_stage;\nDROP TABLE IF EXISTS cs_tx_target;",
+          "nerd_notes": "Staging enables selective apply without true SAVEPOINT support."
+        }
+      ],
+      "narrative": "Grab-and-go patterns for common transaction tasks.",
+      "nerd_notes": "Keep snippets self-contained: create TEMP objects, demonstrate, then clean up."
+    },
+    {
+      "title": "1.6) Pitfalls, Tips, and Q&A",
+      "description": "Common transaction gotchas and best practices in DuckDB.",
+      "examples": [
+        {
+          "name": "pitfall_autocommit_confusion",
+          "sql": "",
+          "description": "Autocommit UIs commit each statement; without BEGIN, multi-step changes aren’t atomic.",
+          "nerd_notes": "Wrap related statements with BEGIN/COMMIT to form a reliable unit of work."
+        },
+        {
+          "name": "tip_group_related_changes",
+          "sql": "",
+          "description": "Group logically-related INSERT/UPDATE/DELETE statements into a single transaction.",
+          "nerd_notes": "Improves consistency and reduces partial updates in case of failures."
+        },
+        {
+          "name": "question_savepoints_in_duckdb",
+          "sql": "",
+          "description": "Does DuckDB support SAVEPOINT?",
+          "nerd_notes": "Not yet; emulate partial rollback by staging or inverse operations before COMMIT."
+        },
+        {
+          "name": "tricky_long_transactions",
+          "sql": "",
+          "description": "Long transactions can hold resources and complicate concurrency in other engines.",
+          "nerd_notes": "In notebooks/docs, prefer short, focused transactions and deterministic outputs."
+        },
+        {
+          "name": "fundamental_idempotent_ddl_dml",
+          "sql": "",
+          "description": "Aim for idempotent DDL/DML in examples so they can be safely re-run.",
+          "nerd_notes": "Use DROP IF EXISTS and stable ORDER BY; avoid relying on time-dependent data."
+        }
+      ],
+      "narrative": "Explicit transactions, short lifetimes, and staging patterns keep examples safe and predictable.",
+      "nerd_notes": "Prefer deterministic demo data; clean up objects you create inside the snippet."
+    },
+    {
+      "title": "1. Setup: a tiny accounts table",
+      "description": "How do we create a small, repeatable accounts table we can safely re-run?",
+      "examples": [
+        {
+          "name": "create_accounts",
+          "sql": "DROP TABLE IF EXISTS accounts;\nCREATE TABLE accounts (\n  id INTEGER,\n  balance DOUBLE\n);\nINSERT INTO accounts VALUES (1,100.0),(2,50.0);\nSELECT id, balance FROM accounts ORDER BY id;",
+          "description": "We need a simple accounts table to demonstrate transfers and rollbacks — let's seed two rows with known balances.",
+          "nerd_notes": "Idempotent setup keeps lessons repeatable. For money, consider DECIMAL instead of DOUBLE; add NOT NULL and CHECK constraints as needed.",
+          "compat_examples": {
+            "postgres": "-- PostgreSQL: identical DDL works; prefer NUMERIC for currency\n-- CREATE TABLE accounts (id INT, balance NUMERIC(12,2));",
+            "mysql": "-- MySQL: identical DDL works; prefer DECIMAL for currency\n-- CREATE TABLE accounts (id INT, balance DECIMAL(12,2));",
+            "oracle": "-- Oracle: use NUMBER/DECIMAL types as appropriate\n-- CREATE TABLE accounts (id NUMBER, balance NUMBER(12,2));"
+          }
+        }
+      ],
+      "narrative": "We start with a tiny accounts table. Using DROP IF EXISTS + CREATE + INSERT ensures anyone can reset to a known state."
+    },
+    {
+      "title": "2. Transfer with ROLLBACK",
+      "description": "How do we make multiple changes and then undo them as a unit?",
+      "examples": [
+        {
+          "name": "transfer_with_rollback",
+          "sql": "-- Begin an explicit transaction\nBEGIN TRANSACTION;\n\n-- Move 30 from id=1 to id=2\nUPDATE accounts SET balance = balance - 30 WHERE id = 1;\nUPDATE accounts SET balance = balance + 30 WHERE id = 2;\n\n-- Check intermediate balances (visible in this transaction)\nSELECT id, balance FROM accounts ORDER BY id;\n\n-- Decide to undo the whole operation\nROLLBACK;\n\n-- After rollback, balances are restored\nSELECT id, balance FROM accounts ORDER BY id;",
+          "description": "We simulate a transfer, inspect results, then ROLLBACK to revert all changes made in the transaction.",
+          "nerd_notes": "A transaction groups statements so they succeed or fail together. In UIs that autocommit, explicitly start a transaction before multi-step operations.",
+          "compat_examples": {
+            "postgres": "-- Postgres: use BEGIN ... ROLLBACK\n-- BEGIN; UPDATE accounts SET balance = balance - 30 WHERE id=1; UPDATE accounts SET balance = balance + 30 WHERE id=2; ROLLBACK;",
+            "mysql": "-- MySQL: START TRANSACTION ... ROLLBACK (or BEGIN)\n-- START TRANSACTION; UPDATE accounts SET balance = balance - 30 WHERE id=1; UPDATE accounts SET balance = balance + 30 WHERE id=2; ROLLBACK;",
+            "oracle": "-- Oracle: autocommit is typically off in SQL*Plus/SQLcl; use ROLLBACK to undo\n-- UPDATE accounts SET balance = balance - 30 WHERE id=1; UPDATE accounts SET balance = balance + 30 WHERE id=2; ROLLBACK;"
+          }
+        }
+      ],
+      "narrative": "Transactions let you treat multiple statements as one unit of work. If any step is wrong, ROLLBACK reverts everything in that unit."
+    },
+    {
+      "title": "3. Transfer with COMMIT",
+      "description": "How do we persist a multi-statement change atomically?",
+      "examples": [
+        {
+          "name": "transfer_with_commit",
+          "sql": "-- Start a transaction, perform a small transfer, and commit\nBEGIN TRANSACTION;\nUPDATE accounts SET balance = balance - 10 WHERE id = 1;\nUPDATE accounts SET balance = balance + 10 WHERE id = 2;\nCOMMIT;\n\n-- Committed balances\nSELECT id, balance FROM accounts ORDER BY id;",
+          "description": "We run two updates and COMMIT to make the change durable.",
+          "nerd_notes": "If your client autocommits every statement, wrap related statements with BEGIN/COMMIT explicitly to ensure atomicity.",
+          "compat_examples": {
+            "postgres": "-- Postgres: BEGIN ... COMMIT\n-- BEGIN; UPDATE accounts ...; UPDATE accounts ...; COMMIT;",
+            "mysql": "-- MySQL: START TRANSACTION ... COMMIT\n-- START TRANSACTION; UPDATE accounts ...; UPDATE accounts ...; COMMIT;",
+            "oracle": "-- Oracle: use COMMIT to persist changes\n-- UPDATE accounts ...; UPDATE accounts ...; COMMIT;"
+          }
+        }
+      ],
+      "narrative": "COMMIT seals the transaction—either all changes are saved, or none (if you ROLLBACK instead)."
+    },
+    {
+      "title": "4. Partial undo pattern (no SAVEPOINT in DuckDB)",
+      "description": "How can we undo just part of a transaction when SAVEPOINT isn't available?",
+      "examples": [
+        {
+          "name": "partial_undo_without_savepoint",
+          "sql": "-- DuckDB currently doesn't support SAVEPOINT; emulate partial undo with inverse updates\nBEGIN TRANSACTION;\n\n-- Step 1: debit 5 from id=1\nUPDATE accounts SET balance = balance - 5 WHERE id = 1;\n\n-- Step 2: credit 5 to id=2\nUPDATE accounts SET balance = balance + 5 WHERE id = 2;\n\n-- Decide to undo Step 2 only: apply the inverse\nUPDATE accounts SET balance = balance - 5 WHERE id = 2;\n\n-- Commit with only Step 1 kept\nCOMMIT;\n\n-- Final balances reflect Step 1 only\nSELECT id, balance FROM accounts ORDER BY id;",
+          "description": "We emulate a partial rollback by applying the inverse of the undesired step before COMMIT.",
+          "nerd_notes": "For complex workflows, stage intended changes in temporary tables and apply only the approved subset before COMMIT.",
+          "compat_examples": {
+            "postgres": "-- Postgres supports SAVEPOINT if you prefer real partial rollback\n-- BEGIN; UPDATE ...; SAVEPOINT s; UPDATE ...; ROLLBACK TO SAVEPOINT s; COMMIT;",
+            "mysql": "-- MySQL (InnoDB) supports SAVEPOINT\n-- START TRANSACTION; UPDATE ...; SAVEPOINT s; UPDATE ...; ROLLBACK TO SAVEPOINT s; COMMIT;",
+            "oracle": "-- Oracle supports SAVEPOINT\n-- UPDATE ...; SAVEPOINT s; UPDATE ...; ROLLBACK TO s; COMMIT;"
+          }
+        }
+      ],
+      "narrative": "Because DuckDB doesn't support SAVEPOINT, use patterns like inverse updates or staged applies to selectively keep or discard parts of a transaction."
+    },
+    {
+      "title": "5. Cleanup",
+      "description": "How do we tear down objects so the lesson is safe to re-run?",
+      "examples": [
+        {
+          "name": "cleanup",
+          "sql": "DROP TABLE IF EXISTS accounts;",
+          "description": "Drop the accounts table created for this lesson.",
+          "nerd_notes": "Idempotent cleanup is safe to run multiple times.",
+          "compat_examples": {
+            "postgres": "-- Postgres: DROP TABLE IF EXISTS accounts;",
+            "mysql": "-- MySQL: DROP TABLE IF EXISTS accounts;",
+            "oracle": "-- Oracle: BEGIN EXECUTE IMMEDIATE 'DROP TABLE accounts'; EXCEPTION WHEN OTHERS THEN NULL; END; -- emulate IF EXISTS"
+          }
+        }
+      ],
+      "narrative": "We drop any objects we created so you can re-run the lesson from scratch."
+    }
+  ,
+    {
+      "title": "Transaction Control Language (TCL)",
+      "narrative": "What is a transaction and how do BEGIN/COMMIT group changes so they succeed or fail together? Let's see a tiny, self-contained demo.",
+      "nerd_notes": "In interactive tools autocommit may be on. Explicit BEGIN/COMMIT ensures multi-step operations are atomic.",
+      "examples": [
+        {
+          "name": "tcl_overview_demo",
+          "description": "Create a tiny table, make changes inside a transaction, COMMIT, and verify results.",
+          "sql": "DROP TABLE IF EXISTS tcl_overview;\nCREATE TABLE tcl_overview(id INTEGER, note TEXT);\n\nBEGIN TRANSACTION;\nINSERT INTO tcl_overview VALUES (1, 'hello'), (2, 'world');\n-- Visible inside transaction\nSELECT 'inside_tx' AS phase, id, note FROM tcl_overview ORDER BY id;\nCOMMIT;\n\n-- After commit, data persists\nSELECT 'after_commit' AS phase, id, note FROM tcl_overview ORDER BY id;\n\n-- Cleanup for repeatability\nDROP TABLE IF EXISTS tcl_overview;",
+          "nerd_notes": "Bundle related INSERT/UPDATE/DELETE statements inside a single unit of work. If anything goes wrong, prefer ROLLBACK before COMMIT.",
+          "compat_examples": {
+            "postgres": "-- Postgres: BEGIN; ... COMMIT; works as-is",
+            "mysql": "-- MySQL: START TRANSACTION; ... COMMIT;",
+            "oracle": "-- Oracle: autocommit typically off; use COMMIT to persist"
+          }
+        }
+      ]
+    },
+    {
+      "title": "1. Basic Transactions",
+      "narrative": "How do I perform a couple of changes atomically and verify the outcome deterministically?",
+      "nerd_notes": "Deterministic ORDER BY in SELECTs makes examples reproducible.",
+      "examples": [
+        {
+          "name": "basic_transactions_demo",
+          "description": "Create a demo table, run an atomic update sequence, COMMIT, verify, cleanup.",
+          "sql": "DROP TABLE IF EXISTS tcl_basic;\nCREATE TABLE tcl_basic(id INTEGER, qty INTEGER);\nINSERT INTO tcl_basic VALUES (1, 10), (2, 5);\n\nBEGIN TRANSACTION;\nUPDATE tcl_basic SET qty = qty + 2 WHERE id = 1;\nUPDATE tcl_basic SET qty = qty - 1 WHERE id = 2;\nCOMMIT;\n\nSELECT id, qty FROM tcl_basic ORDER BY id;\n\nDROP TABLE IF EXISTS tcl_basic;",
+          "nerd_notes": "Use explicit transactions when multiple statements must be treated as one change.",
+          "compat_examples": {
+            "postgres": "-- BEGIN; UPDATE ...; UPDATE ...; COMMIT;",
+            "mysql": "-- START TRANSACTION; UPDATE ...; UPDATE ...; COMMIT;",
+            "oracle": "-- UPDATE ...; UPDATE ...; COMMIT;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "2. ROLLBACK & Error Handling",
+      "narrative": "How do I revert a series of changes if a validation check fails?",
+      "nerd_notes": "Avoid relying on deliberate errors; prefer explicit checks and ROLLBACK for clarity.",
+      "examples": [
+        {
+          "name": "rollback_error_handling_demo",
+          "description": "Update values within a transaction, inspect, then ROLLBACK and verify original state.",
+          "sql": "DROP TABLE IF EXISTS tcl_rollback;\nCREATE TABLE tcl_rollback(id INTEGER, balance DOUBLE);\nINSERT INTO tcl_rollback VALUES (1, 100.0), (2, 50.0);\n\n-- Baseline\nSELECT 'before' AS phase, id, balance FROM tcl_rollback ORDER BY id;\n\nBEGIN TRANSACTION;\nUPDATE tcl_rollback SET balance = balance - 20 WHERE id = 1;\nUPDATE tcl_rollback SET balance = balance + 20 WHERE id = 2;\n\n-- Review during transaction\nSELECT 'during' AS phase, id, balance FROM tcl_rollback ORDER BY id;\n\n-- Decide to cancel\nROLLBACK;\n\n-- Verify rollback restored original values\nSELECT 'after_rollback' AS phase, id, balance FROM tcl_rollback ORDER BY id;\n\nDROP TABLE IF EXISTS tcl_rollback;",
+          "nerd_notes": "In applications, validate invariants before COMMIT; if validation fails, ROLLBACK.",
+          "compat_examples": {
+            "postgres": "-- BEGIN; UPDATE ...; ROLLBACK;",
+            "mysql": "-- START TRANSACTION; UPDATE ...; ROLLBACK;",
+            "oracle": "-- UPDATE ...; ROLLBACK;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "3. Real-World Transaction Patterns",
+      "narrative": "How do we update multiple related tables (order + inventory) safely in one unit of work?",
+      "nerd_notes": "Use WHERE predicates (e.g., stock >= qty) to guard updates. Check affected row counts in applications.",
+      "examples": [
+        {
+          "name": "order_and_inventory_demo",
+          "description": "Create tiny products + orders tables, place an order, adjust stock, compute order total, commit, verify, cleanup.",
+          "sql": "DROP TABLE IF EXISTS tcl_products;\nDROP TABLE IF EXISTS tcl_orders;\nDROP TABLE IF EXISTS tcl_order_items;\n\nCREATE TABLE tcl_products(product_id INTEGER, name TEXT, stock INTEGER, unit_price DOUBLE);\nCREATE TABLE tcl_orders(order_id INTEGER, status TEXT, total DOUBLE);\nCREATE TABLE tcl_order_items(order_id INTEGER, product_id INTEGER, qty INTEGER, unit_price DOUBLE);\n\nINSERT INTO tcl_products VALUES (1, 'Widget', 10, 15.0), (2, 'Gadget', 5, 25.0);\n\nBEGIN TRANSACTION;\n-- Create order\nINSERT INTO tcl_orders VALUES (1, 'processing', 0.0);\n-- Add one line item (2 Widgets)\nINSERT INTO tcl_order_items VALUES (1, 1, 2, 15.0);\n-- Recompute order total\nUPDATE tcl_orders\nSET total = (SELECT SUM(qty * unit_price) FROM tcl_order_items WHERE order_id = 1)\nWHERE order_id = 1;\n-- Decrement inventory if sufficient stock\nUPDATE tcl_products SET stock = stock - 2 WHERE product_id = 1 AND stock >= 2;\n-- Mark as confirmed\nUPDATE tcl_orders SET status = 'confirmed' WHERE order_id = 1;\nCOMMIT;\n\n-- Verify final state\nSELECT o.order_id, o.status, o.total, p.product_id, p.name, p.stock\nFROM tcl_orders o JOIN tcl_products p ON p.product_id = 1\nWHERE o.order_id = 1\nORDER BY o.order_id, p.product_id;\n\n-- Cleanup\nDROP TABLE IF EXISTS tcl_order_items;\nDROP TABLE IF EXISTS tcl_orders;\nDROP TABLE IF EXISTS tcl_products;",
+          "nerd_notes": "In real apps check UPDATE row counts. If stock update affects 0 rows, ROLLBACK and alert the user.",
+          "compat_examples": {
+            "postgres": "-- Works as-is. Use constraints/triggers if needed.",
+            "mysql": "-- Works in InnoDB with START TRANSACTION; ... COMMIT;",
+            "oracle": "-- Works with COMMIT; consider foreign keys and constraints for integrity"
+          }
+        }
+      ]
+    },
+    {
+      "title": "4. Advanced Transaction Control - Savepoints",
+      "narrative": "DuckDB doesn't support SAVEPOINT yet. How can we emulate partial rollback semantics safely?",
+      "nerd_notes": "Emulate partial undo by applying the inverse operation before COMMIT, or stage proposed changes and apply only approved ones.",
+      "examples": [
+        {
+          "name": "savepoint_alternative_demo",
+          "description": "Run two steps, decide to keep step 1 and undo step 2 via inverse update, then COMMIT.",
+          "sql": "DROP TABLE IF EXISTS tcl_sv_alt;\nCREATE TABLE tcl_sv_alt(id INTEGER, value INTEGER);\nINSERT INTO tcl_sv_alt VALUES (1, 100);\n\nBEGIN TRANSACTION;\n-- Step 1\nUPDATE tcl_sv_alt SET value = value + 10 WHERE id = 1;\n-- Step 2 (later undone)\nUPDATE tcl_sv_alt SET value = value - 3 WHERE id = 1;\n-- Decide to undo Step 2 only (apply inverse)\nUPDATE tcl_sv_alt SET value = value + 3 WHERE id = 1;\nCOMMIT;\n\nSELECT id, value FROM tcl_sv_alt ORDER BY id;\n\nDROP TABLE IF EXISTS tcl_sv_alt;",
+          "nerd_notes": "For complex workflows, write to a staging table inside the transaction and move only approved rows to the target before COMMIT.",
+          "compat_examples": {
+            "postgres": "-- True SAVEPOINT support\n-- BEGIN; UPDATE ...; SAVEPOINT s; UPDATE ...; ROLLBACK TO SAVEPOINT s; COMMIT;",
+            "mysql": "-- True SAVEPOINT support with InnoDB\n-- START TRANSACTION; SAVEPOINT s; ... ROLLBACK TO SAVEPOINT s; COMMIT;",
+            "oracle": "-- True SAVEPOINT support\n-- SAVEPOINT s; ... ROLLBACK TO s; COMMIT;"
+          }
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+      "id": "basic-select",
+      "prompt": "Show the first 5 rows from `accounts`.",
+      "answer_sql": "SELECT * FROM accounts ORDER BY id LIMIT 5;"
+    },
+    {
+      "id": "aggregate-1",
+      "prompt": "Count rows grouped by `id`.",
+      "answer_sql": "SELECT id, COUNT(*) AS cnt FROM accounts GROUP BY id ORDER BY id;"
+    },
+    {
+      "id": "filter-top",
+      "prompt": "Select the top 10 rows where `id` is positive (if numeric) or not null otherwise.",
+      "answer_sql": "SELECT * FROM accounts WHERE id IS NOT NULL AND id > 0 ORDER BY id LIMIT 10;"
+    }
+  ]
+}

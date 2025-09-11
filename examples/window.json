@@ -1,0 +1,954 @@
+{
+  "title": "Window Functions & Analytics",
+  "description": "Progressive, self-contained window function examples compatible with DuckDB, from basics to advanced analytics. Exercises are included; some prompts reference the `products` table to build continuity.",
+  "sections": [
+    {
+      "title": "0) Introduction: Window Functions",
+      "description": "Window functions annotate each row with metrics computed over related rows, without collapsing detail like GROUP BY does. Use PARTITION BY to define peer groups, ORDER BY to set row sequence within each group, and frames (ROWS/RANGE) to choose precisely which rows participate in each calculation.",
+      "examples": [
+        {
+          "name": "intro_window_overview",
+          "description": "Windows vs aggregates: windows annotate rows; GROUP BY collapses them. When you need row-level results plus metrics (running totals, ranks, deltas), choose windows.",
+          "sql": "",
+          "nerd_notes": "Contract: (1) Decide grouping via PARTITION BY (or omit for global), (2) choose an ORDER BY that is deterministic (add tie-breakers and NULLS order), (3) pick a frame — ROWS for row-counted windows, RANGE for value/time-based windows. Defaults vary by engine; be explicit.",
+          "compat_examples": {
+            "postgres": "-- Standard SQL window syntax supported",
+            "mysql": "-- MySQL 8+ supports windows",
+            "oracle": "-- Analytic functions long supported"
+          }
+        },
+        {
+          "name": "intro_components_checklist",
+          "description": "Checklist: PARTITION BY (groups), ORDER BY (sequence), FRAME (which rows).",
+          "sql": "",
+          "nerd_notes": "Common shapes: (a) Ranking per group (ROW_NUMBER/RANK/DENSE_RANK); (b) Navigation (LAG/LEAD/FIRST/LAST/NTH); (c) Running/moving aggregates (SUM/AVG/… with ROWS frame); (d) Distribution (PERCENT_RANK, CUME_DIST); (e) DRY with named WINDOW clause.",
+          "compat_examples": {"standard": "-- SQL:2003+ window features across modern engines"}
+        }
+      ],
+      "narrative": "We’ll start with quick copy‑paste patterns, then dive deeper: ranking, navigation, frames (ROWS vs RANGE), time-based windows, percent-of-total, and top‑N per group. We’ll close with a solid pitfalls section you can use as a pre‑flight checklist.",
+      "nerd_notes": "Prefer windows when you need row-level results with added metrics; use GROUP BY when you want one row per group. Many engines have subtle defaults (e.g., LAST_VALUE frame). Be explicit to avoid surprises."
+    },
+    {
+      "title": "1.5) Cheat Sheet: Window Essentials",
+      "description": "Copy/paste‑ready patterns using inline VALUES. Deterministic ORDER BY with tie‑breakers. Frames are explicit when needed for clarity and portability.",
+      "examples": [
+        {
+          "name": "cs_row_number_top1_quick",
+          "description": "ROW_NUMBER per group; keep rn for demonstration.",
+          "sql": "WITH s(cat, v) AS (VALUES ('A',10),('A',5),('B',7)) SELECT cat, v, ROW_NUMBER() OVER (PARTITION BY cat ORDER BY v DESC, cat) AS rn FROM s ORDER BY cat, rn;",
+          "nerd_notes": "Filter by rn = 1 to get top-1 per group (QUALIFY alternative).",
+          "compat_examples": {"postgres": "-- ROW_NUMBER() OVER (PARTITION BY cat ORDER BY v DESC)", "mysql": "-- MySQL 8+: same syntax", "oracle": "-- Analytic ROW_NUMBER supported"}
+        },
+        {
+          "name": "cs_lag_delta_quick",
+          "description": "LAG to compute delta vs previous value.",
+          "sql": "WITH t(d, v) AS (VALUES (1,10),(2,15),(3,12)) SELECT d, v, v - LAG(v) OVER (ORDER BY d) AS delta FROM t ORDER BY d;",
+          "nerd_notes": "First row delta is NULL by design; wrap with COALESCE if you need 0.",
+          "compat_examples": {"postgres": "-- v - LAG(v) OVER (ORDER BY d)", "mysql": "-- MySQL 8+: LAG supported", "oracle": "-- Analytic LAG supported"}
+        },
+        {
+          "name": "cs_running_sum_rows_quick",
+          "description": "Running SUM with explicit ROWS frame.",
+          "sql": "WITH t(d, v) AS (VALUES (1,5),(2,7),(3,2)) SELECT d, v, SUM(v) OVER (ORDER BY d ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS run_sum FROM t ORDER BY d;",
+          "nerd_notes": "Explicit frame improves clarity and portability.",
+          "compat_examples": {"postgres": "-- SUM(v) OVER (ORDER BY d ROWS UNBOUNDED PRECEDING)", "mysql": "-- Same running frame", "oracle": "-- Same ROWS frame"}
+        },
+        {
+          "name": "cs_rank_dense_quick",
+          "description": "RANK vs DENSE_RANK on ties.",
+          "sql": "WITH s(v) AS (VALUES (20),(20),(10)) SELECT v, RANK() OVER (ORDER BY v DESC) AS rnk, DENSE_RANK() OVER (ORDER BY v DESC) AS drnk FROM s ORDER BY v DESC;",
+          "nerd_notes": "RANK leaves gaps (1,1,3); DENSE_RANK does not (1,1,2).",
+          "compat_examples": {"postgres": "-- RANK and DENSE_RANK supported", "mysql": "-- MySQL 8+: supported", "oracle": "-- Analytic RANK/DENSE_RANK supported"}
+        },
+        {
+          "name": "cs_percent_of_total_quick",
+          "description": "Percent of total within a group (no join-back required).",
+          "sql": "WITH s(cat, amt) AS (VALUES ('A',10),('A',20),('B',5)) SELECT cat, amt, SUM(amt) OVER (PARTITION BY cat) AS total_cat, amt / NULLIF(SUM(amt) OVER (PARTITION BY cat), 0) AS pct FROM s ORDER BY cat, amt;",
+          "nerd_notes": "Use NULLIF guard to avoid divide-by-zero."
+        },
+        {
+          "name": "cs_ntile_quick",
+          "description": "Bucket rows into N tiles over an order (NTILE).",
+          "sql": "WITH s(v) AS (VALUES (1),(2),(3),(4),(5)) SELECT v, NTILE(2) OVER (ORDER BY v) AS nt FROM s ORDER BY v;",
+          "nerd_notes": "Last bucket may receive +1 when not divisible evenly."
+        },
+        {
+          "name": "cs_time_range_7d_quick",
+          "description": "Time-based RANGE frame (rolling 7 days).",
+          "sql": "WITH s(ts, v) AS (VALUES (TIMESTAMP '2024-01-01 00:00',10),(TIMESTAMP '2024-01-03 00:00',20),(TIMESTAMP '2024-01-08 00:00',5)) SELECT ts, v, SUM(v) OVER (ORDER BY ts RANGE BETWEEN INTERVAL 7 DAYS PRECEDING AND CURRENT ROW) AS sum_7d FROM s ORDER BY ts;",
+          "nerd_notes": "RANGE uses value/time distance; includes peers on same timestamp."
+        },
+        {
+          "name": "cs_first_last_frame_quick",
+          "description": "FIRST_VALUE/LAST_VALUE with explicit forward-looking frame.",
+          "sql": "WITH o(dt, amt) AS (VALUES (DATE '2024-01-01',100),(DATE '2024-01-05',120),(DATE '2024-01-10',80)) SELECT dt, amt, FIRST_VALUE(amt) OVER (ORDER BY dt) AS first_amt, LAST_VALUE(amt) OVER (ORDER BY dt ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS last_amt FROM o ORDER BY dt;",
+          "nerd_notes": "Default frame for LAST_VALUE often returns current row; extend frame to UNBOUNDED FOLLOWING."
+        },
+        {
+          "name": "cs_named_window_reuse_quick",
+          "description": "Define once, reuse many times (WINDOW clause).",
+          "sql": "WITH s(c, dt, v) AS (VALUES (1, DATE '2024-01-01',10),(1, DATE '2024-01-02',20),(2, DATE '2024-01-01',5)) SELECT c, dt, v, SUM(v) OVER w AS run_total, AVG(v) OVER w AS run_avg FROM s WINDOW w AS (PARTITION BY c ORDER BY dt ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) ORDER BY c, dt;",
+          "nerd_notes": "Keeps queries DRY and reduces copy/paste errors."
+        },
+        {
+          "name": "cs_qualify_like_topn_quick",
+          "description": "Top-1 per group via ROW_NUMBER + outer WHERE (portable QUALIFY).",
+          "sql": "WITH s(id, cat, score) AS (VALUES (1,'A',10),(2,'A',25),(3,'B',20)) SELECT id, cat, score FROM ( SELECT s.*, ROW_NUMBER() OVER (PARTITION BY cat ORDER BY score DESC, id) AS rn FROM s ) t WHERE rn = 1 ORDER BY cat, id;",
+          "nerd_notes": "QUALIFY rn = 1 is supported in some engines; outer WHERE is portable."
+        },
+        {
+          "name": "cs_conditional_running_count_quick",
+          "description": "Running count of condition via SUM(CASE ...).",
+          "sql": "WITH e(u, ts, type) AS (VALUES (1, TIMESTAMP '2024-01-01 09:00','view'),(1, TIMESTAMP '2024-01-01 10:00','purchase'),(1, TIMESTAMP '2024-01-02 09:00','purchase')) SELECT u, ts, type, SUM(CASE WHEN type='purchase' THEN 1 ELSE 0 END) OVER (PARTITION BY u ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS purchases_to_date FROM e ORDER BY u, ts;",
+          "nerd_notes": "Conditional aggregates inside windows are a workhorse for event streams."
+        },
+        {
+          "name": "cs_moving_avg_centered_quick",
+          "description": "Centered moving average over 3 points.",
+          "sql": "WITH s(d, v) AS (VALUES (1,10),(2,20),(3,30)) SELECT d, v, AVG(v) OVER (ORDER BY d ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS avg_3 FROM s ORDER BY d;",
+          "nerd_notes": "ROWS frame expresses a fixed-width centered window."
+        }
+      ],
+      "narrative": "Quick patterns you’ll use daily: ranking, deltas, running and moving aggregates, percent-of-total, time-based windows, named windows, conditional counts, and portable QUALIFY-style filtering.",
+      "nerd_notes": "Inline VALUES keep examples isolated and re-runnable; add tie-breakers and explicit frames for deterministic, portable results."
+    },
+    {
+      "title": "1.6) Pitfalls, Tips, and Q&A",
+      "description": "A pre-flight checklist of window function gotchas, production tips, and quick Q&A. Defaults vary by engine—be explicit and test on edge cases.",
+      "examples": [
+        {"name": "pt_order_by_determinism", "description": "Always add tie-breakers in ORDER BY within OVER().", "sql": "", "nerd_notes": "Unstable ordering leads to flaky ranks and running metrics."},
+        {"name": "pt_rows_vs_range_choice", "description": "Use ROWS for row-counted windows; RANGE includes peers with same sort key.", "sql": "", "nerd_notes": "RANGE can widen unexpectedly when many peers tie."},
+        {"name": "pt_last_value_frame", "description": "LAST_VALUE needs a forward-looking frame to see future rows.", "sql": "", "nerd_notes": "Use ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING."},
+        {"name": "pt_frame_defaults_engine_diffs", "description": "Default frames differ across engines and functions.", "sql": "", "nerd_notes": "Do not rely on defaults; specify ROWS/RANGE bounds explicitly, especially for LAST_VALUE, NTH_VALUE, and moving averages."},
+        {"name": "pt_nulls_and_sorting", "description": "NULL ordering varies by engine and can change results.", "sql": "", "nerd_notes": "Prefer explicit NULLS FIRST/LAST or CASE/IS NULL ties to keep ordering stable."},
+        {"name": "pt_window_vs_groupby", "description": "Windows annotate rows; GROUP BY collapses to one row per group.", "sql": "", "nerd_notes": "Choose based on whether you need row-level detail."},
+        {"name": "pt_qualify_like_filtering", "description": "Filter on window results using an outer SELECT (portable alternative to QUALIFY).", "sql": "", "nerd_notes": "Wrap the windowed SELECT and filter rn <= N outside."},
+        {"name": "pt_count_distinct_limits", "description": "COUNT(DISTINCT ...) OVER may be slower or restricted on some engines.", "sql": "", "nerd_notes": "Prefer re-aggregation + join-back or use conditional SUM/COUNT when possible; test performance."},
+        {"name": "tip_named_windows_for_dry", "description": "Use named WINDOW clause to avoid repeating PARTITION/ORDER/FRAME.", "sql": "", "nerd_notes": "Improves readability and reduces copy/paste mistakes."},
+        {"name": "tip_precompute_sort_keys", "description": "Precompute stable sort keys if ORDER BY expressions are complex.", "sql": "", "nerd_notes": "Materializing sort keys can make intent clear and may improve performance."},
+        {"name": "tip_document_frames", "description": "Document chosen frame semantics in code review.", "sql": "", "nerd_notes": "Frames are often misunderstood; a short comment prevents regressions."},
+        {"name": "question_when_use_range_vs_rows", "description": "When should I use RANGE vs ROWS?", "sql": "", "nerd_notes": "Use RANGE for value/time distance (includes peers). Use ROWS for precise row counts. For running totals/averages, prefer ROWS unless you explicitly want peers included."},
+        {"name": "question_how_to_topn_per_group", "description": "How do I get top‑N per group?", "sql": "", "nerd_notes": "ROW_NUMBER() OVER (PARTITION BY key ORDER BY metric DESC, tie_breaker) in a subquery, then WHERE rn <= N. Some engines support QUALIFY; the outer WHERE is portable."},
+        {"name": "question_perf_considerations", "description": "Are windows expensive?", "sql": "", "nerd_notes": "Windows require ordered evaluation per partition; large sorts can be costly. Reduce partitions, project fewer columns, and filter early when possible."},
+        {"name": "question_percent_rank_vs_percentile", "description": "PERCENT_RANK vs 50th percentile?", "sql": "", "nerd_notes": "PERCENT_RANK reports relative position based on ranks, not value interpolation. For percentiles use percentile_disc/cont or quantile functions; windows help position rows, not compute exact percentile values by default."},
+        {"name": "tricky_unordered_input", "description": "Leaving ORDER BY empty in OVER() yields arbitrary order.", "sql": "", "nerd_notes": "Always specify ORDER BY; without it, functions like LAG/LEAD are undefined with respect to input order."},
+        {"name": "tricky_frame_off_by_one", "description": "Off-by-one errors with inclusive frame bounds.", "sql": "", "nerd_notes": "ROWS BETWEEN N PRECEDING AND CURRENT ROW is inclusive of both ends; double-check expectations against sample data."}
+      ],
+      "narrative": "Use this as a checklist before shipping: explicit ORDER BY with tie‑breakers, explicit frames, conscious ROWS vs RANGE choice, explicit NULL ordering, portable QUALIFY‑style filtering, and notes on COUNT DISTINCT over windows.",
+      "nerd_notes": "Defaults differ; specify what you mean. Measure on real data—windows often sort per partition, so performance scales with partition sizes and ORDER BY complexity."
+    },
+    {
+      "title": "Window Functions — Cheat Sheet",
+      "narrative": "Quick picks for common analytics: use ROW_NUMBER for deterministic dedupe and top-N per group; RANK/DENSE_RANK for ties on leaderboards; NTILE for buckets; PERCENT_RANK/CUME_DIST for relative position; LAG/LEAD for deltas and change detection; FIRST/LAST/NTH for reference points (be explicit with frames); SUM/AVG/MIN/MAX OVER for running, moving, and percent-of-total; ROWS for row-counted windows; RANGE for value/time-based windows; named windows to DRY up repeated PARTITION/ORDER/FRAME. Prefer windows when you need row-level detail with extra metrics—GROUP BY collapses rows and subqueries/joins are more complex and often slower.",
+      "nerd_notes": "Frames matter: LAST_VALUE needs UNBOUNDED FOLLOWING to look ahead; RANGE includes peers; add tie-breakers and explicit NULLS ordering for determinism.",
+      "examples": []
+    },
+        {
+      "title": "1. Setup orders",
+      "examples": [
+        {
+          "name": "create_orders",
+          "sql": "DROP TABLE IF EXISTS order_items; DROP TABLE IF EXISTS orders; CREATE TABLE orders (order_id INTEGER, customer_id INTEGER, order_date DATE, total_amount DOUBLE); INSERT INTO orders VALUES (1,1,'2024-01-01',100),(2,1,'2024-01-05',50),(3,2,'2024-01-03',75);",
+          "description": "Create orders: a short demo.",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+        }
+      ],
+      "narrative": "Create objects and small sample data used by subsequent examples. Keep these steps idempotent.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "2. Partition by customer",
+      "examples": [
+        {
+          "name": "partition_customer",
+          "sql": "SELECT customer_id, order_id, total_amount, ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date) AS rn, SUM(total_amount) OVER (PARTITION BY customer_id) AS total_by_customer FROM orders ORDER BY customer_id, rn;",
+          "description": "Question: how do we compute per-customer totals and per-customer row numbers?",
+          "nerd_notes": "ROW_NUMBER() resets per partition. SUM() OVER (PARTITION BY ...) repeats the group total on every row.",
+          "compat_examples": {
+            "postgres": "-- Same OVER(PARTITION BY ...) syntax.",
+            "mysql": "-- MySQL 8+: window functions supported with same syntax.",
+            "oracle": "-- Oracle: analytic functions use same PARTITION BY/ORDER BY keywords.",
+            "sqlite": "-- SQLite 3.25+: window functions supported; same PARTITION/ORDER syntax.",
+            "bigquery": "-- BigQuery: same window syntax; ensure deterministic ORDER BY with tie-breakers."
+          }
+        }
+      ],
+  "narrative": "Basics: assign ranks and compare rank functions—when do gaps appear and when not?",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "3. Rolling within partitions",
+      "examples": [
+        {
+          "name": "rolling_partition",
+          "sql": "SELECT customer_id, order_date, total_amount, SUM(total_amount) OVER (PARTITION BY customer_id ORDER BY order_date ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS last_2_sum FROM orders ORDER BY customer_id, order_date;",
+          "description": "Question: how do we compute a rolling sum of the last 2 orders per customer?",
+          "nerd_notes": "ROWS frame counts rows (not values). Use RANGE for value-based frames.",
+          "compat_examples": {
+            "postgres": "-- Use ROWS BETWEEN 1 PRECEDING AND CURRENT ROW similarly.",
+            "mysql": "-- Same window frame clause supported.",
+            "oracle": "-- Same frame syntax; default is RANGE if omitted.",
+            "sqlite": "-- SQLite 3.25+: supports ROWS frames; same syntax.",
+            "bigquery": "-- BigQuery: identical ROWS frame semantics."
+          }
+        }
+      ],
+      "narrative": "Demonstrate windowing and partitioning techniques used for analytics and performant queries.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "4. Cleanup",
+      "examples": [
+        {
+          "name": "cleanup",
+          "sql": "DROP TABLE IF EXISTS order_items; DROP TABLE IF EXISTS orders;",
+          "description": "Cleanup: a short demo.",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+        }
+      ],
+      "narrative": "Tear down objects created in this lesson so the examples are repeatable and safe to re-run.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "Window Functions — PARTITION BY Edge Cases (Self-contained)",
+      "narrative": "Edge cases: NULL partitions, single-row partitions, and ROWS vs RANGE behavior with peers.",
+      "nerd_notes": "NULLs form their own partition. RANGE includes all peers with equal ORDER BY value; ROWS counts physical rows.",
+      "examples": [
+        {
+          "name": "partition_null_key_behavior",
+          "description": "Question: how does PARTITION BY treat NULL keys?",
+          "sql": "WITH t(key, val) AS (VALUES (1,10),(1,5),(NULL,7),(2,3))\nSELECT key, val, SUM(val) OVER (PARTITION BY key) AS part_sum\nFROM t\nORDER BY (key IS NULL), key, val;",
+          "nerd_notes": "Rows with NULL key are grouped together in their own partition.",
+          "compat_examples": {
+            "postgres": "-- Same behavior: NULLs partition together (not mixed with non-NULL).",
+            "mysql": "-- MySQL 8+ window functions behave similarly for NULL partitions.",
+            "oracle": "-- Oracle analytic functions also treat NULLs as a separate partition.",
+            "sqlite": "-- SQLite 3.25+: window functions treat NULLs as their own partition as well.",
+            "bigquery": "-- BigQuery: same behavior; NULLs are grouped within their own partition."
+          }
+        },
+        {
+          "name": "rows_vs_range_frames",
+          "description": "Question: how do ROWS vs RANGE frames differ with peers?",
+          "sql": "WITH s(val) AS (VALUES (10),(10),(20),(30))\nSELECT val,\n  SUM(val) OVER (ORDER BY val ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)   AS suffix_rows,\n  SUM(val) OVER (ORDER BY val RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)  AS suffix_range\nFROM s\nORDER BY val;",
+          "nerd_notes": "RANGE includes all peers with the same ORDER BY value, while ROWS counts row-by-row.",
+          "compat_examples": {
+            "postgres": "-- ROWS vs RANGE semantics are standard; RANGE includes peers.",
+            "mysql": "-- MySQL 8+: supports ROWS and RANGE frames with same behavior.",
+            "oracle": "-- Oracle analytic windows support ROWS and RANGE with peer inclusion for RANGE.",
+            "sqlite": "-- SQLite supports ROWS and RANGE; RANGE peers included when ORDER BY values tie.",
+            "bigquery": "-- BigQuery: RANGE includes peers; use ROWS for row-precise windows."
+          }
+        }
+      ]
+    },
+    {
+      "title": "1. Basic Window Functions",
+      "examples": [
+        {
+          "name": "row_number_basic",
+          "sql": "DROP TABLE IF EXISTS products; CREATE TABLE products (product_id INTEGER, name TEXT, category TEXT, price DOUBLE); INSERT INTO products VALUES (1,'A','X',10),(2,'B','X',15),(3,'C','Y',20);\nSELECT name, price, ROW_NUMBER() OVER (ORDER BY price DESC) AS price_rank FROM products ORDER BY price_rank;",
+          "description": "Question: how do we assign global ranks by price?",
+          "nerd_notes": "ROW_NUMBER creates a unique order; tie-breaking uses the ORDER BY expression.",
+          "compat_examples": {
+            "postgres": "-- Same ROW_NUMBER() OVER (ORDER BY ...) syntax.",
+            "mysql": "-- Same in MySQL 8+.",
+            "oracle": "-- Oracle supports ROW_NUMBER analytic function.",
+            "sqlite": "-- SQLite 3.25+: ROW_NUMBER supported with same syntax.",
+            "bigquery": "-- BigQuery: ROW_NUMBER supported; include tie-breakers for determinism."
+          }
+        },
+        {
+          "name": "rank_dense",
+          "sql": "SELECT name, price, RANK() OVER (ORDER BY price DESC) AS rank_gap, DENSE_RANK() OVER (ORDER BY price DESC) AS dense_rank FROM products ORDER BY price DESC, name;",
+          "description": "Question: what's the difference between RANK and DENSE_RANK?",
+          "nerd_notes": "RANK leaves gaps on ties; DENSE_RANK does not.",
+          "compat_examples": {
+            "postgres": "-- RANK() and DENSE_RANK() supported with same syntax.",
+            "mysql": "-- MySQL 8+: both ranking functions supported.",
+            "oracle": "-- Oracle supports RANK and DENSE_RANK analytic functions.",
+            "sqlite": "-- SQLite 3.25+: RANK and DENSE_RANK supported.",
+            "bigquery": "-- BigQuery: RANK/DENSE_RANK supported; add tie-breakers for determinism."
+          }
+        }
+      ],
+      "narrative": "Demonstrate windowing and partitioning techniques used for analytics and performant queries.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "2. Navigation Functions",
+      "examples": [
+        {
+          "name": "lag_lead",
+          "sql": "DROP TABLE IF EXISTS order_items; DROP TABLE IF EXISTS orders; CREATE TABLE orders (order_id INTEGER, customer_id INTEGER, order_date DATE, total_amount DOUBLE); INSERT INTO orders VALUES (1,1,'2024-01-01',100),(2,1,'2024-01-02',150),(3,2,'2024-01-03',80);\nSELECT order_date, total_amount, LAG(total_amount) OVER (ORDER BY order_date) AS prev_amount, LEAD(total_amount) OVER (ORDER BY order_date) AS next_amount FROM orders ORDER BY order_date;",
+          "description": "Question: how do we look back and forward in an ordered series?",
+          "nerd_notes": "LAG/LEAD default offset is 1. Use PARTITION BY to reset per group.",
+          "compat_examples": {
+            "postgres": "-- LAG/LEAD(...) OVER (ORDER BY ...) supported.",
+            "mysql": "-- MySQL 8+ supports LAG/LEAD.",
+    "oracle": "-- Oracle supports LAG/LEAD analytic functions.",
+    "sqlite": "-- SQLite 3.25+: LAG/LEAD supported.",
+    "bigquery": "-- BigQuery: LAG/LEAD supported with identical syntax."
+          }
+        },
+        {
+          "name": "first_last",
+          "sql": "SELECT customer_id, order_date, FIRST_VALUE(total_amount) OVER (PARTITION BY customer_id ORDER BY order_date) AS first_amount, LAST_VALUE(total_amount) OVER (PARTITION BY customer_id ORDER BY order_date ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS last_amount FROM orders ORDER BY customer_id, order_date;",
+          "description": "Question: how do we get the first and last value per customer?",
+          "nerd_notes": "LAST_VALUE requires an explicit frame to see forward rows; otherwise default frame may stop at current row.",
+          "compat_examples": {
+            "postgres": "-- Use ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING for LAST_VALUE.",
+            "mysql": "-- MySQL 8+: FIRST_VALUE/LAST_VALUE supported; frame note applies.",
+    "oracle": "-- Oracle analytic FIRST_VALUE/LAST_VALUE behave the same regarding frames.",
+    "sqlite": "-- SQLite 3.25+: FIRST_VALUE/LAST_VALUE supported; use explicit ROWS frame for LAST_VALUE.",
+    "bigquery": "-- BigQuery: supports FIRST_VALUE/LAST_VALUE; specify ROWS frame to include following rows."
+          }
+        }
+      ],
+  "narrative": "Navigation: how to look back/forward and fetch first/last values reliably?",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "3. Aggregate Window Functions",
+      "examples": [
+        {
+          "name": "running_totals",
+          "sql": "SELECT order_date, total_amount, SUM(total_amount) OVER (ORDER BY order_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total FROM orders ORDER BY order_date;",
+          "description": "Question: how do we compute a running total over time?",
+          "nerd_notes": "Define the frame explicitly for portability and readability.",
+          "compat_examples": {
+            "postgres": "-- Same SUM() OVER (ORDER BY ...) pattern.",
+            "mysql": "-- MySQL 8+ same syntax.",
+    "oracle": "-- Oracle supports the same running total frame syntax.",
+    "sqlite": "-- SQLite 3.25+: running SUM with ROWS frame supported.",
+    "bigquery": "-- BigQuery: identical running frame semantics."
+          }
+        },
+        {
+          "name": "partitioned_agg",
+          "sql": "SELECT customer_id, order_date, total_amount, SUM(total_amount) OVER (PARTITION BY customer_id) AS customer_total FROM orders ORDER BY customer_id, order_date;",
+          "description": "Question: how do we compute totals that repeat on every row of a group?",
+          "nerd_notes": "Partitioned aggregates are useful for percent-of-total calculations.",
+          "compat_examples": {
+            "postgres": "-- SUM(...) OVER (PARTITION BY ...) repeats totals per partition.",
+            "mysql": "-- MySQL 8+: identical window aggregate syntax.",
+            "oracle": "-- Oracle analytic SUM with PARTITION BY works the same."
+          }
+        }
+      ],
+      "narrative": "Demonstrate windowing and partitioning techniques used for analytics and performant queries.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "4. Window Frames and Advanced Scenarios",
+      "examples": [
+        {
+          "name": "frame_examples",
+          "sql": "SELECT order_date, total_amount, AVG(total_amount) OVER (ORDER BY order_date ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS moving_avg_3 FROM orders ORDER BY order_date;",
+          "description": "Question: how do we compute a 3-point moving average?",
+          "nerd_notes": "ROWS frame gives a fixed-width window regardless of gaps in dates.",
+          "compat_examples": {
+            "postgres": "-- AVG(...) OVER (ORDER BY ...) ROWS BETWEEN 2 PRECEDING AND CURRENT ROW",
+            "mysql": "-- MySQL 8+: same ROWS frame syntax.",
+            "oracle": "-- Oracle supports ROWS BETWEEN N PRECEDING AND CURRENT ROW.",
+            "sqlite": "-- SQLite 3.25+: AVG OVER with ROWS frames supported.",
+            "bigquery": "-- BigQuery: same ROWS frame for moving averages."
+          }
+        },
+        {
+          "name": "complex_ranking",
+          "sql": "SELECT customer_id, order_date, total_amount, ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY total_amount DESC) AS amount_rank FROM orders ORDER BY customer_id, amount_rank;",
+          "description": "Question: how do we rank orders per customer by amount?",
+          "nerd_notes": "ROW_NUMBER per customer gives the top-1 per customer when filtered by amount_rank = 1.",
+          "compat_examples": {
+            "postgres": "-- ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY total_amount DESC)",
+            "mysql": "-- MySQL 8+: same syntax for per-partition ranking.",
+            "oracle": "-- Oracle analytic ROW_NUMBER with PARTITION BY/ORDER BY.",
+            "sqlite": "-- SQLite 3.25+: ROW_NUMBER with PARTITION BY/ORDER BY supported.",
+            "bigquery": "-- BigQuery: ROW_NUMBER supported; add tie-breakers for deterministic order."
+          }
+        }
+      ],
+      "narrative": "Demonstrate windowing and partitioning techniques used for analytics and performant queries.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "5. Advanced Analytical Patterns",
+      "examples": [
+        {
+          "name": "customer_ltv",
+          "sql": "DROP TABLE IF EXISTS customer_behavior; CREATE TABLE customer_behavior (customer_id INTEGER, event_date DATE, event_type TEXT, event_value DOUBLE, session_id TEXT); INSERT INTO customer_behavior VALUES (1,'2024-01-01','purchase',150,'s1'),(1,'2024-01-02','view',0,'s2'),(2,'2024-01-03','purchase',75,'s3');\nWITH customer_metrics AS (\n  SELECT customer_id, event_date, event_type, event_value, session_id,\n    SUM(event_value) OVER (PARTITION BY customer_id ORDER BY event_date) AS cumulative_value\n  FROM customer_behavior\n)\nSELECT * FROM customer_metrics ORDER BY customer_id, event_date;",
+          "description": "Question: how do we compute a per-customer cumulative metric (LTV-like)?",
+          "nerd_notes": "Windowed SUM by customer and date builds cumulative metrics useful for retention/LTV.",
+          "compat_examples": {
+            "postgres": "-- Same SUM OVER(PARTITION BY customer_id ORDER BY event_date).",
+            "mysql": "-- Same in MySQL 8+.",
+            "oracle": "-- Use analytic SUM with PARTITION BY/ORDER BY.",
+            "sqlite": "-- SQLite 3.25+: SUM OVER with PARTITION/ORDER supported.",
+            "bigquery": "-- BigQuery: equivalent windowed SUM supported."
+          }
+        }
+      ],
+      "narrative": "Short explanations and examples about 5. Advanced Analytical Patterns.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "6. Cleanup",
+      "examples": [
+        {
+          "name": "cleanup",
+          "sql": "DROP TABLE IF EXISTS products; DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS customer_behavior;",
+          "description": "Cleanup: a short demo.",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+        }
+      ],
+      "narrative": "Tear down objects created in this lesson so the examples are repeatable and safe to re-run.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "Window Functions - Complete Guide",
+      "narrative": "A compact, self-contained overview that demonstrates ROW_NUMBER, RANK, DENSE_RANK and NTILE in one query. Each example below creates its own small table so the lesson is idempotent.",
+      "nerd_notes": "This example shows common window functions together so you can compare outputs. In real datasets prefer stable ORDER BY expressions and explicit NULL handling.",
+      "examples": [
+        {
+          "name": "window_functions_overview",
+          "description": "Create a small demo table and compare ROW_NUMBER, RANK, DENSE_RANK and NTILE across partitions.",
+          "sql": "DROP TABLE IF EXISTS wf_demo;\nCREATE TABLE wf_demo (id INTEGER, category TEXT, val DOUBLE);\nINSERT INTO wf_demo VALUES (1,'A',10),(2,'A',20),(3,'B',15),(4,'B',25),(5,'B',25);\n\nSELECT category, id, val,\n  ROW_NUMBER() OVER (PARTITION BY category ORDER BY val DESC, id) AS row_number_desc,\n  RANK() OVER (PARTITION BY category ORDER BY val DESC) AS rank_desc,\n  DENSE_RANK() OVER (PARTITION BY category ORDER BY val DESC) AS dense_rank_desc,\n  NTILE(2) OVER (PARTITION BY category ORDER BY val DESC) AS ntile2\nFROM wf_demo\nORDER BY category, row_number_desc;",
+          "nerd_notes": "ROW_NUMBER gives a unique ordinal per row; RANK leaves gaps when ties occur; DENSE_RANK does not. NTILE splits ordered rows into even buckets; useful for percentiles/quantiles in exploratory analysis.",
+          "compat_examples": {
+            "postgres": "-- All shown window functions are supported with identical syntax.",
+            "mysql": "-- MySQL 8+: ROW_NUMBER, RANK, DENSE_RANK, NTILE are supported.",
+            "oracle": "-- Oracle supports all these analytic functions; NTILE available as well.",
+            "sqlite": "-- SQLite 3.25+: ROW_NUMBER/RANK/DENSE_RANK supported; NTILE supported in recent versions.",
+            "bigquery": "-- BigQuery: all listed functions supported; ensure deterministic ORDER BY."
+          }
+        }
+      ]
+    },
+    {
+      "title": "1. ROW_NUMBER()",
+    "narrative": "Classic usage: deduplicate by keeping the latest row per key using ROW_NUMBER().",
+    "nerd_notes": "Tie-break deterministically with ORDER BY, e.g., timestamp DESC, then id.",
+      "examples": [
+        {
+      "name": "row_number_keep_latest",
+      "description": "Question: how do we keep the latest event per user?",
+      "sql": "WITH events(user_id, ts, payload) AS (\n  VALUES (1, TIMESTAMP '2024-01-01 09:00', 'a'),\n         (1, TIMESTAMP '2024-01-01 10:00', 'b'),\n         (2, TIMESTAMP '2024-01-01 11:00', 'c')\n)\nSELECT user_id, ts, payload\nFROM (\n  SELECT *, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY ts DESC, payload) AS rn\n  FROM events\n) t\nWHERE rn = 1\nORDER BY user_id;",
+      "nerd_notes": "ROW_NUMBER with DESC timestamp picks the latest row per user.",
+      "compat_examples": {
+        "postgres": "-- Same pattern using ROW_NUMBER() and filtering rn = 1 in an outer SELECT.",
+        "mysql": "-- MySQL 8+: identical window + outer WHERE pattern.",
+  "oracle": "-- Use analytic ROW_NUMBER and filter in an outer query.",
+  "sqlite": "-- SQLite 3.25+: same ROW_NUMBER + outer filter pattern.",
+  "bigquery": "-- BigQuery: QUALIFY rn = 1 is available; or use outer SELECT as shown for portability."
+      }
+        }
+      ]
+    },
+    {
+      "title": "2. RANK() and DENSE_RANK()",
+    "narrative": "Compare RANK vs DENSE_RANK across ties.",
+    "nerd_notes": "RANK leaves gaps on ties; DENSE_RANK compacts ranks.",
+      "examples": [
+        {
+      "name": "rank_vs_dense",
+      "description": "Question: how do RANK and DENSE_RANK differ with duplicates?",
+      "sql": "WITH x(cat, val) AS (VALUES ('A',10),('A',10),('A',20))\nSELECT cat, val,\n  RANK() OVER (PARTITION BY cat ORDER BY val DESC) AS rnk,\n  DENSE_RANK() OVER (PARTITION BY cat ORDER BY val DESC) AS drnk\nFROM x\nORDER BY cat, val;",
+      "nerd_notes": "Ranks are 1,1,3 vs 1,1,2 in this example.",
+      "compat_examples": {
+        "postgres": "-- RANK and DENSE_RANK with PARTITION BY supported.",
+        "mysql": "-- MySQL 8+: both ranking functions supported.",
+  "oracle": "-- Oracle supports both with same semantics.",
+  "sqlite": "-- SQLite 3.25+: RANK/DENSE_RANK supported.",
+  "bigquery": "-- BigQuery: RANK/DENSE_RANK supported; add tie-breakers for determinism."
+      }
+        }
+      ]
+    },
+    {
+      "title": "3. NTILE()",
+    "narrative": "Bucket rows into quantiles using NTILE().",
+    "nerd_notes": "NTILE(4) assigns quartiles over the ordered set.",
+      "examples": [
+        {
+      "name": "ntile_quartiles",
+      "description": "Question: how do we split a list into quartiles?",
+      "sql": "WITH scores(val) AS (VALUES (10),(20),(30),(40),(50),(60),(70),(80))\nSELECT val, NTILE(4) OVER (ORDER BY val) AS quartile\nFROM scores\nORDER BY val;",
+      "nerd_notes": "Even distribution; last bucket may have +1 when not divisible evenly.",
+      "compat_examples": {
+        "postgres": "-- NTILE(n) OVER (ORDER BY ...) supported.",
+        "mysql": "-- MySQL 8+: NTILE supported.",
+  "oracle": "-- Oracle supports NTILE analytic function.",
+  "sqlite": "-- SQLite: NTILE supported in recent versions (3.25+).",
+  "bigquery": "-- BigQuery: NTILE supported."
+      }
+        }
+      ]
+    },
+    {
+      "title": "4. LAG() and LEAD()",
+    "narrative": "Access prior/next rows to compute deltas or detect changes.",
+    "nerd_notes": "Use NULLS to indicate boundaries.",
+      "examples": [
+        {
+      "name": "lag_lead_delta",
+      "description": "Question: how do we compute change vs prior value?",
+      "sql": "WITH ts(d, v) AS (VALUES (DATE '2024-01-01',10),(DATE '2024-01-02',15),(DATE '2024-01-03',12))\nSELECT d, v,\n  LAG(v) OVER (ORDER BY d) AS prev_v,\n  v - LAG(v) OVER (ORDER BY d) AS delta\nFROM ts\nORDER BY d;",
+      "nerd_notes": "When prev_v is NULL, delta is NULL (first row).",
+      "compat_examples": {
+        "postgres": "-- LAG() OVER (ORDER BY ...) supported; compute delta similarly.",
+        "mysql": "-- MySQL 8+: LAG supported.",
+  "oracle": "-- Oracle analytic LAG supported.",
+  "sqlite": "-- SQLite 3.25+: LAG supported.",
+  "bigquery": "-- BigQuery: LAG supported; same delta calculation."
+      }
+        }
+      ]
+    },
+    {
+      "title": "5. FIRST_VALUE() and LAST_VALUE()",
+    "narrative": "Fetch first/last within a partition; frame choice matters for LAST_VALUE.",
+    "nerd_notes": "For LAST_VALUE to see the true last, use a frame ending UNBOUNDED FOLLOWING.",
+      "examples": [
+        {
+      "name": "first_last_demo",
+      "description": "Question: how do we get the first and last order amount per customer?",
+      "sql": "WITH o(cust, dt, amt) AS (VALUES (1, DATE '2024-01-01', 100),(1, DATE '2024-01-05', 150),(2, DATE '2024-01-03', 80))\nSELECT cust, dt, amt,\n  FIRST_VALUE(amt) OVER (PARTITION BY cust ORDER BY dt) AS first_amt,\n  LAST_VALUE(amt)  OVER (PARTITION BY cust ORDER BY dt ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS last_amt\nFROM o\nORDER BY cust, dt;",
+      "nerd_notes": "Explicit frame ensures LAST_VALUE can look ahead.",
+      "compat_examples": {
+        "postgres": "-- Use explicit ROWS frame for LAST_VALUE to include following rows.",
+        "mysql": "-- MySQL 8+: FIRST_VALUE/LAST_VALUE supported; frame note applies.",
+  "oracle": "-- Oracle: same frame behavior for LAST_VALUE.",
+  "sqlite": "-- SQLite 3.25+: FIRST_VALUE/LAST_VALUE supported; specify ROWS frame for LAST_VALUE.",
+  "bigquery": "-- BigQuery: supports FIRST_VALUE/LAST_VALUE; explicit frame required for LAST_VALUE to look ahead."
+      }
+        }
+      ]
+    },
+    {
+      "title": "6. Aggregate Window Functions",
+    "narrative": "Common aggregates over windows: SUM/AVG/MAX with ORDER BY or PARTITION BY.",
+    "nerd_notes": "Be explicit about frames for running aggregates.",
+      "examples": [
+        {
+      "name": "moving_avg_demo",
+      "description": "Question: how do we compute a centered moving average?",
+      "sql": "WITH s(d, v) AS (VALUES (1,10),(2,20),(3,30),(4,40),(5,50))\nSELECT d, v, AVG(v) OVER (ORDER BY d ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS avg_3\nFROM s\nORDER BY d;",
+      "nerd_notes": "Centered window uses one preceding and one following row.",
+      "compat_examples": {
+        "postgres": "-- AVG OVER with ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING.",
+        "mysql": "-- MySQL 8+: identical window frame.",
+  "oracle": "-- Oracle supports centered ROWS frames.",
+  "sqlite": "-- SQLite 3.25+: AVG OVER with centered ROWS frame supported.",
+  "bigquery": "-- BigQuery: same centered ROWS frame."
+      }
+        }
+      ]
+    },
+    {
+      "title": "1. Ranking Functions",
+    "narrative": "Ranking functions across categories with ties.",
+    "nerd_notes": "Demonstrates ROW_NUMBER, RANK, and DENSE_RANK.",
+      "examples": [
+        {
+      "name": "ranking_across_categories",
+      "description": "Question: how do ranks look per category with ties?",
+          "sql": "WITH t(id, cat, val) AS (VALUES (1,'A',5),(2,'A',5),(3,'A',7),(4,'B',9),(5,'B',1))\nSELECT cat, val,\n  ROW_NUMBER() OVER (PARTITION BY cat ORDER BY val DESC, id) AS rn,\n  RANK()       OVER (PARTITION BY cat ORDER BY val DESC) AS rnk,\n  DENSE_RANK() OVER (PARTITION BY cat ORDER BY val DESC) AS drnk\nFROM t\nORDER BY cat, val;",
+      "nerd_notes": "ROW_NUMBER is unique per row; RANK/DENSE_RANK handle ties differently.",
+      "compat_examples": {
+        "postgres": "-- Same per-partition ranking functions.",
+        "mysql": "-- MySQL 8+: ROW_NUMBER/RANK/DENSE_RANK supported.",
+  "oracle": "-- Oracle supports all three analytic ranking functions.",
+  "sqlite": "-- SQLite 3.25+: all listed ranking functions supported.",
+  "bigquery": "-- BigQuery: supported; add tie-breakers for stable ordering."
+      }
+        }
+      ]
+    },
+    {
+      "title": "2. Aggregate Window Functions",
+    "narrative": "Aggregates by partition with no ORDER BY (full-partition aggregates).",
+    "nerd_notes": "Without ORDER BY, the frame is the whole partition.",
+      "examples": [
+        {
+      "name": "partition_totals",
+      "description": "Question: how do we repeat per-partition totals on each row?",
+      "sql": "WITH sales(cat, amt) AS (VALUES ('X', 10),('X', 5),('Y', 3))\nSELECT cat, amt, SUM(amt) OVER (PARTITION BY cat) AS total_cat\nFROM sales\nORDER BY cat, amt;",
+      "nerd_notes": "Useful for percent-of-category calculations.",
+      "compat_examples": {
+        "postgres": "-- SUM OVER (PARTITION BY cat) repeats totals.",
+        "mysql": "-- MySQL 8+: identical syntax.",
+  "oracle": "-- Analytic SUM with PARTITION BY behaves the same.",
+  "sqlite": "-- SQLite 3.25+: SUM OVER with PARTITION BY supported.",
+  "bigquery": "-- BigQuery: same pattern supported."
+      }
+        }
+      ]
+    },
+    {
+      "title": "3. LAG, LEAD, and Value Functions",
+    "narrative": "Value access across rows: prior/next and first/last.",
+    "nerd_notes": "Combines LAG with FIRST_VALUE.",
+      "examples": [
+        {
+      "name": "lag_and_first_value",
+      "description": "Question: how do we compute the change vs the first value?",
+      "sql": "WITH ts(d, v) AS (VALUES (1,10),(2,15),(3,12))\nSELECT d, v, FIRST_VALUE(v) OVER (ORDER BY d) AS first_v, v - FIRST_VALUE(v) OVER (ORDER BY d) AS delta_from_first\nFROM ts\nORDER BY d;",
+      "nerd_notes": "FIRST_VALUE default frame works here as it includes the first row.",
+      "compat_examples": {
+        "postgres": "-- FIRST_VALUE and expression using it are supported.",
+        "mysql": "-- MySQL 8+: FIRST_VALUE supported.",
+  "oracle": "-- Oracle analytic FIRST_VALUE supported.",
+  "sqlite": "-- SQLite 3.25+: FIRST_VALUE supported.",
+  "bigquery": "-- BigQuery: FIRST_VALUE supported."
+      }
+        }
+      ]
+    },
+    {
+      "title": "1. ROW_NUMBER",
+    "narrative": "Enumerate rows per group with a deterministic order.",
+    "nerd_notes": "Use tie-breakers in ORDER BY to guarantee stable results.",
+      "examples": [
+        {
+      "name": "row_number_enum",
+      "description": "Question: how to enumerate items per bucket?",
+      "sql": "WITH items(bucket, item) AS (VALUES ('A','x'),('A','y'),('B','z'))\nSELECT bucket, item, ROW_NUMBER() OVER (PARTITION BY bucket ORDER BY item) AS pos\nFROM items\nORDER BY bucket, pos;",
+      "nerd_notes": "Enumeration useful for pagination within groups.",
+      "compat_examples": {
+        "postgres": "-- ROW_NUMBER partitioned by bucket with ORDER BY item.",
+        "mysql": "-- MySQL 8+: same window function.",
+  "oracle": "-- Oracle analytic ROW_NUMBER works similarly.",
+  "sqlite": "-- SQLite 3.25+: ROW_NUMBER with PARTITION BY supported.",
+  "bigquery": "-- BigQuery: ROW_NUMBER supported; add tie-breakers for determinism."
+      }
+        }
+      ]
+    },
+    {
+      "title": "2. RANK Functions",
+    "narrative": "Ranking with ties across an ordered metric.",
+    "nerd_notes": "RANK shows gaps after ties.",
+      "examples": [
+        {
+      "name": "rank_functions_demo",
+      "description": "Question: how do ranks appear with duplicate scores?",
+      "sql": "WITH scores(p, pts) AS (VALUES ('a',10),('b',10),('c',8))\nSELECT p, pts, RANK() OVER (ORDER BY pts DESC) AS rnk\nFROM scores\nORDER BY rnk, p;",
+      "nerd_notes": "Ranks 1,1,3 for points 10,10,8.",
+  "compat_examples": {
+        "postgres": "-- RANK OVER (ORDER BY ...) supported.",
+        "mysql": "-- MySQL 8+: RANK supported.",
+  "oracle": "-- Oracle analytic RANK supported.",
+  "sqlite": "-- SQLite 3.25+: RANK supported.",
+  "bigquery": "-- BigQuery: RANK supported."
+  }
+        }
+      ]
+    },
+    {
+      "title": "3. LAG and LEAD",
+    "narrative": "Walk a series and compute day-over-day deltas.",
+    "nerd_notes": "LAG without PARTITION BY applies globally.",
+      "examples": [
+        {
+      "name": "lag_lead_simple",
+      "description": "Question: what's the difference between value and prior value?",
+      "sql": "WITH s(d, v) AS (VALUES (DATE '2024-02-01',5),(DATE '2024-02-02',7),(DATE '2024-02-03',6))\nSELECT d, v, v - LAG(v) OVER (ORDER BY d) AS delta\nFROM s\nORDER BY d;",
+      "nerd_notes": "First row delta is NULL; handle with COALESCE if needed.",
+      "compat_examples": {
+        "postgres": "-- LAG OVER (ORDER BY ...) supported.",
+        "mysql": "-- MySQL 8+: LAG supported.",
+  "oracle": "-- Oracle analytic LAG supported.",
+  "sqlite": "-- SQLite 3.25+: LAG supported.",
+  "bigquery": "-- BigQuery: LAG supported."
+      }
+        }
+      ]
+    },
+    {
+      "title": "4. Aggregate Window Functions",
+    "narrative": "Running max/min and totals over ordered series.",
+    "nerd_notes": "Explicit frames improve clarity.",
+      "examples": [
+        {
+      "name": "running_min_max",
+      "description": "Question: how do we track running min and max?",
+      "sql": "WITH s(d, v) AS (VALUES (1,7),(2,3),(3,9),(4,4))\nSELECT d, v,\n  MIN(v) OVER (ORDER BY d ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS run_min,\n  MAX(v) OVER (ORDER BY d ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS run_max\nFROM s\nORDER BY d;",
+      "nerd_notes": "Running min/max are common for thresholding and alerts.",
+      "compat_examples": {
+        "postgres": "-- MIN/MAX OVER with running frame supported.",
+        "mysql": "-- MySQL 8+: same syntax.",
+  "oracle": "-- Oracle analytic MIN/MAX with ROWS frame.",
+  "sqlite": "-- SQLite 3.25+: MIN/MAX OVER with ROWS frames supported.",
+  "bigquery": "-- BigQuery: MIN/MAX with running ROWS frame supported."
+      }
+        }
+      ]
+    }
+    ,
+    {
+      "title": "7. Distribution Ranking Functions (PERCENT_RANK, CUME_DIST)",
+      "narrative": "Estimate relative position within a partition without collapsing rows. Windows are ideal here because they preserve detail while adding rank metrics; subqueries would require repeated correlated counts and are harder to read and maintain.",
+      "nerd_notes": "PERCENT_RANK = (rank-1)/(n-1). CUME_DIST = number of rows with value <= current / n. Deterministic ORDER BY is essential.",
+      "examples": [
+        {
+          "name": "percent_rank_cume_dist",
+          "description": "Question: where does each row sit within its category distribution?",
+          "sql": "WITH s(cat, score) AS (VALUES ('A',10),('A',20),('A',20),('A',40))\nSELECT cat, score,\n  PERCENT_RANK() OVER (PARTITION BY cat ORDER BY score) AS percent_rank,\n  CUME_DIST()   OVER (PARTITION BY cat ORDER BY score) AS cume_dist\nFROM s\nORDER BY cat, score, percent_rank;",
+          "nerd_notes": "Why window: keeps all rows and adds relative position in one pass. Alternate via subqueries shown below is more verbose and slower.",
+          "compat_examples": {
+            "postgres": "-- PERCENT_RANK() and CUME_DIST() supported with same syntax.",
+            "mysql": "-- MySQL 8+: both functions supported.",
+            "oracle": "-- Oracle supports both analytic functions.",
+            "sqlite": "-- SQLite: PERCENT_RANK and CUME_DIST supported in recent versions.",
+            "bigquery": "-- BigQuery: both functions supported."
+          }
+        },
+        {
+          "name": "percent_rank_alt_no_window",
+          "description": "Alternate (no window): compute PERCENT_RANK using correlated subqueries (for illustration).",
+          "sql": "WITH s(cat, score) AS (VALUES ('A',10),('A',20),('A',20),('A',40))\nSELECT s1.cat, s1.score,\n  CASE WHEN n > 1 THEN CAST(r_minus1 AS DOUBLE) / (n - 1) ELSE 0 END AS percent_rank_alt\nFROM (\n  SELECT s1.*,\n    (SELECT COUNT(*) FROM s s2 WHERE s2.cat = s1.cat AND s2.score < s1.score) AS r_minus1,\n    (SELECT COUNT(*) FROM s s3 WHERE s3.cat = s1.cat) AS n\n  FROM s s1\n) s1\nORDER BY s1.cat, s1.score;",
+          "nerd_notes": "This reproduces PERCENT_RANK without windows, but it’s more complex and does multiple passes. Prefer window functions." 
+        }
+      ]
+    },
+    {
+      "title": "8. Value Functions — NTH_VALUE()",
+      "narrative": "Access the nth value in an ordered partition. Windows shine when you need to peek arbitrarily forward/backward without reshaping rows (which joins/subqueries would require).",
+      "nerd_notes": "NTH_VALUE is frame-sensitive. Use an explicit frame that extends to UNBOUNDED FOLLOWING to see future rows.",
+      "examples": [
+        {
+          "name": "nth_value_demo",
+          "description": "Question: what is the 2nd order amount per customer?",
+          "sql": "WITH o(cust, dt, amt) AS (VALUES (1, DATE '2024-01-01', 100),(1, DATE '2024-01-05', 150),(1, DATE '2024-01-10', 90),(2, DATE '2024-01-03', 80))\nSELECT cust, dt, amt,\n  NTH_VALUE(amt, 2) OVER (PARTITION BY cust ORDER BY dt ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS second_amt\nFROM o\nORDER BY cust, dt;",
+          "nerd_notes": "Why window: keeps every row while annotating the nth value. Alternate: self-join to the 2nd row per cust is far more verbose and loses row-level continuity.",
+          "compat_examples": {
+            "postgres": "-- NTH_VALUE(expr, n) OVER (PARTITION BY ... ORDER BY ... ROWS UNBOUNDED PRECEDING .. UNBOUNDED FOLLOWING)",
+            "mysql": "-- MySQL 8+: NTH_VALUE is supported.",
+            "oracle": "-- Oracle supports NTH_VALUE with the same semantics.",
+            "sqlite": "-- SQLite: NTH_VALUE supported in recent versions; explicit frame recommended.",
+            "bigquery": "-- BigQuery: NTH_VALUE supported; specify an explicit ROWS frame."
+          }
+        }
+      ]
+    },
+    {
+      "title": "9. Named Windows (WINDOW clause)",
+      "narrative": "Name and reuse window definitions to keep queries DRY. This is cleaner than repeating PARTITION/ORDER/FRAME for each measure.",
+      "nerd_notes": "You can define multiple named windows and even override parts (like frame) per function call.",
+      "examples": [
+        {
+          "name": "named_windows_reuse",
+          "description": "Question: how do we compute multiple metrics over the same partition/order without repeating the clause?",
+          "sql": "WITH s(c, dt, v) AS (VALUES (1, DATE '2024-01-01', 10),(1, DATE '2024-01-02', 20),(1, DATE '2024-01-03', 15),(2, DATE '2024-01-01', 5))\nSELECT c, dt, v,\n  SUM(v) OVER w  AS run_total,\n  AVG(v) OVER w  AS run_avg,\n  SUM(v) OVER w2 AS last2_sum\nFROM s\nWINDOW w  AS (PARTITION BY c ORDER BY dt ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),\n       w2 AS (PARTITION BY c ORDER BY dt ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)\nORDER BY c, dt;",
+          "nerd_notes": "Why window: reuse improves readability and reduces mistakes. Alternate without WINDOW clause duplicates boilerplate.",
+          "compat_examples": {
+            "postgres": "-- WINDOW w AS (...), w2 AS (...) supported.",
+            "mysql": "-- MySQL 8+: WINDOW clause supported.",
+            "oracle": "-- Oracle supports named windows via WINDOW clause.",
+            "sqlite": "-- SQLite: WINDOW clause supported in recent versions.",
+            "bigquery": "-- BigQuery: WINDOW clause supported."
+          }
+        }
+      ]
+    },
+    {
+      "title": "10. Percent of Total and Cumulative Share",
+      "narrative": "Add ratio metrics without collapsing rows. Doing this with GROUP BY requires re-joining or correlated subqueries; window aggregates make it trivial and efficient.",
+      "nerd_notes": "Divide by the partition total; guard against divide-by-zero with NULLIF.",
+      "examples": [
+        {
+          "name": "percent_of_total",
+          "description": "Question: what percent of the category total does each sale contribute?",
+          "sql": "WITH sales(cat, amt) AS (VALUES ('X', 10),('X', 5),('X', 15),('Y', 3))\nSELECT cat, amt,\n  SUM(amt) OVER (PARTITION BY cat) AS total_cat,\n  amt / NULLIF(SUM(amt) OVER (PARTITION BY cat), 0) AS pct_of_cat\nFROM sales\nORDER BY cat, amt;",
+          "nerd_notes": "Why window: no join back to totals needed. Alternate: compute totals per cat with GROUP BY and join back.",
+          "compat_examples": {
+            "postgres": "-- Use SUM OVER (PARTITION BY cat) for denominator; guard divide-by-zero with NULLIF.",
+            "mysql": "-- MySQL 8+: identical approach.",
+            "oracle": "-- Oracle analytic SUM + NULLIF guard works similarly.",
+            "sqlite": "-- SQLite 3.25+: SUM OVER supported; use NULLIF to avoid divide-by-zero.",
+            "bigquery": "-- BigQuery: SUM OVER supported; use SAFE_DIVIDE or NULLIF to guard divides."
+          }
+        },
+        {
+          "name": "cumulative_share",
+          "description": "Question: what is the cumulative share up to each row?",
+          "sql": "WITH sales(cat, amt) AS (VALUES ('X', 5),('X', 10),('X', 15))\nSELECT cat, amt,\n  SUM(amt) OVER (PARTITION BY cat ORDER BY amt ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)\n    / NULLIF(SUM(amt) OVER (PARTITION BY cat), 0) AS cum_share\nFROM sales\nORDER BY cat, amt;",
+          "nerd_notes": "Useful for Pareto (80/20) analyses and ABC classifications.",
+          "compat_examples": {
+            "postgres": "-- Same pattern with SUM OVER() for numerator and denominator.",
+            "mysql": "-- MySQL 8+: identical syntax.",
+            "oracle": "-- Use analytic SUM for both numerator and denominator.",
+            "sqlite": "-- SQLite 3.25+: SUM OVER with ORDER BY and PARTITION supported.",
+            "bigquery": "-- BigQuery: same pattern; consider SAFE_DIVIDE when dividing."
+          }
+        }
+      ]
+    },
+    {
+      "title": "11. Top-N per group (QUALIFY-like) with alternatives",
+      "narrative": "Filter based on window ranks. Some databases support QUALIFY; in portable SQL, use an outer SELECT with WHERE rn <= N. We also show a non-window alternative for comparison.",
+      "nerd_notes": "Window approach is simpler and typically faster than correlated counting.",
+      "examples": [
+        {
+          "name": "top3_per_category",
+          "description": "Question: how do we select the top 3 items per category by score?",
+          "sql": "WITH s(id, cat, score) AS (VALUES (1,'A',10),(2,'A',25),(3,'A',20),(4,'A',20),(5,'B',50),(6,'B',40))\nSELECT id, cat, score\nFROM (\n  SELECT s.*, ROW_NUMBER() OVER (PARTITION BY cat ORDER BY score DESC, id) AS rn\n  FROM s\n) t\nWHERE rn <= 3\nORDER BY cat, rn;",
+          "nerd_notes": "Why window: concise and deterministic top-N per group.",
+          "compat_examples": {
+            "postgres": "-- Some dialects support QUALIFY rn <= 3; otherwise wrap in an outer SELECT as shown.",
+            "mysql": "-- MySQL 8+: same window + outer WHERE pattern.",
+            "oracle": "-- Use analytical ROW_NUMBER and filter in outer query.",
+            "sqlite": "-- SQLite 3.25+: same ROW_NUMBER + outer WHERE approach.",
+            "bigquery": "-- BigQuery: QUALIFY rn <= 3 is supported; outer SELECT is portable."
+          }
+        },
+        {
+          "name": "top3_correlated_alt",
+          "description": "Alternate (no window): choose rows where fewer than 3 have a strictly higher score (tie-broken by id).",
+          "sql": "WITH s(id, cat, score) AS (VALUES (1,'A',10),(2,'A',25),(3,'A',20),(4,'A',20),(5,'B',50),(6,'B',40))\nSELECT s1.*\nFROM s s1\nWHERE 3 > (\n  SELECT COUNT(*)\n  FROM s s2\n  WHERE s2.cat = s1.cat\n    AND (s2.score > s1.score OR (s2.score = s1.score AND s2.id < s1.id))\n)\nORDER BY s1.cat, s1.score DESC, s1.id;",
+          "nerd_notes": "Works without windows but is harder to reason about and may be slower on large datasets."
+        }
+      ]
+    },
+    {
+      "title": "12. Conditional Window Aggregates",
+      "narrative": "Compute running metrics on subsets (e.g., purchases only) without losing row-level detail. A GROUP BY would collapse rows and force re-joins.",
+      "nerd_notes": "Wrap CASE inside SUM/COUNT over a window.",
+      "examples": [
+        {
+          "name": "running_purchase_counts",
+          "description": "Question: how many purchases has each user made up to each event?",
+          "sql": "WITH events(u, ts, type) AS (VALUES (1, TIMESTAMP '2024-01-01 09:00','view'),(1, TIMESTAMP '2024-01-01 10:00','purchase'),(1, TIMESTAMP '2024-01-02 09:00','purchase'),(2, TIMESTAMP '2024-01-03 12:00','view'))\nSELECT u, ts, type,\n  SUM(CASE WHEN type='purchase' THEN 1 ELSE 0 END)\n    OVER (PARTITION BY u ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS purchases_to_date\nFROM events\nORDER BY u, ts;",
+          "nerd_notes": "Why window: preserves event stream structure. Alternate: correlated subquery counting purchases up to ts for each row is more verbose.",
+          "compat_examples": {
+            "postgres": "-- SUM(CASE ...) OVER (PARTITION BY u ORDER BY ts) pattern works the same.",
+            "mysql": "-- MySQL 8+: conditional SUM within a window is supported.",
+            "oracle": "-- Oracle analytic SUM with CASE and ORDER BY frame supported.",
+            "sqlite": "-- SQLite 3.25+: SUM(CASE ...) OVER with ORDER BY frame supported.",
+            "bigquery": "-- BigQuery: SUM with CASE inside a window supported."
+          }
+        }
+      ]
+    },
+    {
+      "title": "13. Prior-only frames (exclude current row)",
+      "narrative": "Sometimes you need a statistic that doesn’t include the current row (e.g., prior 3 average). Windows let you express this precisely with frame bounds.",
+      "nerd_notes": "Use ROWS BETWEEN N PRECEDING AND 1 PRECEDING to exclude current row.",
+      "examples": [
+        {
+          "name": "avg_prior3",
+          "description": "Question: what is the average of the previous 3 values (excluding current)?",
+          "sql": "WITH s(d, v) AS (VALUES (1,10),(2,20),(3,30),(4,10),(5,50))\nSELECT d, v,\n  AVG(v) OVER (ORDER BY d ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING) AS avg_prior3\nFROM s\nORDER BY d;",
+          "nerd_notes": "Why window: exact frame control beats awkward self-joins with BETWEEN logic.",
+          "compat_examples": {
+            "postgres": "-- Identical frame syntax.",
+            "mysql": "-- MySQL 8+: same ROWS PRECEDING frame.",
+            "oracle": "-- Use ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING.",
+            "sqlite": "-- SQLite 3.25+: prior-only frames supported.",
+            "bigquery": "-- BigQuery: prior-only ROWS frames supported."
+          }
+        }
+      ]
+    },
+    {
+      "title": "14. Time-based RANGE frame (rolling 7 days)",
+      "narrative": "Define windows by time distance, not row count. This is awkward with joins/subqueries and elegant with RANGE frames.",
+      "nerd_notes": "RANGE BETWEEN INTERVAL 'N days' PRECEDING AND CURRENT ROW includes peers on the same timestamp.",
+      "examples": [
+        {
+          "name": "rolling_7d_range_demo",
+          "description": "Question: what is the 7-day rolling sum at each point in time?",
+          "sql": "WITH s(ts, v) AS (VALUES (TIMESTAMP '2024-01-01 00:00',10),(TIMESTAMP '2024-01-03 00:00',20),(TIMESTAMP '2024-01-08 00:00',5),(TIMESTAMP '2024-01-09 00:00',7))\nSELECT ts, v,\n  SUM(v) OVER (\n    ORDER BY ts\n    RANGE BETWEEN INTERVAL 7 DAYS PRECEDING AND CURRENT ROW\n  ) AS sum_7d\nFROM s\nORDER BY ts;",
+          "nerd_notes": "Why window: time-aware windows avoid manual self-join ranges and edge-case off-by-one bugs.",
+          "compat_examples": {
+            "postgres": "-- Use RANGE BETWEEN INTERVAL '7 days' PRECEDING AND CURRENT ROW.",
+            "mysql": "-- MySQL 8+: RANGE with INTERVAL supported in window frames.",
+            "oracle": "-- Use RANGE with INTERVAL for time-based windows.",
+            "sqlite": "-- SQLite: time-based RANGE frames have limited support; emulate with ROWS + WHERE over pre-aggregated steps if needed.",
+            "bigquery": "-- BigQuery: support for RANGE with INTERVAL depends on timestamp semantics; alternative is to pre-bucket or use window with UNBOUNDED PRECEDING and filter."
+          }
+        }
+      ]
+    }
+    ,
+    {
+      "title": "15. Pitfalls and Best Practices",
+      "narrative": "Common mistakes and how to avoid them: explicit frames, RANGE peers, deterministic ordering, and NULL handling.",
+      "nerd_notes": "Always specify ORDER BY and frames for clarity. Tie-break deterministically; be mindful of NULL ordering.",
+      "examples": [
+        {
+          "name": "last_value_frame_gotcha",
+          "description": "Pitfall: LAST_VALUE without an explicit forward-looking frame returns the current row, not the true last.",
+          "sql": "WITH o(c, d, a) AS (VALUES (1, DATE '2024-01-01', 10),(1, DATE '2024-01-02', 20),(1, DATE '2024-01-03', 30))\nSELECT c, d, a,\n  LAST_VALUE(a) OVER (PARTITION BY c ORDER BY d) AS last_val_default,\n  LAST_VALUE(a) OVER (PARTITION BY c ORDER BY d ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS last_val_true\nFROM o\nORDER BY c, d;",
+          "nerd_notes": "Fix: set frame to UNBOUNDED FOLLOWING to see future rows.",
+          "compat_examples": {
+            "postgres": "-- Same behavior; frame must include following to get the true last.",
+            "mysql": "-- MySQL 8+: identical frame requirement.",
+            "oracle": "-- Oracle analytic LAST_VALUE follows the same frame semantics.",
+            "sqlite": "-- SQLite 3.25+: LAST_VALUE needs explicit forward-looking frame to see future rows.",
+            "bigquery": "-- BigQuery: requires explicit ROWS frame for LAST_VALUE to include following rows."
+          }
+        },
+        {
+          "name": "range_peers_with_duplicates",
+          "description": "Pitfall: RANGE includes all peer rows with equal ORDER BY value, which can widen the window unexpectedly.",
+          "sql": "WITH s(v) AS (VALUES (10),(10),(20))\nSELECT v,\n  SUM(v) OVER (ORDER BY v ROWS BETWEEN CURRENT ROW AND CURRENT ROW)  AS rows_only_current,\n  SUM(v) OVER (ORDER BY v RANGE BETWEEN CURRENT ROW AND CURRENT ROW) AS range_includes_peers\nFROM s\nORDER BY v;",
+          "nerd_notes": "Use ROWS for precise row counts; use RANGE for value-based windows including peers.",
+          "compat_examples": {
+            "postgres": "-- RANGE peers behavior is standard SQL.",
+            "mysql": "-- Same peer-inclusion semantics for RANGE.",
+            "oracle": "-- RANGE includes peers with same sort key.",
+            "sqlite": "-- SQLite: RANGE includes peers with same ORDER BY value.",
+            "bigquery": "-- BigQuery: RANGE includes peers; prefer ROWS when you need row precision."
+          }
+        },
+        {
+          "name": "deterministic_ordering_and_nulls",
+          "description": "Best practice: add tie-breakers and explicit NULLS ordering to keep results stable and predictable.",
+          "sql": "WITH t(id, k, v) AS (VALUES (1,'A',NULL),(2,'A',10),(3,'A',10),(4,'A',5))\nSELECT id, k, v,\n  ROW_NUMBER() OVER (PARTITION BY k ORDER BY v NULLS LAST, id) AS rn\nFROM t\nORDER BY k, rn;",
+          "nerd_notes": "Tie-break with a stable key (e.g., id). Explicit NULLS FIRST/LAST improves determinism across engines.",
+          "compat_examples": {
+            "postgres": "-- Supports NULLS FIRST/LAST in ORDER BY.",
+            "mysql": "-- MySQL treats NULL as lowest; emulate with IS NULL and additional keys if needed.",
+            "oracle": "-- Supports NULLS FIRST/LAST.",
+            "sqlite": "-- SQLite: NULL sorts before non-NULL by default; emulate explicit NULLS order via CASE or IS NULL.",
+            "bigquery": "-- BigQuery: supports NULLS FIRST/LAST in ORDER BY."
+          }
+        }
+      ]
+    }
+  ],
+  "exercises": [
+     {
+      "id": "basic-select",
+      "prompt": "Show the first 5 rows from `orders`.",
+      "answer_sql": "SELECT * FROM orders LIMIT 5;"
+    },
+    {
+      "id": "aggregate-1",
+      "prompt": "Count rows grouped by `order_id`.",
+      "answer_sql": "SELECT order_id, COUNT(*) AS cnt FROM orders GROUP BY order_id ORDER BY cnt DESC;"
+    },
+    {
+      "id": "filter-top",
+      "prompt": "Select the top 10 rows where `order_id` is positive (if numeric) or not null otherwise.",
+      "answer_sql": "SELECT * FROM orders WHERE order_id IS NOT NULL AND order_id > 0 LIMIT 10;"
+    },
+    {
+      "id": "basic-select",
+      "prompt": "Show the first 5 rows from `products`.",
+      "answer_sql": "SELECT * FROM products LIMIT 5;"
+    },
+    {
+      "id": "aggregate-1",
+      "prompt": "Count rows grouped by `product_id`.",
+      "answer_sql": "SELECT product_id, COUNT(*) AS cnt FROM products GROUP BY product_id ORDER BY cnt DESC;"
+    },
+    {
+      "id": "filter-top",
+      "prompt": "Select the top 10 rows where `product_id` is positive (if numeric) or not null otherwise.",
+      "answer_sql": "SELECT * FROM products WHERE product_id IS NOT NULL AND product_id > 0 LIMIT 10;"
+    }
+  ]
+}

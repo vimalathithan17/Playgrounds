@@ -1,0 +1,213 @@
+{
+  "title": "Database Objects (tables, views)",
+  "description": "Complete, self-contained guide to creating and managing database objects in DuckDB: tables, views, schemas, and portable surrogate keys (no SQLite-only triggers). All demos use unique obj_* names and clean up to stay idempotent.",
+  "sections": [
+    {
+      "title": "0. Introduction: Database Objects",
+      "description": "What are database objects and how do we manage them safely in DuckDB?",
+      "examples": [
+        {
+          "name": "intro_objects_overview",
+          "sql": "",
+          "description": "Overview of tables, views, schemas; idempotent patterns and dependency-aware drops.",
+          "nerd_notes": "Use DROP IF EXISTS, keep demo names prefixed (obj_*), and prefer information_schema for portable introspection."
+        }
+      ],
+      "narrative": "This lesson covers creating and managing tables, views, and schemas with safe, repeatable patterns.",
+      "nerd_notes": "For docs-like snippets, use inline VALUES/CTEs or TEMP objects and ORDER BY for deterministic outputs."
+    },
+    {
+      "title": "1.5 Cheat Sheet: Quick Object Patterns",
+      "description": "Four compact, self-contained object patterns using TEMP objects or inline VALUES.",
+      "examples": [
+        {
+          "name": "cs_temp_table_and_list_quick",
+          "description": "Create a TEMP table, list it via information_schema, then clean up.",
+          "sql": "CREATE TEMP TABLE cs_tmp_people(id INTEGER, name TEXT);\nSELECT table_schema, table_name, table_type\nFROM information_schema.tables\nWHERE table_name='cs_tmp_people'\nORDER BY table_schema, table_name;\nDROP TABLE IF EXISTS cs_tmp_people;",
+          "nerd_notes": "TEMP keeps scope local; information_schema is portable across engines."
+        },
+        {
+          "name": "cs_show_columns_via_pragma_quick",
+          "description": "Describe a TEMP table using PRAGMA table_info with quoted identifiers.",
+          "sql": "CREATE TEMP TABLE cs_tmp_cols(i INTEGER, x TEXT);\nSELECT name, \"type\" AS column_type, \"notnull\" AS is_not_null\nFROM pragma_table_info('cs_tmp_cols')\nORDER BY cid;\nDROP TABLE IF EXISTS cs_tmp_cols;",
+          "nerd_notes": "DuckDB PRAGMA columns like \"type\" and \"notnull\" may require quoting."
+        },
+        {
+          "name": "cs_create_or_replace_view_quick",
+          "description": "Create or replace a view over inline values; select, then drop.",
+          "sql": "DROP VIEW IF EXISTS cs_v_demo;\nCREATE VIEW cs_v_demo AS\nSELECT * FROM (VALUES (1,'Alice',100.0),(2,'Bob',50.0)) t(order_id, customer, amount)\nWHERE amount >= 60;\nSELECT order_id, customer, amount FROM cs_v_demo ORDER BY order_id;\nDROP VIEW IF EXISTS cs_v_demo;",
+          "nerd_notes": "Views are saved queries; use ORDER BY for deterministic outputs."
+        },
+        {
+          "name": "cs_list_views_quick",
+          "description": "Create a TEMP view and list it as a VIEW from information_schema; then drop.",
+          "sql": "CREATE TEMP VIEW cs_v_temp AS SELECT 1 AS x;\nSELECT table_schema, table_name, table_type\nFROM information_schema.tables\nWHERE table_type='VIEW' AND table_name='cs_v_temp'\nORDER BY table_schema, table_name;\nDROP VIEW IF EXISTS cs_v_temp;",
+          "nerd_notes": "Filtering by table_type='VIEW' works portably on information_schema.tables in DuckDB."
+        }
+      ],
+      "narrative": "Use these building blocks to quickly create, inspect, and clean up objects in a self-contained way.",
+      "nerd_notes": "Prefer TEMP for ephemeral demos; always drop objects you create inside the snippet."
+    },
+    {
+      "title": "1.6 Pitfalls, Tips, and Q&A",
+      "description": "Common gotchas and best practices for managing objects.",
+      "examples": [
+        {
+          "name": "objects_pitfalls_notes",
+          "sql": "",
+          "description": "Notes: drop children (views) before parents (tables, then schema); avoid NATURAL joins inside views; consider schema vs database naming differences across engines; quote odd identifiers when introspecting.",
+          "nerd_notes": "Use information_schema for portability; preview generated DROP statements before executing broad cleanups."
+        }
+      ],
+      "narrative": "Dependency order matters; view definitions can drift; introspection varies across engines.",
+      "nerd_notes": "Maintain consistent prefixes and idempotent patterns to keep lessons re-runnable."
+    },
+    {
+      "title": "1. Create a table and a view (idempotent)",
+  "description": "Question: how do we create a small table and a view safely so examples can be re-run?",
+      "narrative": "Create an isolated demo table and a view that filters it. Use DROP IF EXISTS, deterministic sample data, and a unique prefix to avoid collisions.",
+      "examples": [
+        {
+          "name": "create_table_and_view",
+          "description": "Create table obj_orders and a view obj_vw_orders; show rows meeting the filter.",
+          "sql": "-- Child-first cleanup in case of prior runs\nDROP VIEW IF EXISTS obj_vw_orders;\nDROP TABLE IF EXISTS obj_orders;\n\nCREATE TABLE obj_orders (\n  order_id INTEGER,\n  customer TEXT,\n  amount DOUBLE\n);\n\nINSERT INTO obj_orders VALUES\n  (1,'A',100.0),\n  (2,'B',50.0);\n\nCREATE VIEW obj_vw_orders AS\nSELECT * FROM obj_orders WHERE amount >= 50;\n\nSELECT * FROM obj_vw_orders ORDER BY order_id;",
+          "nerd_notes": "Views are just saved queries. Keep base tables and views prefixed (obj_*) so lessons don't collide.",
+          "compat_examples": {
+            "postgres": "CREATE VIEW obj_vw_orders AS SELECT * FROM obj_orders WHERE amount >= 50;",
+            "mysql": "CREATE VIEW obj_vw_orders AS SELECT * FROM obj_orders WHERE amount >= 50;",
+            "oracle": "CREATE VIEW obj_vw_orders AS SELECT * FROM obj_orders WHERE amount >= 50;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "2. Views reflect base-table changes",
+  "description": "Question: will a view automatically reflect new base rows?",
+      "narrative": "Insert a new row in the base table; the view updates automatically because it re-runs the query.",
+      "examples": [
+        {
+          "name": "update_reflects_in_view",
+          "description": "Insert into obj_orders and re-select from the view.",
+          "sql": "INSERT INTO obj_orders VALUES (3,'C',30.0);\nSELECT * FROM obj_vw_orders ORDER BY order_id;",
+          "nerd_notes": "The view predicate (amount >= 50) excludes order_id=3."
+        }
+      ]
+    },
+    {
+      "title": "3. Cleanup for the quick-start demo",
+  "description": "Question: how do we drop in the right order so later sections start clean?",
+      "narrative": "Drop view first, then table, to leave a clean slate for later sections.",
+      "examples": [
+        {
+          "name": "quickstart_cleanup",
+          "description": "Drop the objects created above.",
+          "sql": "DROP VIEW IF EXISTS obj_vw_orders;\nDROP TABLE IF EXISTS obj_orders;",
+          "nerd_notes": "Dropping children before parents avoids dependency errors."
+        }
+      ]
+    },
+    {
+      "title": "4. Surrogate keys without sequences (portable)",
+  "description": "Question: how can we generate stable IDs without engine-specific sequences?",
+      "narrative": "Instead of relying on database-specific sequences or IDENTITY, generate stable, monotonic IDs with window functions during ingest.",
+      "examples": [
+        {
+          "name": "row_number_ids",
+          "description": "Create obj_customers_seq with ROW_NUMBER()-based IDs from an inline VALUES set.",
+          "sql": "DROP TABLE IF EXISTS obj_customers_seq;\n\nCREATE TABLE obj_customers_seq AS\nWITH new_customers(name) AS (\n  VALUES ('alice'),('bob'),('carol'),('dave')\n)\nSELECT\n  ROW_NUMBER() OVER (ORDER BY name) AS customer_id,\n  name\nFROM new_customers;\n\nSELECT * FROM obj_customers_seq ORDER BY customer_id;",
+          "nerd_notes": "This pattern is portable and validator-safe. If your target supports IDENTITY, you can declare `customer_id INTEGER GENERATED BY DEFAULT AS IDENTITY`.",
+          "compat_examples": {
+            "postgres": "-- Postgres identity\nCREATE TABLE obj_customers_seq (customer_id INT GENERATED BY DEFAULT AS IDENTITY, name TEXT);",
+            "mysql": "-- MySQL auto-increment\nCREATE TABLE obj_customers_seq (customer_id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255));",
+            "oracle": "-- Oracle identity (12c+)\nCREATE TABLE obj_customers_seq (customer_id NUMBER GENERATED BY DEFAULT AS IDENTITY, name VARCHAR2(4000));"
+          }
+        }
+      ]
+    },
+    {
+      "title": "5. Gap analysis on numeric IDs",
+  "description": "Question: how do we detect missing ID ranges?",
+      "narrative": "Detect missing numeric IDs using window functions. Useful to quantify gaps from deletes or failed inserts.",
+      "examples": [
+        {
+          "name": "id_gap_analysis",
+          "description": "Create a small table with intentional gaps, then report gap ranges and sizes.",
+          "sql": "DROP TABLE IF EXISTS obj_seq_gap;\nCREATE TABLE obj_seq_gap(id INTEGER);\nINSERT INTO obj_seq_gap VALUES (1),(2),(5),(6),(10);\n\nWITH ranked AS (\n  SELECT id, LAG(id) OVER (ORDER BY id) AS prev_id\n  FROM obj_seq_gap\n), gaps AS (\n  SELECT\n    prev_id + 1 AS gap_start,\n    id - 1     AS gap_end,\n    (id - prev_id - 1) AS gap_size\n  FROM ranked\n  WHERE prev_id IS NOT NULL AND id - prev_id > 1\n)\nSELECT * FROM gaps ORDER BY gap_start;",
+          "nerd_notes": "Gaps are normal for many systems. Only investigate if you require dense sequences."
+        }
+      ]
+    },
+    {
+      "title": "6. Object introspection via information_schema",
+  "description": "Question: how do we list the obj_% objects and their columns?",
+      "narrative": "List tables, views, and columns using portable metadata views. Filter to only objects created in this lesson (obj_ prefix).",
+      "examples": [
+        {
+          "name": "list_tables_and_views",
+          "description": "Show lesson tables/views and their types.",
+          "sql": "SELECT table_schema, table_name, table_type\nFROM information_schema.tables\nWHERE table_schema NOT IN ('information_schema')\n  AND table_name LIKE 'obj_%'\nORDER BY table_schema, table_name;",
+          "nerd_notes": "DuckDB exposes information_schema similar to Postgres.",
+          "compat_examples": {
+            "postgres": "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema') AND table_name LIKE 'obj_%';",
+            "mysql": "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name LIKE 'obj_%';",
+            "oracle": "SELECT owner AS table_schema, table_name, 'BASE TABLE' AS table_type FROM user_tables WHERE table_name LIKE 'OBJ_%' UNION ALL SELECT owner, view_name, 'VIEW' FROM user_views WHERE view_name LIKE 'OBJ_%';"
+          }
+        },
+        {
+          "name": "list_columns_for_obj_tables",
+          "description": "List columns for obj_% tables created above.",
+          "sql": "SELECT table_schema, table_name, column_name, data_type, ordinal_position\nFROM information_schema.columns\nWHERE table_name LIKE 'obj_%'\nORDER BY table_schema, table_name, ordinal_position;",
+          "nerd_notes": "Handy for quick audits and documentation.",
+          "compat_examples": {
+            "postgres": "SELECT table_schema, table_name, column_name, data_type, ordinal_position FROM information_schema.columns WHERE table_name LIKE 'obj_%' ORDER BY table_schema, table_name, ordinal_position;",
+            "mysql": "SELECT table_schema, table_name, column_name, data_type, ordinal_position FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name LIKE 'obj_%' ORDER BY table_schema, table_name, ordinal_position;",
+            "oracle": "SELECT table_name AS table_schema, column_name, data_type, column_id AS ordinal_position FROM user_tab_columns WHERE table_name LIKE 'OBJ_%' ORDER BY table_name, column_id;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "7. Schemas and dependencies (child-first drops)",
+  "description": "Question: how do schemas, tables, and views relate and what's the safe drop order?",
+      "narrative": "Create a dedicated schema, a table inside it, and a view depending on that table. Demonstrate safe drop ordering.",
+      "examples": [
+        {
+          "name": "schema_and_view_dependency",
+          "description": "Create schema obj_demo, table obj_demo.items, and view obj_demo.vw_items; then drop in dependency order.",
+          "sql": "-- Clean up older runs\nDROP VIEW IF EXISTS obj_demo.vw_items;\nDROP TABLE IF EXISTS obj_demo.items;\nDROP SCHEMA IF EXISTS obj_demo;\n\nCREATE SCHEMA obj_demo;\nCREATE TABLE obj_demo.items (item_id INTEGER, name TEXT, price DOUBLE);\nINSERT INTO obj_demo.items VALUES (1,'pencil',0.99),(2,'pen',1.49);\nCREATE VIEW obj_demo.vw_items AS SELECT * FROM obj_demo.items WHERE price >= 1;\n\n-- Use the view\nSELECT * FROM obj_demo.vw_items ORDER BY item_id;\n\n-- Drop in child-first order\nDROP VIEW IF EXISTS obj_demo.vw_items;\nDROP TABLE IF EXISTS obj_demo.items;\nDROP SCHEMA IF EXISTS obj_demo;",
+          "nerd_notes": "Always drop dependent objects (views) before parents (tables, then schema).",
+          "compat_examples": {
+            "postgres": "CREATE SCHEMA obj_demo; CREATE TABLE obj_demo.items (...); CREATE VIEW obj_demo.vw_items AS SELECT ...; DROP VIEW IF EXISTS obj_demo.vw_items; DROP TABLE IF EXISTS obj_demo.items; DROP SCHEMA IF EXISTS obj_demo;",
+            "mysql": "-- MySQL schemas are called databases; CREATE DATABASE obj_demo; USE obj_demo; CREATE TABLE items (...); CREATE VIEW vw_items AS SELECT ...; DROP VIEW vw_items; DROP TABLE items; DROP DATABASE obj_demo;",
+            "oracle": "-- Oracle schemas are per-user; CREATE USER/GRANT required. Use CREATE VIEW obj_demo.vw_items AS SELECT ... when schema/user exists."
+          }
+        }
+      ]
+    },
+    {
+      "title": "8. Final cleanup",
+  "description": "Question: how do we ensure nothing leaks across lessons?",
+      "narrative": "Remove any remaining obj_* objects to keep the database clean for other lessons.",
+      "examples": [
+        {
+          "name": "objects_final_cleanup",
+          "description": "Drop leftover demo objects.",
+          "sql": "-- Drop views first if they exist\nDROP VIEW IF EXISTS obj_vw_orders;\nDROP VIEW IF EXISTS obj_demo.vw_items;\n-- Drop tables\nDROP TABLE IF EXISTS obj_orders;\nDROP TABLE IF EXISTS obj_customers_seq;\nDROP TABLE IF EXISTS obj_seq_gap;\nDROP TABLE IF EXISTS obj_demo.items;\n-- Drop schema last\nDROP SCHEMA IF EXISTS obj_demo;",
+          "nerd_notes": "Keeping examples idempotent ensures persistent validation passes across the whole repo."
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+      "id": "obj-list",
+      "prompt": "List all obj_% tables and views using information_schema (table_schema, table_name, table_type).",
+      "answer_sql": "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_name LIKE 'obj_%' ORDER BY 1,2;"
+    },
+    {
+      "id": "obj-gap",
+      "prompt": "Given table obj_seq_gap(id), list all missing IDs between existing values as (gap_start, gap_end).",
+      "answer_sql": "WITH ranked AS (SELECT id, LAG(id) OVER (ORDER BY id) AS prev_id FROM obj_seq_gap), gaps AS (SELECT prev_id + 1 AS gap_start, id - 1 AS gap_end FROM ranked WHERE prev_id IS NOT NULL AND id - prev_id > 1) SELECT * FROM gaps ORDER BY gap_start;"
+    }
+  ]
+}

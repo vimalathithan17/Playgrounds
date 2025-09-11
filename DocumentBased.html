@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Document Store Emulator (Advanced)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
@@ -14,7 +14,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/mode/javascript/javascript.min.js"></script>
 
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #1a1a1a; color: #e0e0e0; overflow: hidden; }
+    body { font-family: 'Inter', sans-serif; background-color: #1a1a1a; color: #e0e0e0; overflow: hidden; }
+    :root { --mobile-nav-height: 56px; }
         .CodeMirror { font-family: 'Fira Code', monospace; font-size: 14px; line-height: 21px; height: 100%; background-color: #1e1e1e; }
         .CodeMirror-gutters { background-color: #252526 !important; border-right: 1px solid #3a3a3a; }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -1764,5 +1765,13 @@
             updateVisualization();
         });
     </script>
+        <script>
+            // Mobile bottom nav safe-area support (if page defines a mobile nav)
+            (function(){
+                const style = document.createElement('style');
+                style.textContent = `@media (max-width: 768px){ nav.md\\:hidden{ position: fixed; bottom:0; left:0; right:0; z-index:40; padding-bottom: env(safe-area-inset-bottom);} main{ padding-bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom)); } }`;
+                document.head.appendChild(style);
+            })();
+        </script>
 </body>
 </html>

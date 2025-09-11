@@ -1,0 +1,310 @@
+{
+  "title": "Drop and Cleanup Patterns",
+  "description": "A practical, question-first walkthrough of safely dropping objects and cleaning up demo artifacts in DuckDB. Each section is idempotent, DuckDB-friendly, and includes notes for other engines.",
+  "sections": [
+    {
+      "title": "0. Introduction: Safe Drops & Cleanup",
+      "narrative": "This lesson shows how to safely drop tables, views, and schemas; preview cleanup SQL; queue execution; use temporary tables; and attach/detach a transient database. All patterns are idempotent and end with deterministic checks.",
+      "nerd_notes": "Prefer IF EXISTS for repeatability. For previews, use information_schema to generate statements. Avoid executing generated DROP SQL inline in DuckDB; use a gated script instead.",
+      "examples": []
+    },
+    {
+      "title": "1. Setup: create demo objects",
+      "description": "Create small, disposable objects we'll drop later. Question: how do we seed a few objects so cleanup patterns are realistic?",
+      "examples": [
+        {
+          "name": "setup_demo_objects",
+          "sql": "-- Tables in main schema\nDROP TABLE IF EXISTS cleanup_demo;\nCREATE TABLE cleanup_demo (id INTEGER, val TEXT);\nINSERT INTO cleanup_demo VALUES (1,'a'),(2,'b');\n\n-- A tiny view to drop later\nDROP VIEW IF EXISTS v_cleanup;\nCREATE VIEW v_cleanup AS SELECT id, UPPER(val) AS uval FROM cleanup_demo;\n\n-- Create a separate schema and an object in it for CASCADE demo\nCREATE SCHEMA IF NOT EXISTS util;\nCREATE TABLE IF NOT EXISTS util.staging_tmp (k INTEGER);\nINSERT INTO util.staging_tmp VALUES (42);\n\n-- Show what we created (tables + views in main)\nSELECT table_schema, table_name, table_type\nFROM information_schema.tables\nWHERE (table_schema = 'main' AND table_name IN ('cleanup_demo','v_cleanup'))\n   OR (table_schema = 'util' AND table_name = 'staging_tmp')\nORDER BY table_schema, table_name;",
+          "description": "Now let's say we need a few lightweight objects to practice cleanup — how do we create and verify them?",
+          "nerd_notes": "Idempotent setup (DROP IF EXISTS then CREATE) lets these examples be re-run safely. We also create a separate schema to demonstrate CASCADE removal.",
+          "compat_examples": {
+            "postgres": "-- Postgres: CREATE SCHEMA util; CREATE TABLE util.staging_tmp (k int);\n-- Views and tables are created with the same syntax.",
+            "mysql": "-- MySQL: CREATE SCHEMA util; CREATE TABLE util.staging_tmp (k INT);\n-- MySQL requires a database selected or schema-qualified names.",
+            "oracle": "-- Oracle: CREATE USER UTIL IDENTIFIED BY ...; GRANT CREATE SESSION, CREATE TABLE;\n-- Use UTIL.STAGING_TMP with appropriate privileges."
+          }
+        }
+      ],
+      "narrative": "We seed a couple of objects: a table and a view in main, plus a separate schema with a staging table. These give us concrete things to drop in the next sections without touching unrelated data.",
+      "nerd_notes": "DuckDB stores objects in schemas (namespaces). information_schema.tables lists both BASE TABLE and VIEW entries; information_schema.schemata lists schemas."
+    },
+    {
+      "title": "1.5 Cheat Sheet: Quick Cleanup Patterns",
+      "narrative": "Copy‑paste snippets for common cleanup tasks. Each is self-contained and idempotent.",
+      "examples": [
+        {
+          "name": "cs_drop_table_quick",
+          "description": "Drop a table if it exists and prove it’s gone.",
+          "sql": "DROP TABLE IF EXISTS cs_tmp;\nCREATE TABLE cs_tmp (i INTEGER);\nDROP TABLE IF EXISTS cs_tmp;\nSELECT COUNT(*) AS remaining FROM information_schema.tables WHERE table_schema='main' AND table_name='cs_tmp';",
+          "nerd_notes": "Create then drop to keep the example self-contained; final check uses information_schema.",
+          "compat_examples": {
+            "postgres": "DROP TABLE IF EXISTS cs_tmp;",
+            "mysql": "DROP TABLE IF EXISTS cs_tmp;",
+            "oracle": "BEGIN EXECUTE IMMEDIATE 'DROP TABLE cs_tmp'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+          }
+        },
+        {
+          "name": "cs_drop_view_quick",
+          "description": "Drop a view if it exists and verify removal.",
+          "sql": "DROP VIEW IF EXISTS cs_v;\nCREATE VIEW cs_v AS SELECT 1 AS x;\nDROP VIEW IF EXISTS cs_v;\nSELECT COUNT(*) AS remaining FROM information_schema.tables WHERE table_schema='main' AND table_name='cs_v' AND table_type='VIEW';",
+          "nerd_notes": "Views are listed as VIEW in information_schema.tables.",
+          "compat_examples": {
+            "postgres": "DROP VIEW IF EXISTS cs_v;",
+            "mysql": "DROP VIEW IF EXISTS cs_v;",
+            "oracle": "DROP VIEW cs_v; -- emulate IF EXISTS with exception handler"
+          }
+        },
+        {
+          "name": "cs_drop_schema_cascade_quick",
+          "description": "Create a schema and object, then drop the schema CASCADE and verify.",
+          "sql": "CREATE SCHEMA IF NOT EXISTS cs_util;\nCREATE TABLE IF NOT EXISTS cs_util.tmp (k INTEGER);\nDROP SCHEMA IF EXISTS cs_util CASCADE;\nSELECT COUNT(*) AS remaining FROM information_schema.schemata WHERE schema_name='cs_util';",
+          "nerd_notes": "CASCADE removes contained objects. Always verify with information_schema.",
+          "compat_examples": {
+            "postgres": "DROP SCHEMA IF EXISTS cs_util CASCADE;",
+            "mysql": "DROP DATABASE IF EXISTS cs_util;",
+            "oracle": "-- Dropping a schema maps to dropping a user; requires admin steps"
+          }
+        },
+        {
+          "name": "cs_preview_drop_statements_quick",
+          "description": "Preview DROP statements for demo-named objects in main.",
+          "sql": "WITH objs AS (\n  SELECT table_name, table_type\n  FROM information_schema.tables\n  WHERE table_schema='main' AND (table_name LIKE 'cs_%' OR table_name LIKE 'cleanup_%')\n)\nSELECT CASE WHEN table_type='VIEW' THEN 'DROP VIEW IF EXISTS '||table_name||';' ELSE 'DROP TABLE IF EXISTS '||table_name||';' END AS drop_stmt\nFROM objs\nORDER BY drop_stmt;",
+          "nerd_notes": "Preview only. Execution should be guarded via a separate, confirm-gated script.",
+          "compat_examples": {
+            "postgres": "-- Same generation; optionally EXECUTE via plpgsql after review",
+            "mysql": "-- Generate then PREPARE/EXECUTE in application code",
+            "oracle": "-- Generate then EXECUTE IMMEDIATE in a controlled PL/SQL block"
+          }
+        }
+      ]
+    },
+    {
+      "title": "1.6 Pitfalls, Tips, and Q&A",
+      "narrative": "Common cleanup gotchas and recommended safety rails.",
+      "examples": [
+        { "name": "pitfall_if_exists_everywhere", "description": "IF EXISTS is great for demos, but can mask typos in migrations. Prefer explicit checks and assertions in production.", "sql": "" },
+        { "name": "tip_preview_then_execute", "description": "Always preview generated DROP statements via information_schema and require a manual confirm to execute.", "sql": "" },
+        { "name": "question_quote_identifiers", "description": "Should I quote names when generating SQL? Yes—quote when names can be mixed-case or contain special chars.", "sql": "" },
+        { "name": "tricky_schema_vs_database", "description": "Some engines use schema==database (MySQL). Adjust DROP SCHEMA vs DROP DATABASE accordingly.", "sql": "" },
+        { "name": "fundamental_transactional_drops", "description": "Run destructive changes in a transaction when possible; log the statements for audit.", "sql": "" }
+      ]
+    },
+    {
+      "title": "2. Drop tables safely (verify removal)",
+      "description": "Question: how do we drop a table repeatedly without errors and confirm it's gone?",
+      "examples": [
+        {
+          "name": "drop_table_if_exists",
+          "sql": "DROP TABLE IF EXISTS cleanup_demo;\n-- Verify table is removed\nSELECT COUNT(*) AS remaining\nFROM information_schema.tables\nWHERE table_schema = 'main' AND table_name = 'cleanup_demo';",
+          "description": "Now let's say we want to remove a demo table and confirm it's gone — how do we do that idempotently?",
+          "nerd_notes": "DROP TABLE IF EXISTS avoids failures on re-run. Verifying through information_schema makes tests deterministic.",
+          "compat_examples": {
+            "postgres": "-- Postgres supports IF EXISTS\n-- DROP TABLE IF EXISTS cleanup_demo;",
+            "mysql": "-- MySQL supports IF EXISTS\n-- DROP TABLE IF EXISTS cleanup_demo;",
+            "oracle": "-- Oracle (older) lacks IF EXISTS; emulate:\n-- BEGIN EXECUTE IMMEDIATE 'DROP TABLE cleanup_demo PURGE'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+          }
+        }
+      ],
+      "narrative": "Use IF EXISTS for idempotency and query information_schema to double-check object state.",
+      "nerd_notes": "In teaching code, always prefer predictable cleanup, especially when a persistent DB is used across runs."
+    },
+    {
+      "title": "3. Drop views safely",
+      "description": "Question: can we drop a view repeatedly and verify it's not listed anymore?",
+      "examples": [
+        {
+          "name": "drop_view_if_exists",
+          "sql": "-- Ensure the view exists first (idempotent)\nDROP VIEW IF EXISTS v_cleanup;\nCREATE VIEW v_cleanup AS SELECT 1 AS x;\n\n-- Drop the view safely and verify\nDROP VIEW IF EXISTS v_cleanup;\nSELECT COUNT(*) AS remaining\nFROM information_schema.tables\nWHERE table_schema = 'main' AND table_name = 'v_cleanup' AND table_type = 'VIEW';",
+          "description": "Now let's say we want to ensure a view is removed — how do we do it safely and confirm removal?",
+          "nerd_notes": "Views appear in information_schema.tables with table_type = 'VIEW'.",
+          "compat_examples": {
+            "postgres": "-- DROP VIEW IF EXISTS v_cleanup;",
+            "mysql": "-- DROP VIEW IF EXISTS v_cleanup;",
+            "oracle": "-- DROP VIEW v_cleanup; -- Older Oracle doesn't support IF EXISTS."
+          }
+        }
+      ],
+      "narrative": "Dropping views mirrors tables: use IF EXISTS and verify via information_schema.",
+      "nerd_notes": "DuckDB doesn't have user-managed secondary indexes or sequences like other engines, so we focus on tables, views, and schemas."
+    },
+    {
+      "title": "4. Drop schema (namespace) with CASCADE",
+      "description": "Question: how do we remove a whole schema and its contents safely?",
+      "examples": [
+        {
+          "name": "drop_schema_cascade",
+          "sql": "-- Ensure objects exist inside util schema (from setup)\nCREATE SCHEMA IF NOT EXISTS util;\nCREATE TABLE IF NOT EXISTS util.staging_tmp (k INTEGER);\n\n-- Drop the schema and contained objects\nDROP SCHEMA IF EXISTS util CASCADE;\n\n-- Verify the schema is gone\nSELECT COUNT(*) AS remaining\nFROM information_schema.schemata\nWHERE schema_name = 'util';",
+          "description": "Now let's say we want to remove a whole namespace we used for staging — how do we drop it and everything inside?",
+          "nerd_notes": "CASCADE removes contained objects. If you want a safety check, list objects in information_schema first.",
+          "compat_examples": {
+            "postgres": "-- DROP SCHEMA IF EXISTS util CASCADE;",
+            "mysql": "-- MySQL uses DROP DATABASE for top-level namespaces; schemas are databases.",
+            "oracle": "-- Oracle schemas are users; dropping a schema equates to dropping a user and objects."
+          }
+        }
+      ],
+      "narrative": "Use CASCADE to remove the schema and its objects in one go.",
+      "nerd_notes": "Consider a read-only preview (SELECT from information_schema) before destructive drops."
+    },
+    {
+      "title": "5. Temporary tables: session lifecycle",
+      "description": "Question: how do temporary tables behave and how do we clean them up?",
+      "examples": [
+        {
+          "name": "temp_table_lifecycle",
+          "sql": "CREATE TEMPORARY TABLE session_data (session_id VARCHAR, user_id INTEGER);\nINSERT INTO session_data VALUES ('s1',1),('s2',2);\n-- Show it works within the session\nSELECT COUNT(*) AS rows_in_temp FROM session_data;\n-- Drop explicitly for clarity in lessons (temp tables auto-drop on session end)\nDROP TABLE session_data;\n-- Provide a final status row\nSELECT 'ok' AS status;",
+          "description": "Now let's say we need a scratch table for a session — how do we create, use, and drop it?",
+          "nerd_notes": "TEMPORARY objects live only for the connection. We add an explicit DROP for clarity and repeatability in examples.",
+          "compat_examples": {
+            "postgres": "-- CREATE TEMPORARY TABLE session_data(...); -- auto-dropped at session end",
+            "mysql": "-- CREATE TEMPORARY TABLE session_data(...); -- scoped to connection",
+            "oracle": "-- Use GLOBAL TEMPORARY TABLE; contents are session/transaction scoped"
+          }
+        }
+      ],
+      "narrative": "Temporary tables are great for staging within a single session. They auto-disappear, but explicit DROP keeps lessons tidy.",
+      "nerd_notes": "DuckDB temporary tables are not listed in information_schema for persistence checks; rely on behavior within the same example."
+    },
+    {
+      "title": "6. Generate cleanup statements (read-only)",
+      "description": "Question: how can we list the DROP commands we would run, without executing them?",
+      "examples": [
+        {
+          "name": "generate_cleanup_sql",
+          "sql": "-- Produce DROP statements for main schema objects that match a demo prefix\nWITH objs AS (\n  SELECT table_name, table_type\n  FROM information_schema.tables\n  WHERE table_schema = 'main' AND table_name LIKE 'cleanup_%'\n)\nSELECT CASE WHEN table_type = 'VIEW'\n            THEN 'DROP VIEW IF EXISTS ' || table_name || ';'\n            ELSE 'DROP TABLE IF EXISTS ' || table_name || ';' END AS drop_stmt\nFROM objs\nORDER BY drop_stmt;",
+          "description": "Now let's say we want a scripted cleanup list for demo objects — how do we generate those statements?",
+          "nerd_notes": "DuckDB doesn't EXECUTE dynamic SQL strings; this is a preview list you can copy-paste. Safety tip: if your identifiers contain uppercase/special chars or reserved words, wrap them in double quotes when generating (e.g., 'DROP TABLE IF EXISTS \"' || table_name || '\";').",
+          "compat_examples": {
+            "postgres": "-- Use information_schema or pg_catalog to generate and EXECUTE via plpgsql if desired.",
+            "mysql": "-- Generate statements, then prepare/execute in application code.",
+            "oracle": "-- Use data dictionary views and EXECUTE IMMEDIATE in PL/SQL for dynamic runs."
+          }
+        },
+        {
+          "name": "generate_cleanup_sql_all_schemas",
+          "sql": "-- Produce DROP statements across non-system schemas for objects with the demo prefix\nWITH objs AS (\n  SELECT table_schema, table_name, table_type\n  FROM information_schema.tables\n  WHERE table_schema NOT IN ('information_schema')\n    AND table_name LIKE 'cleanup_%'\n)\nSELECT CASE WHEN table_type = 'VIEW'\n            THEN 'DROP VIEW IF EXISTS ' || table_schema || '.' || table_name || ';'\n            ELSE 'DROP TABLE IF EXISTS ' || table_schema || '.' || table_name || ';' END AS drop_stmt\nFROM objs\nORDER BY drop_stmt;",
+          "description": "Now let's say some demo objects live outside main — how do we generate schema-qualified cleanup statements?",
+          "nerd_notes": "We exclude system schemas. Safety tip: add double quotes around schema and table (\"' || table_schema || '\".\"' || table_name || '\"), if your environment uses mixed case or special characters.",
+          "compat_examples": {
+            "postgres": "-- Filter out pg_catalog, information_schema; optionally use quote_ident for safety.",
+            "mysql": "-- Use TABLE_SCHEMA in information_schema.tables and CONCAT for db-qualified names.",
+            "oracle": "-- Use ALL_TABLES/ALL_VIEWS or DBA_* with owner filtering; build owner.object strings."
+          }
+        },
+        {
+          "name": "generate_cleanup_by_regex_list",
+          "sql": "-- Generate DROP statements by a regex allowlist across schemas\nWITH patterns AS (\n  SELECT '^v_.*$' AS rx UNION ALL  -- views starting with v_\n  SELECT '^tmp_.*$' UNION ALL      -- temp/staging tables\n  SELECT '^cleanup_.*$'            -- demo cleanup artifacts\n), objs AS (\n  SELECT t.table_schema, t.table_name, t.table_type\n  FROM information_schema.tables t\n  JOIN patterns p ON REGEXP_MATCHES(t.table_name, p.rx)\n  WHERE t.table_schema NOT IN ('information_schema')\n)\nSELECT CASE WHEN table_type = 'VIEW'\n            THEN 'DROP VIEW IF EXISTS ' || table_schema || '.' || table_name || ';'\n            ELSE 'DROP TABLE IF EXISTS ' || table_schema || '.' || table_name || ';' END AS drop_stmt\nFROM objs\nORDER BY drop_stmt;",
+          "description": "Now let's say we maintain a small regex list of droppable patterns — how do we preview the exact DROP statements?",
+          "nerd_notes": "Adjust patterns to your project's conventions. Use narrower regexes in production to reduce risk. Consider quoting identifiers if names may require it.",
+          "compat_examples": {
+            "postgres": "-- Use ~ operator: t.table_name ~ p.rx; handle case sensitivity with (?i) when needed.",
+            "mysql": "-- MySQL REGEXP uses ICU; in 8.0+: t.table_name REGEXP p.rx. Be aware of syntax differences.",
+            "oracle": "-- Use REGEXP_LIKE(t.table_name, p.rx) and concatenate owner||'.'||table_name."
+          }
+        },
+        {
+          "name": "generate_cleanup_excluding_protected_prefixes",
+          "sql": "-- Generate DROP statements excluding protected prefixes (safety allowlist)\nWITH protected AS (\n  SELECT 'prod_' AS px UNION ALL  -- production tables\n  SELECT 'sys_'  UNION ALL       -- system-like objects (convention)\n  SELECT 'critical_'             -- anything explicitly protected\n), objs AS (\n  SELECT t.table_schema, t.table_name, t.table_type\n  FROM information_schema.tables t\n  WHERE t.table_schema NOT IN ('information_schema')\n), filtered AS (\n  SELECT *\n  FROM objs o\n  WHERE NOT EXISTS (\n    SELECT 1 FROM protected p\n    WHERE o.table_name LIKE p.px || '%'\n  )\n)\nSELECT CASE WHEN table_type = 'VIEW'\n            THEN 'DROP VIEW IF EXISTS ' || table_schema || '.' || table_name || ';'\n            ELSE 'DROP TABLE IF EXISTS ' || table_schema || '.' || table_name || ';' END AS drop_stmt\nFROM filtered\nORDER BY drop_stmt;",
+          "description": "Now let's say we want to avoid dropping anything with protected prefixes like prod_, sys_, or critical_ — how do we exclude them while generating statements?",
+          "nerd_notes": "Tune the protected list to your organization's conventions. Keep protections broad by default and require opt-in to narrow them. Consider also excluding by schema (e.g., prod, finance) for layered safety.",
+          "compat_examples": {
+            "postgres": "-- Use NOT EXISTS with prefix list; optionally add schema filters and quote_ident for safety.",
+            "mysql": "-- Use NOT EXISTS and CONCAT for prefix checks; consider INFORMATION_SCHEMA.TABLES filtering.",
+            "oracle": "-- Use NOT EXISTS and owner filters; build owner||'.'||table_name strings."
+          }
+        },
+        {
+          "name": "queue_cleanup_statements",
+          "sql": "-- Queue generated DROP statements into a table for review/execution\nDROP TABLE IF EXISTS cleanup_queue;\nCREATE TABLE cleanup_queue AS\nWITH patterns AS (\n  SELECT '^v_.*$' AS rx UNION ALL  -- views like v_cleanup\n  SELECT '^cleanup_.*$'           -- tables like cleanup_demo\n), objs AS (\n  SELECT t.table_schema, t.table_name, t.table_type\n  FROM information_schema.tables t\n  JOIN patterns p ON REGEXP_MATCHES(t.table_name, p.rx)\n  WHERE t.table_schema NOT IN ('information_schema')\n)\nSELECT CASE WHEN table_type = 'VIEW'\n            THEN 'DROP VIEW IF EXISTS ' || table_schema || '.' || table_name || ';'\n            ELSE 'DROP TABLE IF EXISTS ' || table_schema || '.' || table_name || ';' END AS drop_stmt\nFROM objs;\n-- Return how many statements are queued\nSELECT COUNT(*) AS queued FROM cleanup_queue;",
+          "description": "First, capture the generated DROP statements into a queue table so you can review them before executing.",
+          "nerd_notes": "Keeping statements in a table enables auditing and a separate, explicit execution step (outside this validator).",
+          "compat_examples": {
+            "postgres": "-- Stash statements in a temp table, then EXECUTE in a controlled PL/pgSQL block if confirmed.",
+            "mysql": "-- Store statements, then iterate and PREPARE/EXECUTE in application code.",
+            "oracle": "-- Use a staging table plus EXECUTE IMMEDIATE in a guarded PL/SQL block."
+          }
+        },
+        {
+          "name": "preview_cleanup_queue",
+          "sql": "-- Preview a sample of queued statements (dry-run)\nSELECT drop_stmt\nFROM cleanup_queue\nORDER BY drop_stmt\nLIMIT 1;",
+          "description": "Second, preview the queued statements you’re about to run.",
+          "nerd_notes": "In larger environments, page through the queue and require human approval.",
+          "compat_examples": {
+            "postgres": "-- SELECT drop_stmt FROM cleanup_queue ORDER BY 1 LIMIT 10;",
+            "mysql": "-- SELECT drop_stmt FROM cleanup_queue ORDER BY 1 LIMIT 10;",
+            "oracle": "-- SELECT drop_stmt FROM cleanup_queue WHERE ROWNUM <= 10;"
+          }
+        },
+        {
+          "name": "execute_cleanup_queue_guarded",
+          "sql": "-- Execution is performed by a separate script (tools/execute_cleanup_queue.py).\n-- Intentional no-op in this lesson to keep validation read-only.\nSELECT 'dry_run_only' AS status;",
+          "description": "Finally, run a separate script to execute the queued statements only when an explicit --confirm flag is provided.",
+          "nerd_notes": "See tools/execute_cleanup_queue.py for a transactional, confirm-gated executor.",
+          "compat_examples": {
+            "postgres": "-- Use a DO block or function that checks a flag, then EXECUTE each statement in a transaction.",
+            "mysql": "-- Application-driven execution with explicit confirmation.",
+            "oracle": "-- Guarded EXECUTE IMMEDIATE loop with logging and exception handling."
+          }
+        }
+      ],
+      "narrative": "Listing intended DROP statements is a safe way to review changes before running them.",
+      "nerd_notes": "Dry-run policy: always preview generated DROP statements first and require an explicit confirmation step before executing them in any environment. Prefer running destructive steps inside a transaction when feasible, and log the generated SQL for audit. Scope your filters (prefixes, schemas) to avoid accidentally listing non-demo objects."
+    },
+    {
+      "title": "7. TRUNCATE equivalent (DELETE)",
+      "description": "Question: how do we quickly empty a table in DuckDB (no TRUNCATE), and verify it's empty?",
+      "examples": [
+        {
+          "name": "truncate_equivalent",
+          "sql": "-- Ensure a demo table exists to truncate\nCREATE TABLE IF NOT EXISTS cleanup_demo (id INTEGER, val TEXT);\nINSERT INTO cleanup_demo VALUES (3,'c'),(4,'d');\n-- TRUNCATE equivalent in DuckDB\nDELETE FROM cleanup_demo;\n-- Verify empty\nSELECT COUNT(*) AS remaining_rows FROM cleanup_demo;",
+          "description": "Empty a table using DELETE FROM and confirm zero rows remain.",
+          "nerd_notes": "Other engines offer TRUNCATE as DDL (often faster, resets identity). DuckDB uses DELETE; use VACUUM for storage reclaim if needed.",
+          "compat_examples": {
+            "postgres": "-- TRUNCATE TABLE cleanup_demo;",
+            "mysql": "-- TRUNCATE TABLE cleanup_demo;",
+            "oracle": "-- TRUNCATE TABLE cleanup_demo;"
+          }
+        }
+      ],
+      "narrative": "DELETE FROM is the simplest way to clear a table in DuckDB.",
+      "nerd_notes": "This keeps examples deterministic without side effects on sequences (DuckDB doesn't auto-increment like some engines)."
+    },
+    {
+      "title": "8. Attach/Detach a temporary database",
+      "description": "Question: how can we attach a transient database for experiments and then detach it cleanly?",
+      "examples": [
+        {
+          "name": "attach_detach_demo",
+          "sql": "ATTACH DATABASE ':memory:' AS temp_fresh_db;\n-- Sanity check by creating/reading a probe table in the attached DB\nCREATE TABLE temp_fresh_db._probe (n INTEGER);\nINSERT INTO temp_fresh_db._probe VALUES (1),(2);\nSELECT COUNT(*) AS rows_in_attached FROM temp_fresh_db._probe;\n-- Cleanup and detach\nDROP TABLE temp_fresh_db._probe;\nDETACH DATABASE temp_fresh_db;\nSELECT 'detached' AS status;",
+          "description": "Attach an in-memory DB, verify it's present, then detach so the session is clean.",
+          "nerd_notes": "Don't attempt to DETACH 'main'. We verify attachment by creating and querying a small table inside the attached database, then drop it before DETACH. This mirrors the HTML's multi-database cleanup ideas in a DuckDB-safe way.",
+          "compat_examples": {
+            "postgres": "-- CREATE DATABASE/ DROP DATABASE are cluster-level; superuser privileges required.",
+            "mysql": "-- MySQL has server-managed databases; use DROP DATABASE with care.",
+            "oracle": "-- Oracle uses pluggable databases and users; attach/detach patterns differ."
+          }
+        }
+      ],
+      "narrative": "A short attach/detach pattern that's safe in the validator environment.",
+      "nerd_notes": "This keeps the lesson self-contained without OS-level file deletes."
+    },
+    {
+      "title": "9. Final cleanup",
+      "description": "Question: how do we leave no demo artifacts behind?",
+      "examples": [
+        {
+          "name": "cleanup_all",
+          "sql": "DROP VIEW IF EXISTS v_cleanup;\nDROP TABLE IF EXISTS cleanup_demo;\nDROP SCHEMA IF EXISTS util CASCADE;\n-- Cheat sheet artifacts\nDROP VIEW IF EXISTS cs_v;\nDROP SCHEMA IF EXISTS cs_util CASCADE;\nDROP TABLE IF EXISTS cs_tmp;\nSELECT 'cleanup_done' AS status;",
+          "description": "Drop any objects this lesson might have created.",
+          "nerd_notes": "Idempotent cleanup helps avoid cross-test pollution in persistent DB runs.",
+          "compat_examples": {
+            "postgres": "-- Use IF EXISTS and CASCADE where appropriate.",
+            "mysql": "-- DROP VIEW/ TABLE IF EXISTS; use DROP DATABASE for schema-equivalent.",
+            "oracle": "-- Drop views and tables; schemas map to users and require admin steps."
+          }
+        }
+      ],
+      "narrative": "We end by dropping everything we created so reruns start clean.",
+      "nerd_notes": "Keep cleanup near the end of the file to avoid interfering with intermediate examples that rely on prior objects."
+    }
+  ]
+}

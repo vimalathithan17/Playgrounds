@@ -1,0 +1,292 @@
+{
+  "title": "DuckDB Advanced Features",
+  "description": "Explore DuckDB's unique capabilities including list/array ops, advanced analytics, stats, and performance introspection. Examples are idempotent and self-contained.",
+  "sections": [
+    {
+      "title": "0. Introduction: Advanced DuckDB",
+      "narrative": "This lesson showcases advanced DuckDB capabilities: list/array ops, JSON/STRUCT handling, external file scans (Parquet/CSV/JSON), analytics with windows, stats, and performance introspection. All examples are idempotent, deterministic, and finish with small, verifiable outputs.",
+      "nerd_notes": "Prefer tiny datasets and ORDER BY for stable results. Use struct_pack/list_value for inline structured demo data. For external scans, reference small repo‑tracked files. Avoid executing generated SQL; keep destructive actions guarded.",
+      "examples": []
+    },
+    {
+      "title": "0. Setup demo data",
+      "description": "Question: how do we seed small demo tables for advanced analytics examples?",
+      "examples": [
+        {
+          "name": "setup_demo_data",
+          "sql": "-- Clean up if re-running\nDROP TABLE IF EXISTS order_items;\nDROP TABLE IF EXISTS orders;\nDROP TABLE IF EXISTS products;\nDROP TABLE IF EXISTS categories;\nDROP TABLE IF EXISTS customers;\n\n-- Customers\nCREATE TABLE customers (customer_id INTEGER, first_name TEXT, last_name TEXT);\nINSERT INTO customers VALUES (1,'Alice','Anders'),(2,'Bob','Baker'),(3,'Cara','Cole');\n\n-- Orders\nCREATE TABLE orders (order_id INTEGER, customer_id INTEGER, order_date DATE, total_amount DOUBLE);\nINSERT INTO orders VALUES\n  (101,1, DATE '2024-01-01', 100.0),\n  (102,1, DATE '2024-01-10',  50.0),\n  (103,2, DATE '2024-01-05', 200.0),\n  (104,2, DATE '2024-01-15', 150.0),\n  (105,3, DATE '2024-01-07',  75.0);\n\n-- Categories\nCREATE TABLE categories (category_id INTEGER, name TEXT);\nINSERT INTO categories VALUES (10,'Gadgets'),(20,'Widgets');\n\n-- Products\nCREATE TABLE products (product_id INTEGER, name TEXT, category_id INTEGER, price DOUBLE, stock_quantity INTEGER);\nINSERT INTO products VALUES\n  (1001,'Widget 1',       20,  9.99,100),\n  (1002,'Gadget Pro 2',  10, 19.99, 50),\n  (1003,'Gizmo 3000',    10, 29.99, 20);\n\n-- Order items\nCREATE TABLE order_items (order_item_id INTEGER, order_id INTEGER, product_id INTEGER, quantity INTEGER);\nINSERT INTO order_items VALUES\n  (1,101,1001,2),\n  (2,101,1002,1),\n  (3,102,1001,1),\n  (4,103,1003,3),\n  (5,104,1002,2),\n  (6,105,1001,1);\n\n-- Verify created objects\nSELECT table_schema, table_name, table_type\nFROM information_schema.tables\nWHERE table_schema = 'main' AND table_name IN ('customers','orders','products','categories','order_items')\nORDER BY table_name;",
+          "description": "Create tiny customers/orders/products tables to drive the advanced examples that follow.",
+          "nerd_notes": "Idempotent setup (DROP IF EXISTS then CREATE) ensures re-runs work. Small datasets keep examples fast and deterministic.",
+          "compat_examples": {
+            "postgres": "-- Same DDL works; consider adding primary/foreign keys for realism.",
+            "mysql": "-- Same DDL with types adjusted if desired (e.g., DECIMAL for price).",
+            "oracle": "-- Use NUMBER for numeric columns; DATE for order_date."
+          }
+        }
+      ],
+      "narrative": "We seed a compact schema that mirrors the HTML examples so everything runs locally.",
+      "nerd_notes": "Use minimal columns required by the examples to keep focus on functions and patterns."
+    },
+    {
+      "title": "0b. JSON processing (mini)",
+      "description": "Question: how can we parse small JSON snippets and extract fields as columns?",
+      "examples": [
+        {
+          "name": "json_scan_and_extract",
+          "sql": "-- In-memory structured rows without external JSON; use STRUCT and LIST constructors\nWITH docs AS (\n  SELECT 1 AS id, struct_pack(region := 'US', flags := list_value('a','b')) AS payload\n  UNION ALL\n  SELECT 2 AS id, struct_pack(region := 'EU', flags := list_value('b')) AS payload\n)\nSELECT\n  id,\n  payload.region AS region,\n  list_sort(payload.flags) AS flags_sorted\nFROM docs\nORDER BY id;",
+          "description": "Use read_json to ingest a tiny JSON array, then project object fields and normalize a list.",
+          "nerd_notes": "DuckDB maps JSON/structs to STRUCT and arrays to LIST. Access struct fields with dot notation (payload.region). You can construct demo data with struct_pack/list_value to avoid heavy string escaping.",
+          "compat_examples": {
+            "postgres": "-- Use jsonb_array_elements() to expand and -> / ->> operators to project fields.",
+            "mysql": "-- Use JSON_EXTRACT and JSON_TABLE (8.0+) for projection.",
+            "oracle": "-- Use JSON_TABLE to project fields into relational columns."
+          }
+        }
+      ],
+      "narrative": "DuckDB’s JSON reader lets you treat JSON as rows and columns quickly.",
+      "nerd_notes": "Prefer tiny, inline JSON for examples; for files, pass a path or glob to read_json."
+    },
+    {
+      "title": "0c. External files: Parquet & CSV",
+      "description": "Question: how do we query Parquet/CSV directly and control caching?",
+      "examples": [
+        {
+          "name": "scan_parquet_and_csv",
+          "sql": "-- Parquet and CSV scans from workspace paths (read-only)\nSELECT COUNT(*) AS events_2023\nFROM read_parquet('events_parquet/year=2023/*.parquet');\n\nSELECT COUNT(*) AS csv_people\nFROM read_csv_auto('people_export.csv');\n\n-- Show object cache setting\nPRAGMA enable_object_cache;",
+          "description": "Scan Parquet and CSV directly without importing; show a useful PRAGMA.",
+          "nerd_notes": "read_parquet/read_csv_auto support globbing; enable_object_cache can speed repeated scans in longer sessions.",
+          "compat_examples": {
+            "postgres": "-- Use foreign data wrappers (file_fdw, parquet_fdw) or COPY to stage.",
+            "mysql": "-- Use SELECT ... INTO OUTFILE/LOAD DATA or external table plugins.",
+            "oracle": "-- Use external tables for CSV; Parquet needs connectors or staging."
+          }
+        }
+      ],
+      "narrative": "Querying external files is a DuckDB superpower for quick analytics.",
+      "nerd_notes": "For reproducible examples, reference small, tracked files in the repo."
+    },
+    {
+      "title": "0d. File JSON ingest (auto)",
+      "description": "Question: how can we ingest a JSON file directly as a table?",
+      "examples": [
+        {
+          "name": "json_file_auto",
+          "sql": "-- read_json_auto infers schema from file contents (object/array/NDJSON)\nSELECT title\nFROM read_json_auto('examples/duckadv.json');",
+          "description": "Use read_json_auto on a file in the repo and project a simple field.",
+          "nerd_notes": "For JSON Lines (NDJSON), pass the .jsonl path; DuckDB auto-detects line-delimited JSON.",
+          "compat_examples": {
+            "postgres": "-- Use json_populate_record/jsonb_to_record for projection after loading file content.",
+            "mysql": "-- LOAD_FILE + JSON_TABLE (8.0+) or external tooling to ingest.",
+            "oracle": "-- Use JSON_TABLE on an external table or staged CLOB/BLOB."
+          }
+        }
+      ],
+      "narrative": "Point read_json_auto at a file path and select fields as columns.",
+      "nerd_notes": "Ensure paths are accessible to DuckDB; prefer small files for examples."
+    },
+    {
+      "title": "1.5 Cheat Sheet: Advanced Quick Patterns",
+      "narrative": "Fast, self‑contained snippets using common advanced features. Each example is idempotent and returns a tiny, stable result.",
+      "examples": [
+        {
+          "name": "cs_struct_list_inline_quick",
+          "description": "Inline STRUCT and LIST with projection and sorting.",
+          "sql": "WITH docs AS (\n  SELECT 1 AS id, struct_pack(region := 'US', flags := list_value('b','a')) AS payload\n  UNION ALL\n  SELECT 2 AS id, struct_pack(region := 'EU', flags := list_value('b')) AS payload\n)\nSELECT id, payload.region AS region, list_sort(payload.flags) AS flags_sorted\nFROM docs\nWHERE id = 1;",
+          "nerd_notes": "Use struct_pack/list_value for clean inline structured data; list_sort produces deterministic ordering.",
+          "compat_examples": {
+            "postgres": "-- Use ROW(...) for composite types or JSONB with ->; arrays via ARRAY[...]",
+            "mysql": "-- Use JSON_OBJECT/JSON_ARRAY; project with JSON_EXTRACT",
+            "oracle": "-- Use JSON functions or object types; project with JSON_TABLE"
+          }
+        },
+        {
+          "name": "cs_scan_csv_people_quick",
+          "description": "Count rows from a small CSV using auto schema inference.",
+          "sql": "SELECT COUNT(*) AS csv_people FROM read_csv_auto('people_export.csv');",
+          "nerd_notes": "read_csv_auto infers types; for stability, keep the file small and tracked.",
+          "compat_examples": {
+            "postgres": "-- Use COPY to a staging table, then SELECT COUNT(*)",
+            "mysql": "-- Use LOAD DATA INFILE to stage, then COUNT",
+            "oracle": "-- Use external table over CSV and COUNT"
+          }
+        },
+        {
+          "name": "cs_orders_list_lengths_quick",
+          "description": "Sum list lengths of order amounts per customer (requires setup).",
+          "sql": "WITH per AS (\n  SELECT c.customer_id, list(o.total_amount ORDER BY o.order_date) AS amounts\n  FROM customers c\n  LEFT JOIN orders o ON c.customer_id = o.customer_id\n  GROUP BY c.customer_id\n)\nSELECT SUM(cnt) AS total_orders\nFROM (\n  SELECT customer_id, COUNT(*) AS cnt\n  FROM per, UNNEST(amounts) AS u(x)\n  GROUP BY customer_id\n);",
+          "nerd_notes": "list(...) builds arrays; count elements by UNNEST + COUNT for portability across engines (avoids engine-specific list_length).",
+          "compat_examples": {
+            "postgres": "-- Use array_agg + cardinality(amounts)",
+            "mysql": "-- Use JSON_ARRAYAGG and JSON_LENGTH",
+            "oracle": "-- Use JSON_ARRAYAGG and JSON_VALUE/LENGTH equivalents"
+          }
+        },
+        {
+          "name": "cs_table_info_products_quick",
+          "description": "Quick column count from PRAGMA table_info.",
+          "sql": "SELECT COUNT(*) AS ncols FROM pragma_table_info('products');",
+          "nerd_notes": "PRAGMA table_info is convenient for ad‑hoc introspection.",
+          "compat_examples": {
+            "postgres": "-- SELECT count(*) FROM information_schema.columns WHERE table_name='products'",
+            "mysql": "-- SELECT count(*) FROM information_schema.columns WHERE table_name='products'",
+            "oracle": "-- SELECT count(*) FROM ALL_TAB_COLUMNS WHERE table_name = 'PRODUCTS'"
+          }
+        }
+      ]
+    },
+    {
+      "title": "1.6 Pitfalls, Tips, and Q&A",
+      "narrative": "Operational notes for advanced features and portability.",
+      "examples": [
+        { "name": "pitfall_explain_output_not_portable", "description": "EXPLAIN output format varies by version/engine; avoid asserting on full plan text in tests.", "sql": "" },
+        { "name": "tip_struct_pack_for_inline_data", "description": "Use struct_pack/list_value to avoid messy JSON string literals for tiny structured demos.", "sql": "" },
+        { "name": "question_parquet_vs_ctas_choice", "description": "When to CTAS from Parquet? Materialize when reusing results; otherwise scan directly for freshness.", "sql": "" },
+        { "name": "tricky_json_schema_inference_changes", "description": "JSON auto schema can shift with content; pin fields and CAST as needed for stability.", "sql": "" },
+        { "name": "fundamental_order_by_stability", "description": "Always ORDER BY in examples that display rows to keep outputs deterministic.", "sql": "" }
+      ]
+    },
+    {
+      "title": "1. Array & String Functions",
+      "description": "Question: how do we use list aggregation and regex/string helpers in DuckDB?",
+      "examples": [
+        {
+          "name": "array_list_per_customer",
+          "sql": "-- List order amounts per customer + counts and totals\nSELECT \n    c.customer_id,\n    c.first_name,\n    c.last_name,\n    list(o.total_amount ORDER BY o.order_date) AS order_amounts,\n    COUNT(o.order_id) AS order_count,\n    SUM(o.total_amount) AS total_spent\nFROM customers c\nLEFT JOIN orders o ON c.customer_id = o.customer_id\nGROUP BY c.customer_id, c.first_name, c.last_name\nHAVING COUNT(o.order_id) > 0\nORDER BY c.customer_id;",
+          "description": "Aggregate order amounts into a list for each customer and compute count/total alongside.",
+          "nerd_notes": "DuckDB's list(...) aggregates values into a list type. Portable approach shown uses COUNT/SUM alongside the list. In pure DuckDB you could also use list_length(list(...)) and list_sum(list(...)) to derive count/sum directly from the list, but those are not widely portable.",
+          "compat_examples": {
+            "postgres": "-- Use array_agg(o.total_amount ORDER BY o.order_date) for a native array.",
+            "mysql": "-- MySQL lacks native array/list; use JSON_ARRAYAGG as an alternative.",
+            "oracle": "-- Use LISTAGG for strings; for numbers consider nested tables or JSON aggregation."
+          }
+        },
+        {
+          "name": "string_ops_and_regex",
+          "sql": "-- String helpers and regex\nSELECT \n    name,\n    length(name)              AS name_length,\n    upper(name)               AS uppercase_name,\n    lower(name)               AS lowercase_name,\n    string_split(name, ' ')   AS name_parts,\n    regexp_extract(name, '[A-Za-z]+') AS first_word\nFROM products\nWHERE REGEXP_MATCHES(name, '[0-9]')  -- products with numbers in name\nORDER BY name_length DESC;",
+          "description": "Use length/upper/lower, split to parts, and extract a word via regex.",
+          "nerd_notes": "Prefer REGEXP_MATCHES for filtering. Split output is a list type.",
+          "compat_examples": {
+            "postgres": "-- Use name ~ '[0-9]' and regexp_matches/regexp_replace; string_to_array(name, ' ').",
+            "mysql": "-- Use REGEXP_LIKE(name, '[0-9]'); split via JSON or custom functions.",
+            "oracle": "-- Use REGEXP_LIKE and REGEXP_SUBSTR; string split via REGEXP_SUBSTR in a loop or XMLTABLE."
+          }
+        }
+      ],
+      "narrative": "List aggregation and robust regex/string functions are handy for feature engineering.",
+      "nerd_notes": "If identifiers contain spaces or mixed case, quote them using double quotes when generating dynamic SQL."
+    },
+    {
+      "title": "2. Statistical Analysis",
+      "description": "Question: how do we compute descriptive stats and correlations quickly?",
+      "examples": [
+        {
+          "name": "category_level_stats",
+          "sql": "-- Descriptive stats per category\nSELECT \n    p.category_id,\n    COUNT(*)                         AS product_count,\n    AVG(p.price)                     AS mean_price,\n    median(p.price)                  AS median_price,\n    stddev_samp(p.price)             AS price_stddev,\n    quantile_cont(p.price, 0.25)     AS q1_price,\n    quantile_cont(p.price, 0.75)     AS q3_price\nFROM products p\nGROUP BY p.category_id\nORDER BY p.category_id;\n\n-- Correlation analysis (price vs quantity ordered)\nSELECT \n    corr(p.price, oi.quantity) AS price_quantity_correlation\nFROM products p\nJOIN order_items oi ON p.product_id = oi.product_id;",
+          "description": "Compute per-category stats and a simple correlation between price and ordered quantity.",
+          "nerd_notes": "Use quantile_cont for percentiles. MODE/MAD vary by engine; stick to widely supported functions in portable lessons.",
+          "compat_examples": {
+            "postgres": "-- Use percentile_cont within ORDER BY or the aggregate function syntax; corr is available in the tablefunc/stat extension context.",
+            "mysql": "-- Use PERCENTILE_CONT in 8.0+ or approximate percentile functions; correlation typically via application or custom UDFs.",
+            "oracle": "-- Use PERCENTILE_CONT and STDDEV; corr is available as a built-in aggregate."
+          }
+        }
+      ],
+      "narrative": "Stats help summarize distributions and relationships before deeper modeling.",
+      "nerd_notes": "For large data, consider sampling when exploring interactively."
+    },
+    {
+      "title": "3. Advanced Analytics",
+      "description": "Question: how do we express cumulative metrics, moving averages, and time series changes?",
+      "examples": [
+        {
+          "name": "cumulative_and_moving_avg",
+          "sql": "-- Per-customer cumulative spend and 3-order moving average\nSELECT \n    customer_id,\n    order_date,\n    total_amount,\n    SUM(total_amount) OVER (\n        PARTITION BY customer_id\n        ORDER BY order_date\n        ROWS UNBOUNDED PRECEDING\n    ) AS cumulative_spending,\n    AVG(total_amount) OVER (\n        PARTITION BY customer_id\n        ORDER BY order_date\n        ROWS BETWEEN 2 PRECEDING AND CURRENT ROW\n    ) AS moving_avg_3_orders,\n    ROUND(100.0 * total_amount / SUM(total_amount) OVER (PARTITION BY customer_id), 2) AS pct_of_customer_total\nFROM orders\nWHERE customer_id IN (1,2,3)\nORDER BY customer_id, order_date;\n\n-- Daily revenue with day-over-day change\nWITH daily AS (\n  SELECT DATE_TRUNC('day', order_date) AS order_day, SUM(total_amount) AS daily_revenue\n  FROM orders\n  GROUP BY 1\n)\nSELECT \n  order_day,\n  daily_revenue,\n  LAG(daily_revenue, 1) OVER (ORDER BY order_day) AS prev_day_revenue,\n  daily_revenue - LAG(daily_revenue, 1) OVER (ORDER BY order_day) AS day_over_day_change\nFROM daily\nORDER BY order_day;",
+          "description": "Cumulative sums, moving averages, and day-over-day deltas using window functions.",
+          "nerd_notes": "Use a subquery/CTE to compute daily aggregates before applying LAG/LEAD over the result.",
+          "compat_examples": {
+            "postgres": "-- Same window syntax; ensure appropriate indexes for large datasets.",
+            "mysql": "-- MySQL 8.0+ supports window functions; use CTEs for readability.",
+            "oracle": "-- Use analytic functions with the same PARTITION/ORDER BY clauses."
+          }
+        }
+      ],
+      "narrative": "Analytic windows compactly express cumulative and comparative metrics.",
+      "nerd_notes": "Test on small samples first to validate logic before scaling up."
+    },
+    {
+      "title": "4. Performance & Optimization",
+      "description": "Question: how do we inspect metadata, query plans, and basic database stats?",
+      "examples": [
+        {
+          "name": "db_introspection_and_explain",
+          "sql": "-- List tables\nSHOW TABLES;\n\n-- Table metadata snapshot\nSELECT table_name, table_type\nFROM information_schema.tables\nWHERE table_schema = 'main'\nORDER BY table_name;\n\n-- Query plan for a small join\nEXPLAIN SELECT \n    p.name,\n    c.name AS category,\n    COUNT(oi.order_item_id) AS times_sold\nFROM products p\nJOIN categories c ON p.category_id = c.category_id\nLEFT JOIN order_items oi ON p.product_id = oi.product_id\nGROUP BY p.product_id, p.name, c.name\nORDER BY times_sold DESC;\n\n-- Database info\nPRAGMA database_size;\nPRAGMA table_info('products');",
+          "description": "Show tables, inspect information_schema, view an EXPLAIN plan, and peek at PRAGMAs.",
+          "nerd_notes": "EXPLAIN returns a plan tree. PRAGMA table_info is convenient when exploring schemas.",
+
+          "compat_examples": {
+            "postgres": "-- Use \"\nEXPLAIN ANALYZE\n\" and pg_catalog tables for introspection.",
+            "mysql": "-- Use EXPLAIN and information_schema.TABLES/COLUMNS; SHOW TABLES for listing.",
+            "oracle": "-- Use EXPLAIN PLAN / DBMS_XPLAN and data dictionary views (ALL_TABLES, ALL_TAB_COLUMNS)."
+          }
+        }
+      ],
+      "narrative": "Introspection plus EXPLAIN helps reason about performance.",
+      "nerd_notes": "For large data, prefer columnar formats (Parquet) and pushdown-friendly predicates."
+    },
+    {
+      "title": "4b. File scan vs CTAS (micro note)",
+      "description": "Question: what’s the difference between scanning Parquet directly and CTAS to a table?",
+      "examples": [
+        {
+          "name": "scan_vs_ctas_counts",
+          "sql": "-- Create a tiny CTAS from Parquet (idempotent)\nDROP TABLE IF EXISTS perf_events;\nCREATE TABLE perf_events AS\nSELECT * FROM read_parquet('events_parquet/year=2024/*.parquet');\n\n-- Compare counts from direct scan vs materialized table\nSELECT 'scan' AS mode, COUNT(*) AS cnt\nFROM read_parquet('events_parquet/year=2024/*.parquet')\nUNION ALL\nSELECT 'ctas' AS mode, COUNT(*) AS cnt\nFROM perf_events\nORDER BY mode;\n\n-- Cleanup the temp table to avoid leftovers\nDROP TABLE perf_events;",
+          "description": "Create a small CTAS and compare counts to direct scans; then drop the temp table.",
+          "nerd_notes": "Direct scans benefit from predicate/column pushdown; CTAS materializes data, which can be faster for repeated access but uses storage.",
+          "compat_examples": {
+            "postgres": "-- Use COPY FROM or foreign data wrappers for Parquet; CTAS is supported.",
+            "mysql": "-- CTAS is supported; external Parquet requires plugins or staging.",
+            "oracle": "-- Use external tables vs CTAS to materialize into heap tables."
+          }
+        }
+      ],
+      "narrative": "Use direct scans for ad-hoc reads; materialize with CTAS for repeated queries.",
+      "nerd_notes": "Keep CTAS cleanups in the same example for idempotent lessons."
+    },
+    {
+      "title": "5. Cleanup",
+      "description": "Question: how do we leave no demo artifacts behind?",
+      "examples": [
+        {
+          "name": "cleanup_all",
+          "sql": "DROP TABLE IF EXISTS order_items;\nDROP TABLE IF EXISTS orders;\nDROP TABLE IF EXISTS products;\nDROP TABLE IF EXISTS categories;\nDROP TABLE IF EXISTS customers;\nSELECT 'cleanup_done' AS status;",
+          "description": "Drop all tables created by this lesson.",
+          "nerd_notes": "Idempotent cleanup avoids cross-run pollution.",
+          "compat_examples": {
+            "postgres": "-- Same DROP TABLE IF EXISTS sequence.",
+            "mysql": "-- Same; consider disabling foreign_key_checks for FK-heavy teardown.",
+            "oracle": "-- Use DROP TABLE ... PURGE if recycle bin is enabled."
+          }
+        }
+      ],
+      "narrative": "We end by dropping everything we created so reruns start clean.",
+      "nerd_notes": "Keep cleanup near the end to avoid interfering with earlier examples."
+    }
+  ],
+  "exercises": [
+    {
+      "id": "basic-select",
+      "prompt": "Show the first 5 rows from `customers`.",
+      "answer_sql": "SELECT * FROM customers LIMIT 5;"
+    },
+    {
+      "id": "aggregate-1",
+      "prompt": "For each customer, count orders.",
+      "answer_sql": "SELECT customer_id, COUNT(*) AS cnt FROM orders GROUP BY customer_id ORDER BY customer_id;"
+    },
+    {
+      "id": "filter-top",
+      "prompt": "List products with a digit in their name.",
+      "answer_sql": "SELECT * FROM products WHERE REGEXP_MATCHES(name, '[0-9]');"
+    }
+  ]
+}

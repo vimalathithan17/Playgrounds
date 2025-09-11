@@ -1,0 +1,208 @@
+{
+  "title": "Data Control Language (DCL)",
+  "description": "DuckDB is embedded, so classic GRANT/REVOKE don't apply. This lesson shows practical, runnable patterns that simulate permissions: predicate views (row-level security), masking, and a tiny permission ledger — with cross-engine notes.",
+  "sections": [
+    {
+      "title": "0) Introduction: Practical DCL in DuckDB",
+      "narrative": "DuckDB is embedded and lacks classic GRANT/REVOKE. This lesson focuses on practical, runnable patterns to simulate access control: predicate views for row filters, session-driven row-level security, column masking, a simple permission ledger, and RBAC-lite with policy tables.",
+      "nerd_notes": "Use filesystem permissions for the .duckdb file itself. Inside DuckDB, model policies with views and tables; keep examples idempotent and end with deterministic queries for validation."
+    },
+    {
+      "title": "1) Why DCL looks different in DuckDB?",
+      "examples": [
+        {
+          "name": "note",
+          "description": "Question: Where are GRANT/REVOKE in DuckDB?",
+          "sql": "-- DuckDB is an embedded database.\n-- Use OS filesystem permissions + application logic.\nSELECT 'DuckDB uses file-based access. Use OS permissions and application-level controls.' AS note;",
+          "nerd_notes": "Because DuckDB runs in-process, there is no server catalog of users/roles. Use patterns below for least-privilege within a single DB file.",
+          "compat_examples": {
+            "postgres": "GRANT SELECT ON orders TO analyst; REVOKE UPDATE ON orders FROM analyst;",
+            "mysql": "GRANT SELECT ON db.orders TO 'analyst'@'%'; REVOKE UPDATE ON db.orders FROM 'analyst'@'%';",
+            "oracle": "GRANT SELECT ON orders TO analyst; REVOKE UPDATE ON orders FROM analyst;"
+          }
+        }
+      ]
+    },
+    
+    {
+      "title": "2) Setup: tiny users and orders",
+      "examples": [
+        {
+          "name": "create_base",
+          "description": "Create sample tables and data for the security patterns.",
+          "sql": "DROP VIEW IF EXISTS v_orders_alice;\nDROP VIEW IF EXISTS v_orders_rls;\nDROP VIEW IF EXISTS v_orders_masked;\nDROP TABLE IF EXISTS user_policies;\nDROP TABLE IF EXISTS session_context;\nDROP TABLE IF EXISTS orders;\nDROP TABLE IF EXISTS users;\nCREATE TABLE users (id INTEGER, username TEXT);\nINSERT INTO users VALUES (1,'alice'),(2,'bob'),(3,'charlie');\nCREATE TABLE orders (order_id INTEGER, user_id INTEGER, amount DOUBLE);\nINSERT INTO orders VALUES (1,1,100.0),(2,2,50.0),(3,1,25.0),(4,3,77.5);\n-- return a row so the validator shows a sample\nSELECT COUNT(*) AS users, (SELECT COUNT(*) FROM orders) AS orders;",
+          "nerd_notes": "Idempotent setup so examples are re-runnable. Real systems would have more columns (timestamps, status, etc.)."
+        }
+      ]
+    },
+    {
+      "title": "1.5) Cheat Sheet: Practical Access Patterns",
+      "narrative": "Quick, runnable snippets to apply access control patterns in DuckDB without GRANT/REVOKE.",
+      "examples": [
+        {
+          "name": "cs_user_scoped_view_quick",
+          "description": "Expose only Alice's rows via a simple predicate view.",
+          "sql": "DROP VIEW IF EXISTS cs_v_orders_alice;\nCREATE VIEW cs_v_orders_alice AS\nSELECT o.* FROM orders o JOIN users u ON u.id = o.user_id WHERE u.username = 'alice';\nSELECT COUNT(*) AS rows, SUM(amount) AS total FROM cs_v_orders_alice;",
+          "nerd_notes": "Deterministic COUNT/SUM return keeps validator output stable.",
+          "compat_examples": {"postgres": "-- Prefer RLS policies; GRANT SELECT to role.", "mysql": "-- Use views; no native RLS.", "oracle": "-- Use VPD policies for RLS."}
+        },
+        {
+          "name": "cs_session_rls_quick",
+          "description": "Session-driven row filter using a 1-row context table.",
+          "sql": "CREATE TABLE IF NOT EXISTS session_context(current_user_id INTEGER);\nDELETE FROM session_context;\nINSERT INTO session_context VALUES (1); -- alice\nCREATE OR REPLACE VIEW cs_v_orders_rls AS\nSELECT o.* FROM orders o WHERE o.user_id = (SELECT current_user_id FROM session_context LIMIT 1);\nSELECT COUNT(*) AS visible FROM cs_v_orders_rls;",
+          "nerd_notes": "For multi-connection apps, make the session context connection-scoped (temp tables per connection).",
+          "compat_examples": {"postgres": "-- Use RLS USING (user_id = current_setting('app.user_id')::int)", "mysql": "-- App-provided session variable + view filter", "oracle": "-- SYS_CONTEXT in VPD predicate"}
+        },
+        {
+          "name": "cs_mask_column_quick",
+          "description": "Mask amounts via CASE for users without permission.",
+          "sql": "DROP TABLE IF EXISTS user_policies;\nCREATE TABLE user_policies(user_id INTEGER, can_see_amount BOOLEAN);\nINSERT INTO user_policies VALUES (1, TRUE),(2, FALSE),(3, TRUE);\nCREATE OR REPLACE VIEW cs_v_orders_masked AS\nSELECT o.order_id, o.user_id, CASE WHEN p.can_see_amount THEN o.amount ELSE NULL END AS amount_visible\nFROM orders o LEFT JOIN user_policies p ON p.user_id = o.user_id;\nSELECT SUM(amount_visible) AS total_visible FROM cs_v_orders_masked;",
+          "nerd_notes": "Move policy logic into views; avoid ad-hoc filters in each query.",
+          "compat_examples": {"postgres": "-- Column-level privileges or views", "mysql": "-- Views with CASE", "oracle": "-- Data Redaction or views"}
+        },
+        {
+          "name": "cs_effective_permissions_quick",
+          "description": "Compute effective permissions from an event ledger.",
+          "sql": "DROP TABLE IF EXISTS permission_events;\nCREATE TABLE permission_events(who TEXT, object TEXT, action TEXT, is_active BOOLEAN, changed_at TIMESTAMP);\nINSERT INTO permission_events VALUES\n  ('alice','orders','SELECT', TRUE,  CURRENT_TIMESTAMP),\n  ('bob',  'orders','SELECT', TRUE,  CURRENT_TIMESTAMP),\n  ('bob',  'orders','UPDATE', TRUE,  CURRENT_TIMESTAMP),\n  ('bob',  'orders','UPDATE', FALSE, CURRENT_TIMESTAMP);\nWITH latest AS (\n  SELECT who, object, action, arg_max(is_active, changed_at) AS is_active\n  FROM permission_events GROUP BY who, object, action\n)\nSELECT who, object, action, is_active FROM latest ORDER BY who, action;",
+          "nerd_notes": "Event-sourced permissions: newest event wins; easy to audit and extend.",
+          "compat_examples": {"postgres": "-- Map to GRANT/REVOKE history", "mysql": "-- Use a similar ledger for app-layer checks", "oracle": "-- Catalog + custom audit tables"}
+        }
+      ]
+    },
+    {
+      "title": "3) Give a user access only to their rows (predicate view)",
+      "examples": [
+        {
+          "name": "view_user_scoped",
+          "description": "Question: How can I expose only Alice's orders without GRANT?",
+          "sql": "DROP VIEW IF EXISTS v_orders_alice;\nCREATE VIEW v_orders_alice AS\nSELECT o.*\nFROM orders o\nJOIN users u ON u.id = o.user_id\nWHERE u.username = 'alice';\n-- Consumers query the view instead of the base table\nSELECT order_id, user_id, amount FROM v_orders_alice ORDER BY order_id;",
+          "nerd_notes": "This is a static predicate. For multi-user apps, see the session-based pattern to avoid one view per user.",
+          "compat_examples": {
+            "postgres": "CREATE ROLE alice; GRANT SELECT ON orders TO alice;\nCREATE POLICY orders_rls ON orders FOR SELECT USING (current_user = 'alice' AND user_id = 1); ALTER TABLE orders ENABLE ROW LEVEL SECURITY;",
+            "mysql": "GRANT SELECT ON db.orders TO 'alice'@'%'; -- No native RLS; use views or app filters",
+            "oracle": "GRANT SELECT ON orders TO alice; -- Use VPD/FGAC for RLS"
+          }
+        }
+      ]
+    },
+    {
+      "title": "4) Row-level security with session context",
+      "examples": [
+        {
+          "name": "session_context_rls",
+          "description": "Question: How do I avoid hardcoding usernames in views?",
+          "sql": "-- Store the \"current user\" set by the app\nDROP TABLE IF EXISTS session_context;\nCREATE TABLE session_context(current_user_id INTEGER);\nINSERT INTO session_context VALUES (1); -- alice\n\nDROP VIEW IF EXISTS v_orders_rls;\nCREATE VIEW v_orders_rls AS\nSELECT o.*\nFROM orders o\nWHERE o.user_id = (SELECT current_user_id FROM session_context LIMIT 1);\n\n-- Read as alice\nSELECT 'alice' AS who, COUNT(*) AS visible, SUM(amount) AS total FROM v_orders_rls;\n\n-- Switch to bob (app would update this between requests)\nUPDATE session_context SET current_user_id = 2;\nSELECT 'bob' AS who, COUNT(*) AS visible, SUM(amount) AS total FROM v_orders_rls;",
+          "nerd_notes": "Views consult a 1-row session table set by the application layer. In multi-connection apps, make it connection-specific (temp table per session or attach separate DB).",
+          "compat_examples": {
+            "postgres": "SET SESSION AUTHORIZATION bob; -- Or use RLS with current_user in USING()",
+            "mysql": "Use DEFINER views + app-provided session variables to filter",
+            "oracle": "Use SYS_CONTEXT('USERENV','SESSION_USER') in VPD policies"
+          }
+        }
+      ]
+    },
+    {
+      "title": "5) Column masking (hide sensitive values)",
+      "examples": [
+        {
+          "name": "masked_view",
+          "description": "Question: How can I redact amounts for non-privileged users?",
+          "sql": "DROP TABLE IF EXISTS user_policies;\nCREATE TABLE user_policies(user_id INTEGER, can_see_amount BOOLEAN);\nINSERT INTO user_policies VALUES (1, TRUE),(2, FALSE),(3, TRUE);\n\nDROP VIEW IF EXISTS v_orders_masked;\nCREATE VIEW v_orders_masked AS\nSELECT o.order_id, o.user_id,\n       CASE WHEN p.can_see_amount THEN o.amount ELSE NULL END AS amount_visible\nFROM orders o\nLEFT JOIN user_policies p ON p.user_id = o.user_id;\n\nSELECT * FROM v_orders_masked ORDER BY order_id;",
+          "nerd_notes": "Masking is enforced in the view so consumers cannot bypass it accidentally. For per-viewer masking, join policies on session_context rather than row owner.",
+          "compat_examples": {
+            "postgres": "CREATE POLICY mask_amount ON orders USING (true) WITH CHECK (true); -- Or use column-level privileges/views",
+            "mysql": "Use views or generated columns with CASE expressions",
+            "oracle": "Use Data Redaction policies or views with CASE"
+          }
+        }
+      ]
+    },
+    {
+      "title": "6) Model GRANT/REVOKE history (ledger)",
+      "examples": [
+        {
+          "name": "permissions_ledger",
+          "description": "Question: How can I track who has what access and when it changed?",
+          "sql": "DROP TABLE IF EXISTS permission_events;\nCREATE TABLE permission_events(\n  who TEXT, object TEXT, action TEXT, is_active BOOLEAN, changed_at TIMESTAMP, reason TEXT\n);\nINSERT INTO permission_events VALUES\n  ('alice','orders','SELECT', TRUE,  CURRENT_TIMESTAMP, 'initial grant'),\n  ('bob',  'orders','SELECT', TRUE,  CURRENT_TIMESTAMP, 'read access'),\n  ('bob',  'orders','UPDATE', TRUE,  CURRENT_TIMESTAMP, 'temporary write'),\n  ('bob',  'orders','UPDATE', FALSE, CURRENT_TIMESTAMP, 'revoked write');\n\n-- Effective permissions now\nWITH latest AS (\n  SELECT who, object, action,\n         arg_max(is_active, changed_at) AS is_active\n  FROM permission_events\n  GROUP BY who, object, action\n)\nSELECT who, object, action, is_active FROM latest ORDER BY who, action;",
+          "nerd_notes": "A simple event-sourced ledger: newest event decides if a permission is active. Expand with ids, roles, and auditing as needed.",
+          "compat_examples": {
+            "postgres": "GRANT SELECT ON orders TO bob; REVOKE UPDATE ON orders FROM bob;",
+            "mysql": "GRANT SELECT ON db.orders TO 'bob'@'%'; REVOKE UPDATE ON db.orders FROM 'bob'@'%';",
+            "oracle": "GRANT SELECT ON orders TO bob; REVOKE UPDATE ON orders FROM bob;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "7) Role-based policy (RBAC lite)",
+      "examples": [
+        {
+          "name": "rbac_view",
+          "description": "Question: How can I gate access by roles (analyst/manager/admin) without GRANT?",
+          "sql": "-- Minimal role tables\nDROP TABLE IF EXISTS role_policies;\nDROP TABLE IF EXISTS user_roles;\nDROP TABLE IF EXISTS roles;\nCREATE TABLE roles(role TEXT);\nINSERT INTO roles VALUES ('analyst'),('manager'),('admin');\nCREATE TABLE user_roles(user_id INTEGER, role TEXT);\nINSERT INTO user_roles VALUES (1,'analyst'),(2,'manager'),(3,'admin');\nCREATE TABLE role_policies(role TEXT, object TEXT, can_read BOOLEAN, can_write BOOLEAN);\nINSERT INTO role_policies VALUES\n  ('analyst','orders', TRUE,  FALSE),\n  ('manager','orders', TRUE,  TRUE),\n  ('admin',  'orders', TRUE,  TRUE);\n\n-- Ensure a session row exists and start as alice (1)\nCREATE TABLE IF NOT EXISTS session_context(current_user_id INTEGER);\nDELETE FROM session_context;\nINSERT INTO session_context VALUES (1);\n\n-- View checks viewer's role against policy\nCREATE OR REPLACE VIEW v_orders_rbac AS\nSELECT o.*, rp.can_write\nFROM orders o\nJOIN user_roles ur ON ur.user_id = (SELECT current_user_id FROM session_context LIMIT 1)\nJOIN role_policies rp ON rp.role = ur.role AND rp.object = 'orders'\nWHERE rp.can_read;\n\n-- Try as alice (analyst)\nSELECT 'alice' AS who, COUNT(*) AS visible, SUM(amount) AS total, MAX(can_write) AS can_write FROM v_orders_rbac;\n\n-- Try as bob (manager)\nUPDATE session_context SET current_user_id = 2;\nSELECT 'bob'   AS who, COUNT(*) AS visible, SUM(amount) AS total, MAX(can_write) AS can_write FROM v_orders_rbac;\n\n-- Try as charlie (admin)\nUPDATE session_context SET current_user_id = 3;\nSELECT 'charlie' AS who, COUNT(*) AS visible, SUM(amount) AS total, MAX(can_write) AS can_write FROM v_orders_rbac;",
+          "nerd_notes": "This pattern centralizes policy in tables so you don't edit views for every change. Extend with object wildcards, column-level flags, or auditing.",
+          "compat_examples": {
+            "postgres": "CREATE ROLE analyst; GRANT SELECT ON orders TO analyst; -- Use RLS/GRANT for full RBAC",
+            "mysql": "GRANT SELECT ON db.orders TO 'analyst'@'%'; -- Role emulation depends on version",
+            "oracle": "CREATE ROLE ANALYST; GRANT SELECT ON orders TO ANALYST;"
+          }
+        }
+      ]
+    },
+    {
+      "title": "8) Per-tenant row security (multi-tenant)",
+      "examples": [
+        {
+          "name": "tenant_rls",
+          "description": "Question: How do I ensure tenants only see their own rows?",
+          "sql": "DROP VIEW IF EXISTS v_accounts_tenant;\nDROP TABLE IF EXISTS session_ctx_tenant;\nDROP TABLE IF EXISTS accounts;\nDROP TABLE IF EXISTS tenants;\nCREATE TABLE tenants(tenant_id INTEGER, name TEXT);\nINSERT INTO tenants VALUES (10,'Acme'),(20,'BetaCorp');\nCREATE TABLE accounts(account_id INTEGER, tenant_id INTEGER, acct_name TEXT);\nINSERT INTO accounts VALUES (1,10,'A-001'),(2,10,'A-002'),(3,20,'B-001');\nCREATE TABLE session_ctx_tenant(current_tenant_id INTEGER);\nINSERT INTO session_ctx_tenant VALUES (10);\n\nCREATE VIEW v_accounts_tenant AS\nSELECT a.*\nFROM accounts a\nWHERE a.tenant_id = (SELECT current_tenant_id FROM session_ctx_tenant LIMIT 1);\n\n-- Read as Acme (tenant 10)\nSELECT 'Acme' AS tenant, COUNT(*) AS rows_visible FROM v_accounts_tenant;\n\n-- Switch to BetaCorp (tenant 20)\nUPDATE session_ctx_tenant SET current_tenant_id = 20;\nSELECT 'BetaCorp' AS tenant, COUNT(*) AS rows_visible FROM v_accounts_tenant;",
+          "nerd_notes": "This uses a per-connection session table for isolation. For stronger isolation, store each tenant in its own attached DB or separate file.",
+          "compat_examples": {
+            "postgres": "ALTER TABLE accounts ENABLE ROW LEVEL SECURITY; CREATE POLICY tenant_policy ON accounts USING (tenant_id = current_setting('app.tenant')::int);",
+            "mysql": "Use views with app-provided tenant_id filters; no native RLS",
+            "oracle": "Use VPD policies (DBMS_RLS) to enforce tenant predicates"
+          }
+        }
+      ]
+    },
+    {
+      "title": "1.6) Pitfalls, Tips, and Q&A",
+      "narrative": "Common gotchas and best practices when modeling access control patterns in DuckDB.",
+      "examples": [
+        {"name": "pitfall_view_bypass_direct_table", "sql": "", "description": "If users can access the base table, they can bypass masking/filters. Restrict access to views only in your application layer."},
+        {"name": "tip_session_context_per_connection", "sql": "", "description": "Make session context connection-scoped (temp tables or separate attached DB per connection) to avoid cross-user leakage in multi-user apps."},
+        {"name": "question_true_grants_in_duckdb", "sql": "", "description": "DuckDB has no server GRANT/REVOKE. Use OS permissions for the DB file and model logical permissions with views and policy tables."},
+        {"name": "tricky_policy_drift", "sql": "", "description": "Keep policy in tables and define views against them. Avoid duplicating predicates across many views to reduce drift."},
+        {"name": "fundamental_audit_trail", "sql": "", "description": "Track permission changes in an append-only ledger with timestamps; compute effective state from latest event."}
+      ]
+    },
+    {
+      "title": "9) Cleanup",
+      "examples": [
+        {
+          "name": "cleanup",
+          "description": "Drop views and helper tables so reruns are clean.",
+          "sql": "-- Views\nDROP VIEW IF EXISTS v_orders_rbac;\nDROP VIEW IF EXISTS v_orders_alice;\nDROP VIEW IF EXISTS v_orders_rls;\nDROP VIEW IF EXISTS v_orders_masked;\nDROP VIEW IF EXISTS v_accounts_tenant;\n-- RBAC and policy tables\nDROP TABLE IF EXISTS role_policies;\nDROP TABLE IF EXISTS user_roles;\nDROP TABLE IF EXISTS roles;\n-- Tenant demo\nDROP TABLE IF EXISTS session_ctx_tenant;\nDROP TABLE IF EXISTS accounts;\nDROP TABLE IF EXISTS tenants;\n-- Prior sections\nDROP TABLE IF EXISTS permission_events;\nDROP TABLE IF EXISTS user_policies;\nDROP TABLE IF EXISTS session_context;\nDROP TABLE IF EXISTS orders;\nDROP TABLE IF EXISTS users;",
+          "nerd_notes": "Keep cleanup last so it doesn't interfere with other lessons that might reuse table names."
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+      "id": "dcl-1-list-orders",
+      "prompt": "List all orders for user_id = 1 (simulating a user-only view).",
+      "answer_sql": "SELECT * FROM orders WHERE user_id = 1 ORDER BY order_id;"
+    },
+    {
+      "id": "dcl-2-aggregate",
+      "prompt": "Compute total amount per user (simulate checking permissions by inspecting only the totals).",
+      "answer_sql": "SELECT user_id, SUM(amount) AS total_amount FROM orders GROUP BY user_id ORDER BY total_amount DESC;"
+    },
+    {
+      "id": "dcl-3-view",
+      "prompt": "Create a view that exposes only the orders for user_id = 1 and query it.",
+      "answer_sql": "CREATE VIEW IF NOT EXISTS user_1_orders AS SELECT * FROM orders WHERE user_id = 1; SELECT * FROM user_1_orders;"
+    }
+  ]
+}

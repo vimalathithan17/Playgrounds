@@ -1,0 +1,189 @@
+{
+  "title": "Help & Tips",
+  "description": "Small guidance on using the examples and running DuckDB queries locally. Exercises added in the `exercises` field with templated answers.",
+  "sections": [
+    {
+      "title": "0. Introduction: Help & Tips",
+      "narrative": "Quick guidance for running and introspecting examples in DuckDB (CLI or WASM). These snippets are portable, tiny, and idempotent so they run reliably in validators and notebooks.",
+      "nerd_notes": "Prefer information_schema for portability; PRAGMA is convenient but not standardized across engines. Keep outputs deterministic with ORDER BY and LIMIT when listing objects.",
+      "examples": []
+    },
+    {
+      "title": "1. How to run",
+  "description": "Question: how do I run these examples locally or in the browser (DuckDB WASM)?",
+      "examples": [
+        {
+          "name": "run_duckdb",
+          "sql": "-- Use the DuckDB CLI or a client library. Example command: duckdb :memory: then paste SQL.",
+          "description": "Run duckdb: a short demo.",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+        }
+      ],
+  "narrative": "Use the CLI or browser-based DuckDB WASM to run snippets. All examples here avoid filesystem dependencies so they work in either environment.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "2. File locations",
+  "description": "Question: where do paths resolve from, and how does that differ in WASM?",
+      "examples": [
+        {
+          "name": "file_paths",
+          "sql": "-- Paths in COPY/TO statements are relative to the process running DuckDB.",
+          "description": "File paths: a short demo.",
+          "nerd_notes": "Nerd note: shows basic usage; for production, consider types, null handling, and performance trade-offs."
+        }
+      ],
+  "narrative": "In the browser (DuckDB WASM), avoid file I/O unless you explicitly mount a virtual filesystem. All lessons here keep data in-memory using VALUES/CTEs.",
+      "nerd_notes": "Practical note: this example is simplified for teaching. See the nerd notes in each example for tips and production caveats."
+    },
+    {
+      "title": "1.5 Cheat Sheet: Quick Introspection",
+      "narrative": "Fast, copy-paste friendly snippets to see version info and basic catalog details. All are small and safe to re-run.",
+      "examples": [
+        {
+          "name": "cs_version_info",
+          "description": "Show DuckDB version via PRAGMA.",
+          "sql": "PRAGMA version;",
+          "nerd_notes": "PRAGMA is DuckDB-specific but handy. For portability, query information_schema for schema objects."
+        },
+        {
+          "name": "cs_list_tables_main_quick",
+          "description": "List objects in main schema in a stable order.",
+          "sql": "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema='main' ORDER BY table_name LIMIT 5;",
+          "nerd_notes": "information_schema.tables is portable; ORDER BY ensures deterministic output.",
+          "compat_examples": {
+            "postgres": "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema') ORDER BY table_name LIMIT 5;",
+            "mysql": "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY table_name LIMIT 5;",
+            "oracle": "SELECT owner AS table_schema, table_name, 'BASE TABLE' AS table_type FROM all_tables UNION ALL SELECT owner, view_name, 'VIEW' FROM all_views ORDER BY table_name FETCH FIRST 5 ROWS ONLY;"
+          }
+        },
+        {
+          "name": "cs_describe_temp_table_quick",
+          "description": "Create a TEMP table and preview its columns via information_schema.",
+          "sql": "DROP TABLE IF EXISTS cs_tmp; CREATE TEMP TABLE cs_tmp(i INTEGER, name TEXT); SELECT column_name, data_type FROM information_schema.columns WHERE table_name='cs_tmp' ORDER BY ordinal_position;",
+          "nerd_notes": "TEMP tables are session-scoped; filtering by table_name is sufficient here."
+        },
+        {
+          "name": "cs_show_table_columns_via_pragma_quick",
+          "description": "Demonstrate PRAGMA table_info on a tiny demo table.",
+          "sql": "DROP TABLE IF EXISTS cs_demo; CREATE TABLE cs_demo(id INTEGER, name TEXT); SELECT name, \"type\" AS data_type, \"notnull\" AS is_not_null FROM pragma_table_info('cs_demo') ORDER BY cid; DROP TABLE IF EXISTS cs_demo;",
+          "nerd_notes": "Quote \"notnull\" when projecting PRAGMA columns to avoid parser quirks."
+        }
+      ]
+    },
+    {
+      "title": "1.6 Pitfalls, Tips, and Q&A",
+      "narrative": "Operational notes to keep introspection examples portable and stable.",
+      "examples": [
+        { "name": "pitfall_pragma_not_portable", "description": "PRAGMA output is engine-specific; prefer information_schema when you need portability.", "sql": "" },
+        { "name": "tip_use_information_schema_portable", "description": "Use information_schema.tables and information_schema.columns for cross-engine introspection.", "sql": "" },
+        { "name": "question_wasm_file_io", "description": "In DuckDB WASM, file I/O requires a mounted virtual FS; keep tutorials in-memory.", "sql": "" },
+        { "name": "tricky_temp_schema_visibility", "description": "TEMP objects may appear under a temp schema; filter by table_name when in doubt.", "sql": "" },
+        { "name": "fundamental_idempotent_drops", "description": "Always DROP IF EXISTS around demo tables so re-runs are safe.", "sql": "" }
+      ]
+    },
+    {
+      "title": "HELP and DESCRIBE Commands",
+  "description": "Question: how do I list tables and describe columns in a portable way?",
+      "narrative": "Show practical introspection queries: list tables and describe a table's columns using information_schema so examples are portable.",
+      "nerd_notes": "Use information_schema for portable introspection across SQL engines; some DuckDB frontends also expose PRAGMA helpers.",
+      "examples": [
+        {
+          "name": "help_list_tables",
+          "description": "List tables in the current schema using information_schema.",
+          "sql": "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema = 'main' ORDER BY table_name;",
+          "nerd_notes": "This query is portable and shows basic table metadata.",
+          "compat_examples": {
+            "postgres": "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema') ORDER BY table_name;",
+            "mysql": "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY table_name;",
+            "oracle": "SELECT owner AS table_schema, table_name, 'BASE TABLE' AS table_type FROM all_tables UNION ALL SELECT owner, view_name, 'VIEW' FROM all_views ORDER BY table_name;"
+          }
+        },
+        {
+          "name": "describe_table_columns",
+          "description": "Create a small demo table and then show its columns via information_schema.columns.",
+          "sql": "DROP TABLE IF EXISTS demo_inspect;\nCREATE TABLE demo_inspect (id INTEGER PRIMARY KEY, name TEXT, created_ts TIMESTAMP);\nINSERT INTO demo_inspect VALUES (1,'x', CAST('2024-01-01' AS TIMESTAMP));\nSELECT column_name, data_type, ordinal_position FROM information_schema.columns WHERE table_name = 'demo_inspect' ORDER BY ordinal_position;\nDROP TABLE IF EXISTS demo_inspect;",
+          "nerd_notes": "We create a small table so the DESCRIBE example is deterministic and safe to run in the validator.",
+          "compat_examples": {
+            "postgres": "SELECT column_name, data_type, ordinal_position FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'demo_inspect' ORDER BY ordinal_position;",
+            "mysql": "SELECT column_name, data_type, ordinal_position FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'demo_inspect' ORDER BY ordinal_position;",
+            "oracle": "SELECT column_name, data_type, column_id AS ordinal_position FROM user_tab_columns WHERE table_name = 'DEMO_INSPECT' ORDER BY column_id;"
+          }
+        }
+      ]
+    },
+    {
+  "title": "1. Database Introspection Commands",
+  "description": "Question: how can I programmatically inspect schemas, tables and columns?",
+      "narrative": "Examples to inspect schemas, tables and columns programmatically.",
+      "nerd_notes": "information_schema is the recommended, portable way to introspect objects from SQL.",
+      "examples": [
+        {
+          "name": "list_tables_example",
+          "description": "Create a small table then list tables to show the entry appears in information_schema.",
+          "sql": "DROP TABLE IF EXISTS demo_tables;\nCREATE TABLE demo_tables (i INTEGER);\nINSERT INTO demo_tables VALUES (1);\nSELECT table_name FROM information_schema.tables WHERE table_schema = 'main' AND table_name = 'demo_tables';\nDROP TABLE IF EXISTS demo_tables;",
+          "nerd_notes": "This shows how newly created tables appear in information_schema and is safe to re-run.",
+          "compat_examples": {
+            "postgres": "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'demo_tables';",
+            "mysql": "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'demo_tables';",
+            "oracle": "SELECT table_name FROM user_tables WHERE table_name = 'DEMO_TABLES';"
+          }
+        }
+      ]
+    },
+    {
+  "title": "2. Database Analysis and Documentation",
+  "description": "Question: how can I generate lightweight schema documentation from SQL?",
+      "narrative": "Tiny examples to export basic schema info useful for documentation and light-weight analysis.",
+      "nerd_notes": "Keep exports small and deterministic in teaching examples.",
+      "examples": [
+        {
+          "name": "schema_overview",
+          "description": "Create a demo table, then extract column names and types to illustrate basic documentation exports.",
+          "sql": "DROP TABLE IF EXISTS doc_demo;\nCREATE TABLE doc_demo (id INTEGER, name TEXT, score DOUBLE);\nINSERT INTO doc_demo VALUES (1,'A',10.0);\nSELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_name = 'doc_demo' ORDER BY ordinal_position;\nDROP TABLE IF EXISTS doc_demo;",
+          "nerd_notes": "This pattern can be adapted to generate simple schema docs into CSV or other formats.",
+          "compat_examples": {
+            "postgres": "SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'doc_demo' ORDER BY ordinal_position;",
+            "mysql": "SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'doc_demo' ORDER BY ordinal_position;",
+            "oracle": "SELECT table_name, column_name, data_type FROM user_tab_columns WHERE table_name = 'DOC_DEMO' ORDER BY column_id;"
+          }
+        },
+        {
+          "name": "table_column_counts",
+          "description": "Count columns per table (demo creates two tiny tables, then inspects them via information_schema).",
+          "sql": "DROP TABLE IF EXISTS t_cols1;\nDROP TABLE IF EXISTS t_cols2;\nCREATE TABLE t_cols1 (id INTEGER, name TEXT, created_at TIMESTAMP);\nCREATE TABLE t_cols2 (order_id INTEGER, customer_id INTEGER, amount DOUBLE, order_date DATE);\nSELECT table_name, COUNT(*) AS column_count\nFROM information_schema.columns\nWHERE table_name IN ('t_cols1','t_cols2')\nGROUP BY table_name\nORDER BY table_name;\nDROP TABLE IF EXISTS t_cols1;\nDROP TABLE IF EXISTS t_cols2;",
+          "nerd_notes": "Grouping information_schema.columns is a portable way to compute column counts without engine-specific PRAGMA."
+        },
+        {
+          "name": "column_patterns_analysis",
+          "description": "Detect simple naming patterns across demo tables (e.g., *_id, *_date) to illustrate documentation checks.",
+          "sql": "DROP TABLE IF EXISTS t_pat1;\nDROP TABLE IF EXISTS t_pat2;\nCREATE TABLE t_pat1 (user_id INTEGER, full_name TEXT, signup_date DATE);\nCREATE TABLE t_pat2 (order_id INTEGER, user_id INTEGER, total_amount DOUBLE, order_date DATE);\nWITH cols AS (\n  SELECT column_name\n  FROM information_schema.columns\n  WHERE table_name IN ('t_pat1','t_pat2')\n)\nSELECT CASE\n         WHEN column_name LIKE '%_id' THEN 'ID Column Pattern'\n         WHEN column_name LIKE '%_date' THEN 'Date Column Pattern'\n         WHEN column_name LIKE '%_name' THEN 'Name Column Pattern'\n         WHEN column_name LIKE '%_amount' THEN 'Amount Column Pattern'\n         ELSE 'Other'\n       END AS pattern,\n       COUNT(*) AS frequency\nFROM cols\nGROUP BY pattern\nORDER BY frequency DESC, pattern;\nDROP TABLE IF EXISTS t_pat1;\nDROP TABLE IF EXISTS t_pat2;",
+          "nerd_notes": "Pattern-based docs can surface consistency issues early; adapt to your naming conventions." 
+        },
+        {
+          "name": "object_hierarchy",
+          "description": "List objects in the main schema with a simple type ordering (tables before views).",
+          "sql": "SELECT\n  CASE table_type\n    WHEN 'BASE TABLE' THEN 'Table'\n    WHEN 'VIEW' THEN 'View'\n    ELSE table_type\n  END AS object_type,\n  table_name\nFROM information_schema.tables\nWHERE table_schema = 'main'\nORDER BY CASE table_type WHEN 'BASE TABLE' THEN 1 WHEN 'VIEW' THEN 2 ELSE 3 END, table_name;",
+          "nerd_notes": "information_schema.tables is portable; avoid engine-specific catalogs unless you need detailed internals.",
+          "compat_examples": {
+            "postgres": "SELECT CASE table_type WHEN 'BASE TABLE' THEN 'Table' WHEN 'VIEW' THEN 'View' ELSE table_type END AS object_type, table_name FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema') ORDER BY CASE table_type WHEN 'BASE TABLE' THEN 1 WHEN 'VIEW' THEN 2 ELSE 3 END, table_name;",
+            "mysql": "SELECT CASE table_type WHEN 'BASE TABLE' THEN 'Table' WHEN 'VIEW' THEN 'View' ELSE table_type END AS object_type, table_name FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY CASE table_type WHEN 'BASE TABLE' THEN 1 WHEN 'VIEW' THEN 2 ELSE 3 END, table_name;",
+            "oracle": "SELECT 'Table' AS object_type, table_name FROM user_tables UNION ALL SELECT 'View', view_name FROM user_views ORDER BY 1, 2;"
+          }
+        }
+      ]
+    }
+  ],
+  "exercises": [
+    {
+  "id": "help-1-preview-table",
+  "prompt": "Preview the first 10 rows from a table `people` without using filesystem features (WASM-safe).",
+  "answer_sql": "SELECT * FROM people LIMIT 10;"
+    },
+    {
+      "id": "help-2-run-cli",
+      "prompt": "Show the CLI command to start DuckDB and run a SQL file named `script.sql`.",
+      "answer_sql": "-- CLI: duckdb mydb.db < script.sql\n-- Or: duckdb -c \"SELECT * FROM mytable;\""
+    }
+  ]
+}

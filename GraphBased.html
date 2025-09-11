@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Graph Database Emulator (Neo4j/Cypher) - Definitive Edition</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
@@ -27,6 +27,7 @@
             color: #e0e0e0;
             overflow: hidden;
         }
+    :root { --mobile-nav-height: 56px; }
         .CodeMirror {
             font-family: 'Fira Code', monospace;
             font-size: 14px;
@@ -56,6 +57,10 @@
             height: 5px;
             z-index: 10;
         }
+    /* Keep the Run button visible even with long editors */
+    #editor-container { min-height: 0; }
+    #editor-wrapper { overflow: auto; }
+    #action-bar { position: sticky; bottom: 0; z-index: 5; }
         .console-output {
             font-family: 'Fira Code', monospace;
             white-space: pre-wrap;
@@ -99,17 +104,29 @@
             fill: #a0a0a0;
             text-anchor: middle;
             pointer-events: none;
+            paint-order: stroke;
+            stroke: #1e1e1e;
+            stroke-width: 2px;
         }
         .node text {
             fill: #e0e0e0;
             font-size: 11px;
             text-anchor: middle;
             pointer-events: none;
+            paint-order: stroke;
+            stroke: #1e1e1e;
+            stroke-width: 2px;
         }
         /* Modal Styles */
         #details-modal-overlay {
             z-index: 50;
         }
+
+                /* Mobile bottom nav: fixed + safe-area and content padding */
+                @media (max-width: 768px) {
+                    nav.md\\:hidden { position: fixed; bottom: 0; left: 0; right: 0; z-index: 45; padding-bottom: env(safe-area-inset-bottom); }
+                    main { padding-bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom)); }
+                }
     </style>
 </head>
 <body class="flex flex-col h-screen">
@@ -175,7 +192,7 @@
         </div>
     </main>
 
-    <nav class="md:hidden bg-[#282828] border-t border-gray-700 w-full flex-shrink-0">
+    <nav id="mobile-nav" class="md:hidden bg-[#282828] border-t border-gray-700 w-full flex-shrink-0">
         <button class="mobile-nav-btn active flex-1 p-3 text-sm text-center font-medium border-t-2" data-view="info">
             <svg class="w-5 h-5 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
@@ -279,6 +296,7 @@
                 this._relIdCounter = 0;
                 this.constraints = new Map();
                 this.indexes = new Map();
+                this.constraintNames = new Map(); // name -> label.property
             }
             _getNextNodeId() { return this._nodeIdCounter++; }
             _getNextRelId() { return this._relIdCounter++; }
@@ -524,9 +542,11 @@
                 if (upperQuery.startsWith('CREATE CONSTRAINT')) return this._handleCreateConstraint(cleanQuery);
                 if (upperQuery.startsWith('CREATE INDEX')) return this._handleCreateIndex(cleanQuery);
                 if (upperQuery.startsWith('DROP INDEX')) return this._handleDropIndex(cleanQuery);
+                if (upperQuery.startsWith('DROP CONSTRAINT')) return this._handleDropConstraint(cleanQuery);
+                if (upperQuery.startsWith('SHOW')) return this._handleShow(cleanQuery);
                 if (upperQuery.startsWith('CALL')) return this._handleCall(cleanQuery);
                 if (upperQuery.startsWith('FOREACH')) return this._handleForeach(cleanQuery);
-                if (upperQuery.includes('shortestPath') || upperQuery.includes('allShortestPaths')) return this._handlePathFunctions(cleanQuery);
+                if (upperQuery.includes('SHORTESTPATH') || upperQuery.includes('ALLSHORTESTPATHS')) return this._handlePathFunctions(cleanQuery);
                 if (upperQuery.startsWith('UNWIND')) return this._handleUnwind(cleanQuery);
                 if (upperQuery.startsWith('MERGE')) return this._handleMerge(cleanQuery);
                 if (upperQuery.includes('SET')) return this._handleSet(cleanQuery);
@@ -563,32 +583,52 @@
             }
 
             _parseNodePattern(pattern) {
-                const match = pattern.match(/\((\w*):?(\w*)?\s*({.*?})?\)/);
-                if (!match) return null;
-                const [, variable, label, propString] = match;
-                return { variable, label, properties: this._parseProperties(propString) };
+                // Support multi-labels like (n:Label1:Label2)
+                const m = pattern.match(/\((\w*)\s*(:[\w:]+)?\s*({.*?})?\)/);
+                if (!m) return null;
+                const [, variable, labelsPart, propString] = m;
+                const labels = labelsPart ? labelsPart.split(':').filter(Boolean) : [];
+                return { variable, labels, properties: this._parseProperties(propString) };
             }
 
             _parseRelPattern(pattern) {
-                const match = pattern.match(/-\[(\w*):?(\w*)?\s*({.*?})?(\*\d*\.?\.\d*)?\]-/);
-                if (!match) return null;
-                const [, variable, type, propString, length] = match;
+                // Support -[]-, -[]->, <-[]-, variable length like *1..3, and type alternation :A|:B
+                // Ensure typePart does not capture the '*' length spec
+                const re = /(<?)-\[(\w*)?:?([^\]\s\*]*)?\s*({.*?})?(\*\d*(?:\.\.\d*)?)?\]-(>?)*/;
+                const m = pattern.match(re);
+                if (!m) return null;
+                const [, leftArrow, variable, typePart, propString, length, rightArrow] = m;
                 let minHops = 1, maxHops = 1;
                 if (length) {
-                    const range = length.replace('*','').split('..');
-                    minHops = parseInt(range[0] || 1);
-                    maxHops = parseInt(range[1] || Infinity);
+                    const cleaned = length.replace('*', '');
+                    const hasRange = cleaned.includes('..');
+                    if (hasRange) {
+                        const [minStr, maxStr] = cleaned.split('..');
+                        minHops = minStr ? parseInt(minStr) : 1;
+                        maxHops = maxStr ? parseInt(maxStr) : Infinity;
+                    } else {
+                        minHops = cleaned ? parseInt(cleaned) : 1;
+                        maxHops = minHops;
+                    }
+                    if (!isFinite(maxHops)) maxHops = Infinity;
                 }
-                return { variable, type, properties: this._parseProperties(propString), minHops, maxHops };
+                const directed = rightArrow === '>' && leftArrow !== '<';
+                const undirected = leftArrow === '<' && rightArrow === '>' ? false : (!leftArrow && !rightArrow);
+                // Parse alternation of types: A|B|C
+                const types = (typePart || '')
+                    .split('|')
+                    .map(s => s.trim())
+                    .filter(Boolean);
+                return { variable, types, type: types.length === 1 ? types[0] : null, properties: this._parseProperties(propString), minHops, maxHops, directed, undirected };
             }
 
-            _handleCreate(query) {
+        _handleCreate(query) {
                 const createNodeMatch = query.match(/^CREATE\s+(\(.*\))$/i);
                 if (createNodeMatch) {
                     const nodePattern = this._parseNodePattern(createNodeMatch[1]);
                     if (!nodePattern) throw new Error("Invalid node creation syntax.");
-                    const { label, properties } = nodePattern;
-                    const node = this.db.createNode(label ? [label] : [], properties);
+            const { labels = [], properties } = nodePattern;
+            const node = this.db.createNode(labels, properties);
                     return { type: 'create', message: "Created 1 node.", result: [this._formatNodeForOutput(node)] };
                 }
                 const createRelMatch = query.match(/^MATCH\s+(.*?)\s+CREATE\s+(.*)$/i);
@@ -599,7 +639,16 @@
                     if (!relPatternMatch) throw new Error(`Invalid relationship CREATE pattern: ${createClause}`);
                     
                     const foundNodes = nodePatterns.map(p => {
-                        const nodes = this.db.findNodes(p.label, p.properties);
+                        // For multi-label search, intersect node sets across labels
+                        let candidates;
+                        if (p.labels && p.labels.length > 0) {
+                            const sets = p.labels.map(lbl => new Set(this.db.labelsToNodes.get(lbl) || []));
+                            const intersect = sets.reduce((a, s) => new Set([...a].filter(x => s.has(x))));
+                            candidates = [...intersect].map(id => this.db.nodes.get(id));
+                        } else {
+                            candidates = this.db.findNodes(undefined, {});
+                        }
+                        const nodes = candidates.filter(n => Object.entries(p.properties||{}).every(([k,v]) => n.properties[k] === v));
                         if (nodes.length !== 1) throw new Error(`Expected 1 node for pattern ${JSON.stringify(p)}, but found ${nodes.length}.`);
                         return nodes[0];
                     });
@@ -607,8 +656,19 @@
                     const [, startVar, relType, relPropsStr, endVar] = relPatternMatch;
                     const startNodePattern = nodePatterns.find(p => p.variable === startVar);
                     const endNodePattern = nodePatterns.find(p => p.variable === endVar);
-                    const startNode = this.db.findNodes(startNodePattern.label, startNodePattern.properties)[0];
-                    const endNode = this.db.findNodes(endNodePattern.label, endNodePattern.properties)[0];
+                    const findOne = (p) => {
+                        let candidates;
+                        if (p.labels && p.labels.length > 0) {
+                            const sets = p.labels.map(lbl => new Set(this.db.labelsToNodes.get(lbl) || []));
+                            const intersect = sets.reduce((a, s) => new Set([...a].filter(x => s.has(x))));
+                            candidates = [...intersect].map(id => this.db.nodes.get(id));
+                        } else {
+                            candidates = this.db.findNodes(undefined, {});
+                        }
+                        return candidates.find(n => Object.entries(p.properties||{}).every(([k,v]) => n.properties[k] === v));
+                    };
+                    const startNode = findOne(startNodePattern);
+                    const endNode = findOne(endNodePattern);
                     if (!startNode || !endNode) throw new Error("Could not find start or end node for relationship.");
 
                     const rel = this.db.createRelationship(startNode.id, endNode.id, relType, this._parseProperties(relPropsStr));
@@ -644,7 +704,7 @@
             }
 
             _performMatch(matchClause) {
-                const pattern = matchClause.replace(/^(OPTIONAL )?MATCH\s*/i, '').trim();
+                let pattern = matchClause.replace(/^(OPTIONAL )?MATCH\s*/i, '').trim();
                 let pathVar = null;
                 if (pattern.match(/^\w+\s*=/)) {
                     [pathVar, pattern] = pattern.split('=').map(s => s.trim());
@@ -652,16 +712,37 @@
 
                 if (!pattern.includes('-')) {
                     const nodePattern = this._parseNodePattern(pattern);
-                    const nodes = this.db.findNodes(nodePattern.label, nodePattern.properties);
+                    // Multi-label filtering
+                    let nodes;
+                    if (nodePattern.labels && nodePattern.labels.length > 0) {
+                        const sets = nodePattern.labels.map(lbl => new Set(this.db.labelsToNodes.get(lbl) || []));
+                        const intersect = sets.reduce((a, s) => new Set([...a].filter(x => s.has(x))), new Set(this.db.nodes.keys()));
+                        nodes = [...intersect].map(id => this.db.nodes.get(id));
+                    } else {
+                        nodes = this.db.findNodes(undefined, {});
+                    }
+                    nodes = nodes.filter(n => Object.entries(nodePattern.properties||{}).every(([k,v]) => n.properties[k] === v));
                     return nodes.map(n => ({ [nodePattern.variable]: this._formatNodeForOutput(n) }));
                 }
 
-                const [startNodePatternStr, relPatternStr, endNodePatternStr] = pattern.split(/(-.+?-)/);
+                const [startNodePatternStr, relPatternStr, endNodePatternStrRaw] = pattern.split(/(-.+?-)/);
                 const startNodePattern = this._parseNodePattern(startNodePatternStr);
                 const relPattern = this._parseRelPattern(relPatternStr);
-                const endNodePattern = this._parseNodePattern(endNodePatternStr.replace('>', ''));
+                // Determine direction using the full pattern to avoid losing '>' during split
+                const isDirected = /-\[.*?\]->/.test(pattern);
+                const endNodePatternStr = endNodePatternStrRaw.replace('>', '').trim();
+                const endNodePattern = this._parseNodePattern(endNodePatternStr);
 
-                const startNodes = this.db.findNodes(startNodePattern.label, startNodePattern.properties);
+                // Build start node set with multi-label support
+                let startNodes;
+                if (startNodePattern.labels && startNodePattern.labels.length > 0) {
+                    const sets = startNodePattern.labels.map(lbl => new Set(this.db.labelsToNodes.get(lbl) || []));
+                    const intersect = sets.reduce((a, s) => new Set([...a].filter(x => s.has(x))), new Set(this.db.nodes.keys()));
+                    startNodes = [...intersect].map(id => this.db.nodes.get(id));
+                } else {
+                    startNodes = this.db.findNodes(undefined, {});
+                }
+                startNodes = startNodes.filter(n => Object.entries(startNodePattern.properties||{}).every(([k,v]) => n.properties[k] === v));
                 const finalResults = [];
 
                 startNodes.forEach(startNode => {
@@ -674,10 +755,24 @@
 
                         if (currentDepth >= relPattern.maxHops) continue;
 
-                        const outgoingRels = this.db.nodeRelationships.get(currentNode.id).outgoing;
-                        for (const relId of outgoingRels) {
-                            const rel = this.db.relationships.get(relId);
-                            const neighborNode = this.db.nodes.get(rel.endNode);
+                        // Consider direction, relationship type, and relationship properties
+                        const considerRel = (rel, fromNodeId) => {
+                            if (relPattern && relPattern.types && relPattern.types.length > 0) {
+                                if (!relPattern.types.includes(rel.type)) return false;
+                            }
+                            if (relPattern && relPattern.properties) {
+                                for (const [k,v] of Object.entries(relPattern.properties)) {
+                                    if (rel.properties[k] !== v) return false;
+                                }
+                            }
+                            if (!isDirected) return rel.startNode === fromNodeId || rel.endNode === fromNodeId;
+                            return rel.startNode === fromNodeId; // only outgoing if directed
+                        };
+
+                        for (const rel of this.db.relationships.values()) {
+                            if (!considerRel(rel, currentNode.id)) continue;
+                            const neighborId = rel.startNode === currentNode.id ? rel.endNode : rel.startNode;
+                            const neighborNode = this.db.nodes.get(neighborId);
                             
                             const pathString = [...currentPath, rel].map(r => r.id).join('-');
                             if (visitedPaths.has(pathString)) continue;
@@ -686,9 +781,11 @@
                             const newPath = [...currentPath, rel];
                             const newDepth = newPath.length;
 
-                            if (newDepth >= relPattern.minHops) {
-                                const endLabelMatch = !endNodePattern.label || neighborNode.labels.has(endNodePattern.label);
-                                if (endLabelMatch) {
+                            if (newDepth >= (relPattern?.minHops ?? 1)) {
+                                const requiredLabels = endNodePattern.labels || [];
+                                const endLabelMatch = requiredLabels.length === 0 || requiredLabels.some(l => neighborNode.labels.has(l));
+                                const endPropsMatch = Object.entries(endNodePattern.properties || {}).every(([k,v]) => neighborNode.properties[k] === v);
+                                if (endLabelMatch && endPropsMatch) {
                                     const resultRow = {
                                         [startNodePattern.variable]: this._formatNodeForOutput(startNode),
                                         [endNodePattern.variable]: this._formatNodeForOutput(neighborNode)
@@ -753,6 +850,21 @@
                             const key = alias || part;
                             
                             // Enhanced function evaluation with comprehensive Neo4j built-ins
+                            // Path helper aggregation
+                            if (func.toLowerCase() === 'nodes') {
+                                aggregated[key] = results.map(r => (r[inner.trim()]?.segments||[])
+                                    .map(seg => seg.start))
+                                    .flat();
+                                return;
+                            } else if (func.toLowerCase() === 'relationships') {
+                                aggregated[key] = results.map(r => (r[inner.trim()]?.segments||[])
+                                    .map(seg => seg.relationship))
+                                    .flat();
+                                return;
+                            } else if (func.toLowerCase() === 'length') {
+                                aggregated[key] = results.map(r => (r[inner.trim()]?.segments||[]).filter(s => s.relationship).length)[0] ?? 0;
+                                return;
+                            }
                             const functionResult = this._evaluateCypherFunction(func, inner, results);
                             if (functionResult !== undefined) {
                                 aggregated[key] = functionResult;
@@ -785,6 +897,28 @@
                                 const [, func, inner, alias] = funcMatch;
                                 const key = alias || part;
                                 
+                                // Path helper functions
+                                if (func.toLowerCase() === 'nodes') {
+                                    const pathObj = row[inner.trim()];
+                                    const list = (pathObj?.segments || [])
+                                        .filter(seg => seg.start || seg.node)
+                                        .map(seg => seg.start || seg.node);
+                                    newRow[key] = list;
+                                    return;
+                                } else if (func.toLowerCase() === 'relationships') {
+                                    const pathObj = row[inner.trim()];
+                                    const list = (pathObj?.segments || [])
+                                        .filter(seg => seg.relationship)
+                                        .map(seg => seg.relationship);
+                                    newRow[key] = list;
+                                    return;
+                                } else if (func.toLowerCase() === 'length') {
+                                    const pathObj = row[inner.trim()];
+                                    const rels = (pathObj?.segments || []).filter(seg => seg.relationship).length;
+                                    newRow[key] = rels;
+                                    return;
+                                }
+
                                 const functionResult = this._evaluateCypherFunction(func, inner, [row]);
                                 if (functionResult !== undefined) {
                                     newRow[key] = functionResult;
@@ -1213,8 +1347,21 @@
                         deletedCount++;
                     });
                 } else if (pattern.includes(`[${variable}]`) || pattern.includes(`[${variable}:`)) {
-                    const relsToDelete = this.db.findRelationships(relPattern.type, relPattern.properties);
-                     relsToDelete.forEach(rel => {
+                    let relsToDelete = [];
+                    if (relPattern && relPattern.types && relPattern.types.length > 1) {
+                        // manual filter any-of types
+                        this.db.relationships.forEach(rel => {
+                            if (!relPattern.types.includes(rel.type)) return;
+                            let ok = true;
+                            for (const [k,v] of Object.entries(relPattern.properties||{})) {
+                                if (rel.properties[k] !== v) { ok = false; break; }
+                            }
+                            if (ok) relsToDelete.push(rel);
+                        });
+                    } else {
+                        relsToDelete = this.db.findRelationships(relPattern.type, relPattern.properties);
+                    }
+                    relsToDelete.forEach(rel => {
                         this.db.deleteRelationship(rel.id);
                         deletedCount++;
                     });
@@ -1330,7 +1477,7 @@
 
                 const results = list.map(item => ({ [variable]: item }));
                 
-                const createMatch = query.match(/CREATE\s+(.*)/i);
+        const createMatch = query.match(/CREATE\s+(.*)/i);
                 if (createMatch) {
                     let createdCount = 0;
                     results.forEach(row => {
@@ -1340,7 +1487,8 @@
                             nodePatternStr = nodePatternStr.replace(new RegExp(`{\\s*title:\\s*${variable}\\s*}`, 'g'), `{title: ${propValue}}`);
                         }
                         const nodePattern = this._parseNodePattern(nodePatternStr);
-                        this.db.createNode(nodePattern.label ? [nodePattern.label] : [], nodePattern.properties);
+            const labels = (nodePattern.labels && nodePattern.labels.length > 0) ? nodePattern.labels : [];
+            this.db.createNode(labels, nodePattern.properties);
                         createdCount++;
                     });
                     return { type: 'create', message: `Created ${createdCount} nodes.`, result: [] };
@@ -1350,7 +1498,8 @@
             }
 
             _handleCreateConstraint(query) {
-                const match = query.match(/CREATE CONSTRAINT ON \((\w+):(\w+)\) ASSERT (\w+\.\w+) IS UNIQUE/i);
+                const nameMatch = query.match(/CREATE\s+CONSTRAINT\s+(\w+)\s+ON/i);
+                const match = query.match(/CREATE\s+CONSTRAINT(?:\s+\w+)?\s+ON\s+\((\w+):(\w+)\)\s+ASSERT\s+(\w+\.\w+)\s+IS\s+UNIQUE/i);
                 if (!match) throw new Error("Invalid CONSTRAINT syntax.");
                 const [, variable, label, property] = match;
                 const key = property.split('.')[1];
@@ -1359,6 +1508,7 @@
                     throw new Error(`Constraint on :${label}(${key}) already exists.`);
                 }
                 this.db.constraints.set(constraintKey, new Set());
+                if (nameMatch) this.db.constraintNames.set(nameMatch[1], constraintKey);
                 return { type: 'db_manage', message: `Constraint created on :${label}(${key}).` };
             }
 
@@ -1416,12 +1566,14 @@
   String: toUpper(), toLower(), split(), replace(), substring()
   Math: abs(), round(), sqrt(), rand()
   Collection: size(), head(), tail(), range()
-  Path: shortestPath(), allShortestPaths()
+    Path: shortestPath(), allShortestPaths()
 
 🏗️ SCHEMA:
   CREATE CONSTRAINT ON (n:Label) ASSERT n.property IS UNIQUE
   CREATE INDEX ON :Label(property)
-  DROP INDEX ON :Label(property)
+    DROP INDEX ON :Label(property)
+    SHOW CONSTRAINTS
+    SHOW STATS
 
 💾 DATABASE:
   USE database_name                     - Switch database
@@ -1448,6 +1600,85 @@
                 }
                 this.db.indexes.delete(indexKey);
                 return { type: 'db_manage', message: `Index on :${label}(${property}) dropped.` };
+            }
+
+            _handleDropConstraint(query) {
+                // Support both named and anonymous: DROP CONSTRAINT constraint_name OR by pattern
+                // Here we support the simple pattern form: DROP CONSTRAINT ON (n:Label) ASSERT n.prop IS UNIQUE
+                const byPattern = query.match(/DROP\s+CONSTRAINT\s+ON\s*\(\w+:(\w+)\)\s+ASSERT\s+\w+\.(\w+)\s+IS\s+UNIQUE/i);
+                if (byPattern) {
+                    const [, label, prop] = byPattern;
+                    const key = `${label}.${prop}`;
+                    if (!this.db.constraints.has(key)) throw new Error(`Constraint on :${label}(${prop}) does not exist.`);
+                    this.db.constraints.delete(key);
+                    return { type: 'db_manage', message: `Constraint on :${label}(${prop}) dropped.` };
+                }
+                // Named style (best-effort): DROP CONSTRAINT name
+                const byName = query.match(/DROP\s+CONSTRAINT\s+(\w+)/i);
+                if (byName) {
+                    const name = byName[1];
+                    const key = this.db.constraintNames.get(name);
+                    if (key && this.db.constraints.has(key)) {
+                        this.db.constraints.delete(key);
+                        this.db.constraintNames.delete(name);
+                        return { type: 'db_manage', message: `Constraint ${name} dropped.` };
+                    }
+                    throw new Error(`Constraint ${name} not found.`);
+                }
+                throw new Error('Invalid DROP CONSTRAINT syntax.');
+            }
+
+            _handleShow(query) {
+                const upper = query.toUpperCase();
+                if (upper.startsWith('SHOW CONSTRAINTS')) {
+                    const rows = [];
+                    this.db.constraints.forEach((_, key) => {
+                        const [label, property] = key.split('.');
+                        rows.push({ name: `${label}_${property}_unique`, type: 'UNIQUE', entityType: 'NODE', labelsOrTypes: [label], properties: [property] });
+                    });
+                    return { type: 'tabular', columns: ['name','type','entityType','labelsOrTypes','properties'], data: rows };
+                }
+                if (upper.startsWith('SHOW INDEXES')) {
+                    const rows = [];
+                    this.db.indexes.forEach((_, key) => {
+                        const [label, property] = key.split('.');
+                        rows.push({ entityType: 'NODE', labelsOrTypes: [label], properties: [property] });
+                    });
+                    return { type: 'tabular', columns: ['entityType','labelsOrTypes','properties'], data: rows };
+                }
+                if (upper.startsWith('SHOW STATS')) {
+                    const labels = new Set();
+                    this.db.nodes.forEach(n => n.labels.forEach(l => labels.add(l)));
+                    const relTypes = new Set();
+                    this.db.relationships.forEach(r => relTypes.add(r.type));
+                    const nodeCount = this.db.nodes.size;
+                    const relCount = this.db.relationships.size;
+                    const avgDegree = nodeCount > 0 ? (relCount * 2) / nodeCount : 0;
+                    const rows = [
+                        { metric: 'nodes', value: nodeCount },
+                        { metric: 'relationships', value: relCount },
+                        { metric: 'labels', value: labels.size },
+                        { metric: 'relationshipTypes', value: relTypes.size },
+                        { metric: 'avgDegree', value: Number(avgDegree.toFixed(2)) },
+                    ];
+                    return { type: 'tabular', columns: ['metric','value'], data: rows };
+                }
+                if (upper.startsWith('SHOW DATABASES')) {
+                    const rows = [];
+                    this.dbManager.databases.forEach((_, name) => {
+                        rows.push({ name, current: name === this.dbManager.currentDbName });
+                    });
+                    return { type: 'tabular', columns: ['name','current'], data: rows };
+                }
+                if (upper.startsWith('SHOW TRANSACTIONS')) {
+                    // Minimal emulation: single-session transaction state
+                    const rows = [];
+                    if (this.inTransaction) {
+                        rows.push({ id: 'tx-1', state: 'Active' });
+                    }
+                    return { type: 'tabular', columns: ['id','state'], data: rows };
+                }
+                throw new Error('Unsupported SHOW command. Supported: SHOW CONSTRAINTS, SHOW STATS');
             }
 
             _handleCall(query) {
@@ -1481,6 +1712,20 @@
                         schema.push({ type: 'INDEX', description: `INDEX on :${label}(${property})` });
                     });
                     return { type: 'tabular', columns: ['type', 'description'], data: schema };
+                } else if (procedureName === 'db.indexes') {
+                    const rows = [];
+                    this.db.indexes.forEach((value, key) => {
+                        const [label, property] = key.split('.');
+                        rows.push({ label, property });
+                    });
+                    return { type: 'tabular', columns: ['label','property'], data: rows };
+                } else if (procedureName === 'db.constraints') {
+                    const rows = [];
+                    this.db.constraints.forEach((value, key) => {
+                        const [label, property] = key.split('.');
+                        rows.push({ type: 'UNIQUE', label, property });
+                    });
+                    return { type: 'tabular', columns: ['type','label','property'], data: rows };
                 } else {
                     throw new Error(`Unknown procedure: ${procedureName}`);
                 }
@@ -1514,80 +1759,155 @@
             }
 
             _handlePathFunctions(query) {
-                // Simple shortest path implementation
-                if (query.includes('shortestPath')) {
-                    const pathMatch = query.match(/shortestPath\(\s*\((.*?)\)-\[.*?\]->\((.*?)\)\s*\)/i);
-                    if (!pathMatch) throw new Error("Invalid shortestPath syntax.");
-                    
-                    const [, startPattern, endPattern] = pathMatch;
-                    const startNodes = this._findNodesByPattern(startPattern);
-                    const endNodes = this._findNodesByPattern(endPattern);
-                    
-                    if (startNodes.length === 0 || endNodes.length === 0) {
-                        return { type: 'tabular', columns: ['path'], data: [] };
+                // Enhanced shortestPath/allShortestPaths with type and hop bounds and directional arrows
+                const isAll = /allShortestPaths\s*\(/i.test(query);
+                const fnRe = isAll
+                    ? /allShortestPaths\(\s*(\(.+?\)\s*<?-\s*\[.*?\]\s*-\>?\s*\(.+?\))\s*\)/i
+                    : /shortestPath\(\s*(\(.+?\)\s*<?-\s*\[.*?\]\s*-\>?\s*\(.+?\))\s*\)/i;
+                const m = query.match(fnRe);
+                if (!m) throw new Error("Invalid path function syntax.");
+
+                const pattern = m[1];
+                // Split around the relationship pattern, honoring optional arrows
+                const nodeParts = pattern.split(/<?-\s*\[.*?\]\s*-\>?/);
+                if (nodeParts.length !== 2) throw new Error("Invalid pattern inside path function.");
+                const startPattern = nodeParts[0].trim().replace(/^\(|\)$/g, '');
+                const endPattern = nodeParts[1].trim().replace(/^\(|\)$/g, '');
+
+                const relSpecMatch = pattern.match(/<?-\s*\[(\w*)?:?([^\]\s\*]*)?\s*(\*\d*(?:\.\.\d*)?)?\]\s*-\>?/i);
+                const relTypes = relSpecMatch && relSpecMatch[2]
+                    ? relSpecMatch[2].split('|').map(s => s.trim()).filter(Boolean)
+                    : [];
+                const lenSpec = relSpecMatch && relSpecMatch[3] ? relSpecMatch[3] : null;
+                let minHops = 1, maxHops = Infinity;
+                if (lenSpec) {
+                    const cleaned = lenSpec.replace('*', '');
+                    if (cleaned.includes('..')) {
+                        const [a, b] = cleaned.split('..');
+                        minHops = a ? parseInt(a) : 1;
+                        maxHops = b ? parseInt(b) : Infinity;
+                    } else {
+                        minHops = cleaned ? parseInt(cleaned) : 1;
+                        maxHops = minHops;
                     }
-                    
-                    const paths = [];
-                    startNodes.forEach(startNode => {
-                        endNodes.forEach(endNode => {
-                            const path = this._findShortestPath(startNode.id, endNode.id);
-                            if (path.length > 0) {
-                                paths.push({ path: this._formatPath(path) });
-                            }
-                        });
-                    });
-                    
-                    return { type: 'tabular', columns: ['path'], data: paths };
                 }
-                
-                throw new Error("Path function not implemented.");
+
+                const dir = (pattern.includes('->') && !pattern.includes('<-')) ? 'out' : (pattern.includes('<-') && !pattern.includes('->')) ? 'in' : 'any';
+                const startNodes = this._findNodesByPattern(startPattern);
+                const endNodes = this._findNodesByPattern(endPattern);
+                if (startNodes.length === 0 || endNodes.length === 0) {
+                    return { type: 'tabular', columns: ['path'], data: [] };
+                }
+                const options = { relTypes, minHops, maxHops, dir };
+                const rows = [];
+                for (const s of startNodes) {
+                    for (const e of endNodes) {
+                        if (isAll) {
+                            const paths = this._findAllShortestPaths(s.id, e.id, options);
+                            for (const p of paths) rows.push({ path: this._formatPath(p) });
+                        } else {
+                            const p = this._findShortestPathFiltered(s.id, e.id, options);
+                            if (p.length > 0) rows.push({ path: this._formatPath(p) });
+                        }
+                    }
+                }
+                return { type: 'tabular', columns: ['path'], data: rows };
             }
 
-            _findShortestPath(startId, endId) {
+            _neighborsOf(nodeId, options) {
+                const { relTypes = [], dir = 'any' } = options || {};
+                const out = [];
+                this.db.relationships.forEach(rel => {
+                    if (rel.startNode === nodeId) {
+                        if (relTypes.length > 0 && !relTypes.includes(rel.type)) return;
+                        if (dir === 'in') return; // only incoming expected
+                        out.push(rel.endNode);
+                    } else if (rel.endNode === nodeId) {
+                        if (relTypes.length > 0 && !relTypes.includes(rel.type)) return;
+                        if (dir === 'out') return; // only outgoing expected
+                        out.push(rel.startNode);
+                    }
+                });
+                return out;
+            }
+
+            _findShortestPathFiltered(startId, endId, options) {
                 if (startId === endId) return [startId];
-                
-                const visited = new Set();
+                const { minHops = 1, maxHops = Infinity } = options || {};
+                const visited = new Set([startId]);
                 const queue = [[startId]];
-                
                 while (queue.length > 0) {
                     const path = queue.shift();
                     const currentId = path[path.length - 1];
-                    
-                    if (visited.has(currentId)) continue;
-                    visited.add(currentId);
-                    
-                    // Find connected nodes
-                    const connectedNodes = [];
-                    this.db.relationships.forEach(rel => {
-                        if (rel.startNode === currentId) connectedNodes.push(rel.endNode);
-                        if (rel.endNode === currentId) connectedNodes.push(rel.startNode);
-                    });
-                    
-                    for (const nodeId of connectedNodes) {
-                        if (nodeId === endId) {
-                            return [...path, nodeId];
+                    if (path.length - 1 > maxHops) continue;
+                    for (const nb of this._neighborsOf(currentId, options)) {
+                        if (path.includes(nb)) continue;
+                        const newPath = [...path, nb];
+                        const hops = newPath.length - 1;
+                        if (nb === endId && hops >= minHops && hops <= maxHops) {
+                            return newPath;
                         }
-                        if (!visited.has(nodeId)) {
-                            queue.push([...path, nodeId]);
+                        if (!visited.has(nb)) {
+                            visited.add(nb);
+                            queue.push(newPath);
                         }
                     }
                 }
-                
-                return []; // No path found
+                return [];
+            }
+
+            _findAllShortestPaths(startId, endId, options) {
+                if (startId === endId) return [[startId]];
+                const { minHops = 1, maxHops = Infinity } = options || {};
+                const dist = new Map([[startId, 0]]);
+                const q = [startId];
+                while (q.length) {
+                    const v = q.shift();
+                    const d = dist.get(v);
+                    if (d >= maxHops) continue;
+                    for (const nb of this._neighborsOf(v, options)) {
+                        if (!dist.has(nb)) {
+                            dist.set(nb, d + 1);
+                            q.push(nb);
+                        }
+                    }
+                }
+                const targetDist = dist.get(endId);
+                if (targetDist === undefined || targetDist < minHops || targetDist > maxHops) return [];
+                const results = [];
+                const stack = [[startId, [startId]]];
+                while (stack.length) {
+                    const [v, path] = stack.pop();
+                    if (v === endId && path.length - 1 === targetDist) {
+                        results.push(path);
+                        continue;
+                    }
+                    for (const nb of this._neighborsOf(v, options)) {
+                        if (path.includes(nb)) continue;
+                        if (dist.get(nb) === dist.get(v) + 1) {
+                            stack.push([nb, [...path, nb]]);
+                        }
+                    }
+                }
+                return results;
             }
 
             _formatPath(nodeIds) {
                 const segments = [];
-                for (let i = 0; i < nodeIds.length; i++) {
-                    const node = this.db.nodes.get(nodeIds[i]);
-                    segments.push({ node: this._formatNodeForOutput(node) });
-                    
-                    if (i < nodeIds.length - 1) {
-                        const rel = this._findRelationshipBetween(nodeIds[i], nodeIds[i + 1]);
-                        if (rel) segments.push({ relationship: this._formatRelForOutput(rel) });
-                    }
+                for (let i = 0; i < nodeIds.length - 1; i++) {
+                    const start = this.db.nodes.get(nodeIds[i]);
+                    const end = this.db.nodes.get(nodeIds[i + 1]);
+                    const rel = this._findRelationshipBetween(nodeIds[i], nodeIds[i + 1]);
+                    if (!rel) continue;
+                    segments.push({
+                        start: this._formatNodeForOutput(start),
+                        relationship: this._formatRelForOutput(rel),
+                        end: this._formatNodeForOutput(end)
+                    });
                 }
-                return { segments };
+                const startNode = this.db.nodes.get(nodeIds[0]);
+                const endNode = this.db.nodes.get(nodeIds[nodeIds.length - 1]);
+                return { start: this._formatNodeForOutput(startNode), end: this._formatNodeForOutput(endNode), segments };
             }
 
             _findRelationshipBetween(startId, endId) {
@@ -1635,7 +1955,7 @@
         }
 
         // --- UI & APP LOGIC ---
-        document.addEventListener('DOMContentLoaded', () => {
+    document.addEventListener('DOMContentLoaded', () => {
             const dbManager = new DatabaseManager();
             const executor = new CypherExecutor(dbManager);
             let simulation;
@@ -1649,6 +1969,8 @@
                 lineWrapping: true,
                 autofocus: true
             });
+            // Expose editor for tests to programmatically set content
+            window.editor = editor;
             paramEditor.value = '{\n  "actorName": "Tom Hanks"\n}';
             const consolePrompt = document.getElementById('console-prompt');
             const infoPanelContent = document.getElementById('info-panel-content');
@@ -1756,37 +2078,47 @@
                 ],
 
                 "7️⃣ Using WITH for Complex Queries": [
-                    { title: "Find the most experienced employee per department", query: "MATCH (e:Employee) \nWITH e.department AS dept, e \nORDER BY e.hire_date \nWITH dept, COLLECT(e)[0] AS senior_employee \nRETURN dept, senior_employee.name, senior_employee.hire_date" },
+                    { title: "Find the most experienced employee per department", query: "MATCH (e:Employee) \nWITH e.department AS dept, e \nORDER BY e.hire_date \nWITH dept, HEAD(COLLECT(e)) AS senior_employee \nRETURN dept, senior_employee.name, senior_employee.hire_date" },
                     { title: "Find employees working on high-budget projects", query: "MATCH (p:Project) \nWHERE p.budget > 400000 \nWITH p \nMATCH (e:Employee)-[:WORKS_ON]->(p) \nRETURN e.name, p.name, p.budget \nORDER BY p.budget DESC" },
                     { title: "Find knowledge authors and their expertise", query: "MATCH (e:Employee)-[:AUTHORED]->(d:Document) \nWITH e, COUNT(d) AS doc_count \nWHERE doc_count > 0 \nMATCH (e)-[:SKILLED_IN]->(tech) \nRETURN e.name, doc_count, COLLECT(tech.name) AS technologies" },
                 ],
 
                 "8️⃣ MERGE & Data Management": [
                     { title: "Add new employee using MERGE (creates if not exists)", query: "MERGE (grace:Employee {name: 'Grace Hopper', email: 'grace@company.com'}) \nON CREATE SET grace.department = 'Engineering', \n              grace.level = 'Principal', \n              grace.hire_date = '2024-01-15' \nON MATCH SET grace.last_updated = timestamp()" },
-                    { title: "Ensure technology relationships exist", query: "MATCH (grace:Employee {name: 'Grace Hopper'}) \nMERGE (cobol:Technology {name: 'COBOL', category: 'Programming Language'}) \nMERGE (grace)-[:SKILLED_IN {level: 'Expert', years: 30}]->(cobol)" },
+                    { title: "Ensure technology relationships exist", query: "MATCH (grace:Employee {name: 'Grace Hopper'}) \nMERGE (cobol:Technology {name: 'COBOL', category: 'Programming Language'}) \nMATCH (grace:Employee {name: 'Grace Hopper'}), (cobol:Technology {name: 'COBOL'}) \nCREATE (grace)-[:SKILLED_IN {level: 'Expert', years: 30}]->(cobol)" },
                     { title: "Add project dependency relationships", query: "MERGE (infra:Project {name: 'Infrastructure Upgrade', status: 'Planning'}) \nMATCH (mlp:Project {name: 'ML Platform'}), (infra:Project {name: 'Infrastructure Upgrade'}) \nMERGE (mlp)-[:DEPENDS_ON]->(infra)" },
                 ],
 
                 "9️⃣ UNWIND & List Processing": [
                     { title: "Create multiple technologies from a list", query: "UNWIND ['Docker', 'Kubernetes', 'Terraform', 'Git'] AS tech_name \nMERGE (t:Technology {name: tech_name}) \nON CREATE SET t.category = CASE tech_name \n  WHEN 'Docker' THEN 'Containerization'\n  WHEN 'Kubernetes' THEN 'Orchestration'\n  WHEN 'Terraform' THEN 'Infrastructure'\n  WHEN 'Git' THEN 'Version Control'\nEND" },
                     { title: "Add skills to employees from arrays", query: "MATCH (frank:Employee {name: 'Frank Miller'}) \nUNWIND ['Docker', 'Git'] AS skill_name \nMATCH (t:Technology {name: skill_name}) \nMERGE (frank)-[:SKILLED_IN {level: 'Intermediate', years: 1}]->(t)" },
-                    { title: "Create team assignments", query: "MATCH (mlp:Project {name: 'ML Platform'}) \nUNWIND ['Alice Johnson', 'Charlie Brown', 'Frank Miller'] AS member_name \nMATCH (e:Employee {name: member_name}) \nMERGE (e)-[:WORKS_ON]->(mlp)" },
+                    { title: "Create team assignments", query: "MATCH (mlp:Project {name: 'ML Platform'}) \nUNWIND ['Alice Johnson', 'Charlie Brown', 'Frank Miller'] AS member_name \nMATCH (e:Employee {name: member_name}) \nCREATE (e)-[:WORKS_ON]->(mlp)" },
                 ],
 
                 "🔟 Advanced Functions & String Operations": [
                     { title: "Find employees with names containing specific patterns", query: "MATCH (e:Employee) \nWHERE e.name CONTAINS 'son' OR e.name ENDS WITH 'Brown' \nRETURN e.name, e.department" },
-                    { title: "Extract and format hire year information", query: "MATCH (e:Employee) \nRETURN e.name, \n       e.hire_date, \n       toInteger(split(e.hire_date, '-')[0]) AS hire_year,\n       CASE \n         WHEN toInteger(split(e.hire_date, '-')[0]) < 2020 THEN 'Veteran'\n         ELSE 'Recent Hire'\n       END AS employee_type \nORDER BY hire_year" },
-                    { title: "Calculate experience and group employees", query: "MATCH (e:Employee) \nWITH e, \n     duration.between(date(e.hire_date), date()).years AS years_experience \nRETURN e.name, \n       years_experience,\n       CASE \n         WHEN years_experience >= 5 THEN 'Senior'\n         WHEN years_experience >= 2 THEN 'Mid-level'\n         ELSE 'Junior'\n       END AS experience_level \nORDER BY years_experience DESC" },
+                    { title: "Extract and format hire year information", query: "MATCH (e:Employee) \nRETURN e.name, \n       e.hire_date, \n       TOINT(SUBSTRING(e.hire_date, 0, 4)) AS hire_year,\n       CASE \n         WHEN TOINT(SUBSTRING(e.hire_date, 0, 4)) < 2020 THEN 'Veteran'\n         ELSE 'Recent Hire'\n       END AS employee_type \nORDER BY hire_year" },
+                    { title: "Calculate experience and group employees", query: "MATCH (e:Employee) \nWITH e, \n     TOINT(SUBSTRING(DATE(), 0, 4)) - TOINT(SUBSTRING(e.hire_date, 0, 4)) AS years_experience \nRETURN e.name, \n       years_experience,\n       CASE \n         WHEN years_experience >= 5 THEN 'Senior'\n         WHEN years_experience >= 2 THEN 'Mid-level'\n         ELSE 'Junior'\n       END AS experience_level \nORDER BY years_experience DESC" },
                 ],
 
                 "⚡ Path Finding & Graph Algorithms": [
-                    { title: "Find shortest path between employees", query: "MATCH path = shortestPath((alice:Employee {name: 'Alice Johnson'})-[*]-(eve:Employee {name: 'Eve Wilson'})) \nRETURN [node in nodes(path) | node.name] AS path_names, \n       length(path) AS path_length" },
-                    { title: "Find all paths between technologies", query: "MATCH path = (python:Technology {name: 'Python'})-[*1..3]-(aws:Technology {name: 'AWS'}) \nRETURN [node in nodes(path) | COALESCE(node.name, node.title)] AS connection_path \nLIMIT 5" },
-                    { title: "Find knowledge flow (who can teach what to whom)", query: "MATCH (teacher:Employee)-[:SKILLED_IN {level: 'Expert'}]->(tech:Technology)<-[:SKILLED_IN]-(student:Employee) \nWHERE teacher <> student \nRETURN teacher.name AS teacher, \n       tech.name AS technology, \n       COLLECT(student.name) AS potential_students" },
+                    { title: "Find a short path between employees", query: "MATCH p = (alice:Employee {name: 'Alice Johnson'})-[*1..5]-(eve:Employee {name: 'Eve Wilson'}) \nRETURN nodes(p) AS path_nodes, length(p) AS path_length \nLIMIT 1" },
+                    { title: "Use shortestPath() between two employees", query: "// Ensure some path exists\nMATCH (a:Employee {name: 'Alice Johnson'}), (e:Employee {name: 'Eve Wilson'})\nRETURN shortestPath((a)-[*1..5]-(e)) AS path" },
+                    { title: "Use allShortestPaths() for multiple paths", query: "MATCH (a:Employee {name: 'Alice Johnson'}), (c:Employee {name: 'Charlie Brown'})\nRETURN allShortestPaths((a)-[*1..5]-(c)) AS paths" },
+                    { title: "Find paths between technologies (≤3 hops)", query: "MATCH p = (python:Technology {name: 'Python'})-[*1..3]-(aws:Technology {name: 'AWS'}) \nRETURN nodes(p) AS connection_path \nLIMIT 5" },
+                    { title: "Find knowledge flow (who can teach what to whom)", query: "MATCH (teacher:Employee)-[:SKILLED_IN {level: 'Expert'}]->(tech:Technology)<-[:SKILLED_IN]-(student:Employee) \nWHERE teacher.name <> student.name \nRETURN teacher.name AS teacher, \n       tech.name AS technology, \n       COLLECT(student.name) AS potential_students" },
+                ],
+
+                "🧭 Administration & Schema Insights": [
+                    { title: "Show databases and current", query: "SHOW DATABASES" },
+                    { title: "Show constraints", query: "SHOW CONSTRAINTS" },
+                    { title: "Show indexes", query: "SHOW INDEXES" },
+                    { title: "Show basic stats", query: "SHOW STATS" },
+                    { title: "Show transactions (after BEGIN)", query: "BEGIN\nSHOW TRANSACTIONS" },
                 ],
 
                 "📊 Complex Analytics Queries": [
-                    { title: "Department collaboration analysis", query: "MATCH (e1:Employee)-[:COLLABORATES_WITH]-(e2:Employee) \nWHERE e1.department <> e2.department \nRETURN e1.department + ' <-> ' + e2.department AS collaboration, \n       COUNT(*) AS collaboration_count \nORDER BY collaboration_count DESC" },
+                    { title: "Department collaboration analysis", query: "MATCH (e1:Employee)-[:COLLABORATES_WITH]-(e2:Employee) \nRETURN e1.department + ' <-> ' + e2.department AS collaboration, \n       COUNT(*) AS collaboration_count \nORDER BY collaboration_count DESC" },
                     { title: "Project resource allocation report", query: "MATCH (p:Project)<-[w:WORKS_ON]-(e:Employee) \nWITH p, \n     SUM(w.allocation) AS total_allocation, \n     COUNT(e) AS team_size, \n     COLLECT({name: e.name, role: w.role, allocation: w.allocation}) AS team_details \nRETURN p.name, \n       p.budget, \n       team_size, \n       total_allocation, \n       team_details \nORDER BY p.budget DESC" },
                     { title: "Knowledge gap analysis", query: "MATCH (p:Project)<-[:WORKS_ON]-(e:Employee) \nMATCH (p)-[:REQUIRES]->(required_tech:Technology) \nOPTIONAL MATCH (e)-[:SKILLED_IN]->(required_tech) \nWITH p, required_tech, \n     COUNT(e) AS total_team_members, \n     COUNT(CASE WHEN required_tech IS NOT NULL THEN 1 END) AS skilled_members \nRETURN p.name AS project, \n       required_tech.name AS technology, \n       skilled_members + '/' + total_team_members AS coverage" },
                 ],
@@ -1805,9 +2137,11 @@
 
                 "🔧 Schema & Constraints": [
                     { title: "Create uniqueness constraint", query: "CREATE CONSTRAINT employee_email_unique \nON (e:Employee) \nASSERT e.email IS UNIQUE" },
-                    { title: "Create node key constraint", query: "CREATE CONSTRAINT project_name_key \nON (p:Project) \nASSERT p.name IS NODE KEY" },
-                    { title: "Show all constraints", query: "SHOW CONSTRAINTS" },
-                    { title: "Create index for performance", query: "CREATE INDEX employee_department_idx \nON :Employee(department)" },
+                    { title: "Create project name uniqueness constraint", query: "CREATE CONSTRAINT project_name_unique \nON (p:Project) \nASSERT p.name IS UNIQUE" },
+                    { title: "Show schema (constraints/indexes)", query: "CALL db.schema()" },
+                    { title: "Create index for performance", query: "CREATE INDEX ON :Employee(department)" },
+                    { title: "SHOW CONSTRAINTS", query: "SHOW CONSTRAINTS" },
+                    { title: "SHOW STATS (summary)", query: "SHOW STATS" },
                 ],
 
                 "❌ Common Error Examples": [
@@ -1815,6 +2149,13 @@
                     { title: "Incorrect syntax for property update", query: "MATCH (e:Employee) SET e.name = 'Updated' WHERE e.name = 'Alice Johnson'" },
                     { title: "Invalid aggregation without grouping", query: "MATCH (e:Employee) RETURN e.name, COUNT(*)" },
                     { title: "Using undefined variable", query: "MATCH (e:Employee) RETURN e.name, p.name" },
+                ],
+
+                "🧩 Core Cypher Semantics (Mini)": [
+                    { title: "Multiple relationship types alternation", query: "MATCH (a)-[:REPORTS_TO|:COLLABORATES_WITH]->(b) RETURN a,b LIMIT 5" },
+                    { title: "Multi-label nodes creation and match", query: "CREATE (:Person:Employee {name: 'MultiLabelUser'})\nMATCH (n:Person:Employee {name: 'MultiLabelUser'}) RETURN n" },
+                    { title: "Relationship property filter", query: "MATCH (e:Employee)-[r:SKILLED_IN {level: 'Expert'}]->(t:Technology) RETURN e.name, t.name, r.level LIMIT 5" },
+                    { title: "Undirected vs Directed match", query: "// Directed: reports to\nMATCH (a:Employee)-[:REPORTS_TO]->(b:Employee) RETURN a.name AS emp, b.name AS manager LIMIT 3\n// Undirected: any connection\nMATCH (x:Employee)-[:COLLABORATES_WITH]-(y:Employee) RETURN x.name, y.name LIMIT 3" },
                 ],
 
                 "🔄 CREATE vs MERGE Behavior Examples": [
@@ -1850,6 +2191,59 @@
                 exampleCategoriesContainer.appendChild(categoryDiv);
             });
             hljs.highlightAll();
+
+            // --- TEST HOOKS (non-intrusive) ---
+            // Expose minimal API for automated smoke tests without relying on DOM parsing
+            window.__graphTest = {
+                reset: () => {
+                    // Reset current database to a clean state
+                    const current = dbManager.currentDbName;
+                    dbManager.databases.set(current, { db: new GraphDB(), lastQueryResult: null });
+                    executor.db = dbManager.getCurrentDb();
+                    try { clearVisualization(); } catch (e) {}
+                    try { clearConsole(); } catch (e) {}
+                },
+                run: async (query, params = {}) => {
+                    try {
+                        return { ok: true, ...executor.executeQuery(query, params) };
+                    } catch (e) {
+                        return { ok: false, error: String(e.message || e) };
+                    }
+                },
+                runLines: async (text, params = {}) => {
+                    const rawLines = String(text)
+                        .split('\n')
+                        .map(s => s.trim())
+                        .filter(s => s && !s.startsWith('--') && !s.startsWith('//'));
+                    const statements = [];
+                    for (let i = 0; i < rawLines.length; i++) {
+                        const line = rawLines[i];
+                        const prev = statements.length > 0 ? statements[statements.length - 1] : null;
+                        // Join MATCH ... CREATE on consecutive lines into single statement
+                        if (prev && /^MATCH\b/i.test(prev) && /^CREATE\b/i.test(line)) {
+                            statements[statements.length - 1] = prev + ' ' + line;
+                        } else {
+                            statements.push(line);
+                        }
+                    }
+                    const out = [];
+                    for (const q of statements) {
+                        out.push(await window.__graphTest.run(q, params));
+                    }
+                    return out;
+                },
+                getDbSnapshot: () => {
+                    const db = dbManager.getCurrentDb();
+                    return {
+                        name: dbManager.currentDbName,
+                        nodes: Array.from(db.nodes.values()).map(n => ({ id: n.id, labels: Array.from(n.labels), properties: n.properties })),
+                        relationships: Array.from(db.relationships.values()).map(r => ({ id: r.id, type: r.type, startNode: r.startNode, endNode: r.endNode, properties: r.properties })),
+                        labelsToNodes: Array.from(db.labelsToNodes.entries()).reduce((a,[k,v]) => (a[k] = Array.from(v), a), {}),
+                        constraints: Array.from(db.constraints.keys()),
+                        indexes: Array.from(db.indexes.keys()),
+                    };
+                }
+            };
             
             function executeQuery() {
                 const fullQueryText = editor.getValue();
@@ -1863,9 +2257,20 @@
                     return;
                 }
 
-                const queries = fullQueryText.split('\n')
+                const rawLines = fullQueryText.split('\n')
                     .map(q => q.trim())
                     .filter(q => q && !q.startsWith('--') && !q.startsWith('//'));
+                const queries = [];
+                for (let i = 0; i < rawLines.length; i++) {
+                    const line = rawLines[i];
+                    const prev = queries.length > 0 ? queries[queries.length - 1] : null;
+                    // Join MATCH ... CREATE on consecutive lines into a single statement
+                    if (prev && /^MATCH\b/i.test(prev) && /^CREATE\b/i.test(line)) {
+                        queries[queries.length - 1] = prev + ' ' + line;
+                    } else {
+                        queries.push(line);
+                    }
+                }
 
                 if (queries.length === 0) return;
 
@@ -2000,6 +2405,24 @@
                 graph.nodes = Array.from(nodeMap.values());
                 if (graph.nodes.length === 0) return;
                 
+                // Define arrow markers per relationship type with consistent colors
+                const defs = svgElement.append('defs');
+                const relTypes = Array.from(new Set(graph.links.map(l => l.type || 'REL')));
+                const typeColor = d3.scaleOrdinal(d3.schemeCategory10).domain(relTypes);
+                relTypes.forEach(t => {
+                    const id = `arrow-${t}`;
+                    const color = typeColor(t);
+                    const m = defs.append('marker')
+                        .attr('id', id)
+                        .attr('viewBox', '0 -5 10 10')
+                        .attr('refX', 24)
+                        .attr('refY', 0)
+                        .attr('markerWidth', 6)
+                        .attr('markerHeight', 6)
+                        .attr('orient', 'auto');
+                    m.append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', color);
+                });
+
                 const g = svgElement.append("g").attr("class", "content");
                 zoom = d3.zoom().on("zoom", e => g.attr('transform', e.transform));
                 svgElement.call(zoom);
@@ -2010,14 +2433,31 @@
                     .force("center", d3.forceCenter(width / 2, height / 2))
                     .force("collision", d3.forceCollide().radius(30));
 
+                // Compute multi-link grouping for curved edges like Neo4j
+                const pairKey = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
+                const linksByPair = new Map();
+                graph.links.forEach(l => {
+                    const key = pairKey(l.source, l.target);
+                    if (!linksByPair.has(key)) linksByPair.set(key, []);
+                    linksByPair.get(key).push(l);
+                });
+                linksByPair.forEach(arr => arr.forEach((l, i) => { l._idx = i; l._count = arr.length; }));
+
                 const node = g.append("g").selectAll("g").data(graph.nodes).join("g")
                     .attr("class", "node")
                     .call(drag(simulation))
                     .on('click', showNodeDetails)
                     .on('dblclick', unpinNode);
 
-                const link = g.append("g").selectAll("line").data(graph.links).join("line").attr("class", "link").attr("stroke", "#666");
-                const linkLabels = g.append("g").selectAll("text").data(graph.links).join("text").attr("class", "link-label").text(d => d.type);
+                const linkPath = g.append("g").selectAll("path").data(graph.links).join("path")
+                    .attr("class", "link")
+                    .attr("stroke", d => typeColor(d.type || 'REL'))
+                    .attr("fill", "none")
+                    .attr("marker-end", d => `url(#arrow-${d.type || 'REL'})`);
+
+                const linkLabels = g.append("g").selectAll("text").data(graph.links).join("text")
+                    .attr("class", "link-label")
+                    .text(d => d.type);
                 
                 const color = d3.scaleOrdinal(d3.schemeCategory10);
 
@@ -2025,10 +2465,39 @@
                 node.append("text").text(d => d.title).attr("dy", "0.3em");
                 node.append("title").text(d => JSON.stringify(d.properties, null, 2));
 
+                function pathForLink(d) {
+                    const sx = d.source.x, sy = d.source.y, tx = d.target.x, ty = d.target.y;
+                    const dx = tx - sx, dy = ty - sy;
+                    const dr = Math.sqrt(dx*dx + dy*dy) || 1;
+                    // Curvature factor for multi-links (centered around 0)
+                    const k = d._count > 1 ? (d._idx - (d._count - 1) / 2) * 0.6 : 0;
+                    if (k === 0) return `M${sx},${sy} L${tx},${ty}`;
+                    const mx = (sx + tx) / 2, my = (sy + ty) / 2;
+                    const nx = -dy / dr, ny = dx / dr; // normal
+                    const offset = 30 * k;
+                    const cx = mx + nx * offset;
+                    const cy = my + ny * offset;
+                    return `M${sx},${sy} Q${cx},${cy} ${tx},${ty}`;
+                }
+
                 simulation.on("tick", () => {
-                    link.attr("x1", d => d.source.x).attr("y1", d => d.source.y).attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+                    linkPath.attr("d", pathForLink);
                     node.attr("transform", d => `translate(${d.x},${d.y})`);
-                    linkLabels.attr("x", d => (d.source.x + d.target.x) / 2).attr("y", d => (d.source.y + d.target.y) / 2);
+                    // Position labels at the middle of the path
+                    linkLabels.attr("transform", function(d, i) {
+                        const pathEl = linkPath.nodes()[i];
+                        if (!pathEl) return null;
+                        const len = pathEl.getTotalLength();
+                        const pt = pathEl.getPointAtLength(len / 2);
+                        // Offset labels slightly to improve readability similar to Neo4j
+                        const before = pathEl.getPointAtLength(Math.max(0, len / 2 - 1));
+                        const after = pathEl.getPointAtLength(Math.min(len, len / 2 + 1));
+                        const angle = Math.atan2(after.y - before.y, after.x - before.x);
+                        const offset = 10; // px
+                        const ox = -Math.sin(angle) * offset;
+                        const oy = Math.cos(angle) * offset;
+                        return `translate(${pt.x + ox},${pt.y + oy})`;
+                    });
                 });
 
                 recenterVisualization(true);
@@ -2155,6 +2624,24 @@
                 graph.nodes = Array.from(nodeMap.values());
                 if (graph.nodes.length === 0) return;
 
+                // Define arrow markers per relationship type with consistent colors for mobile
+                const defs = svgElement.append('defs');
+                const relTypes = Array.from(new Set(graph.links.map(l => l.type || 'REL')));
+                const typeColor = d3.scaleOrdinal(d3.schemeCategory10).domain(relTypes);
+                relTypes.forEach(t => {
+                    const id = `mobile-arrow-${t}`;
+                    const color = typeColor(t);
+                    const m = defs.append('marker')
+                        .attr('id', id)
+                        .attr('viewBox', '0 -5 10 10')
+                        .attr('refX', 20)
+                        .attr('refY', 0)
+                        .attr('markerWidth', 6)
+                        .attr('markerHeight', 6)
+                        .attr('orient', 'auto');
+                    m.append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', color);
+                });
+
                 const g = svgElement.append("g").attr("class", "mobile-content");
                 const mobileZoom = d3.zoom().on("zoom", e => g.attr('transform', e.transform));
                 svgElement.call(mobileZoom);
@@ -2164,6 +2651,16 @@
                     .force("charge", d3.forceManyBody().strength(-300))
                     .force("center", d3.forceCenter(width / 2, height / 2))
                     .force("collision", d3.forceCollide().radius(25));
+
+                // Compute multi-link grouping for curved edges like Neo4j
+                const pairKey = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
+                const linksByPair = new Map();
+                graph.links.forEach(l => {
+                    const key = pairKey(l.source, l.target);
+                    if (!linksByPair.has(key)) linksByPair.set(key, []);
+                    linksByPair.get(key).push(l);
+                });
+                linksByPair.forEach(arr => arr.forEach((l, i) => { l._idx = i; l._count = arr.length; }));
 
                 const node = g.append("g").selectAll("g").data(graph.nodes).join("g")
                     .attr("class", "node")
@@ -2177,8 +2674,15 @@
                         mobileSimulation.alpha(0.1).restart();
                     });
 
-                const link = g.append("g").selectAll("line").data(graph.links).join("line").attr("class", "link").attr("stroke", "#666");
-                const linkLabels = g.append("g").selectAll("text").data(graph.links).join("text").attr("class", "link-label").text(d => d.type);
+                const linkPath = g.append("g").selectAll("path").data(graph.links).join("path")
+                    .attr("class", "link")
+                    .attr("stroke", d => typeColor(d.type || 'REL'))
+                    .attr("fill", "none")
+                    .attr("marker-end", d => `url(#mobile-arrow-${d.type || 'REL'})`);
+
+                const linkLabels = g.append("g").selectAll("text").data(graph.links).join("text")
+                    .attr("class", "link-label")
+                    .text(d => d.type);
                 
                 const color = d3.scaleOrdinal(d3.schemeCategory10);
 
@@ -2186,10 +2690,36 @@
                 node.append("text").text(d => d.title.length > 10 ? d.title.substring(0, 10) + '...' : d.title).attr("dy", "0.3em").style("font-size", "10px");
                 node.append("title").text(d => JSON.stringify(d.properties, null, 2));
 
+                function pathForLink(d) {
+                    const sx = d.source.x, sy = d.source.y, tx = d.target.x, ty = d.target.y;
+                    const dx = tx - sx, dy = ty - sy;
+                    const dr = Math.sqrt(dx*dx + dy*dy) || 1;
+                    const k = d._count > 1 ? (d._idx - (d._count - 1) / 2) * 0.5 : 0;
+                    if (k === 0) return `M${sx},${sy} L${tx},${ty}`;
+                    const mx = (sx + tx) / 2, my = (sy + ty) / 2;
+                    const nx = -dy / dr, ny = dx / dr;
+                    const offset = 24 * k;
+                    const cx = mx + nx * offset;
+                    const cy = my + ny * offset;
+                    return `M${sx},${sy} Q${cx},${cy} ${tx},${ty}`;
+                }
+
                 mobileSimulation.on("tick", () => {
-                    link.attr("x1", d => d.source.x).attr("y1", d => d.source.y).attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+                    linkPath.attr("d", pathForLink);
                     node.attr("transform", d => `translate(${d.x},${d.y})`);
-                    linkLabels.attr("x", d => (d.source.x + d.target.x) / 2).attr("y", d => (d.source.y + d.target.y) / 2);
+                    linkLabels.attr("transform", function(d, i) {
+                        const pathEl = linkPath.nodes()[i];
+                        if (!pathEl) return null;
+                        const len = pathEl.getTotalLength();
+                        const pt = pathEl.getPointAtLength(len / 2);
+                        const before = pathEl.getPointAtLength(Math.max(0, len / 2 - 1));
+                        const after = pathEl.getPointAtLength(Math.min(len, len / 2 + 1));
+                        const angle = Math.atan2(after.y - before.y, after.x - before.x);
+                        const offset = 8;
+                        const ox = -Math.sin(angle) * offset;
+                        const oy = Math.cos(angle) * offset;
+                        return `translate(${pt.x + ox},${pt.y + oy})`;
+                    });
                 });
 
                 // Auto-center after a short delay
@@ -2328,7 +2858,11 @@
                     targetContent.classList.remove('hidden');
                     // If user opened the Graph View tab, (re)render the latest graph
                     if (btn.dataset.tab === 'visual') {
-                        try { updateVisualization(dbManager.getLastQueryResult()); } catch (e) { /* ignore rendering errors */ }
+                        try {
+                            updateVisualization(dbManager.getLastQueryResult());
+                            // Ensure view is centered at default zoom whenever visual tab opens
+                            recenterVisualization(false);
+                        } catch (e) { /* ignore rendering errors */ }
                     }
                 });
             });
