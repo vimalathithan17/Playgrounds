@@ -10,5 +10,9 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.46.0"
+  },
+  "dependencies": {
+    "chromium": "^3.0.3",
+    "playwright": "^1.55.0"
   }
 }
